@@ -1,0 +1,252 @@
+'use client';
+
+import { useState } from 'react';
+import { useAuth } from '@/context/AuthContext';
+import Link from 'next/link';
+import { usePathname, useRouter } from 'next/navigation';
+
+export default function DashboardLayout({ children }) {
+  const { user, loading, logout } = useAuth();
+  const pathname = usePathname();
+  const router = useRouter();
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  if (loading) {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center bg-slate-50 min-h-screen">
+        <div className="w-10 h-10 border-4 border-brand-light/20 border-t-brand-light rounded-full animate-spin"></div>
+        <p className="mt-4 text-slate-500 font-medium text-sm">Loading workspace...</p>
+      </div>
+    );
+  }
+
+  if (!user) return null;
+
+  // Determine navigation menu items based on role
+  const menuItems = [
+    {
+      name: 'Overview',
+      path: '/dashboard',
+      icon: (
+        <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v4a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v4a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v4a2 2 0 01-2 2H6a2 2 0 01-2-2v-4zM14 16a2 2 0 012-2h2a2 2 0 012 2v4a2 2 0 01-2 2h-2a2 2 0 01-2-2v-4z" />
+        </svg>
+      )
+    },
+    {
+      name: 'Course Applications',
+      path: '/dashboard/applications',
+      icon: (
+        <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+        </svg>
+      )
+    },
+    {
+      name: 'Exams Portal',
+      path: '/dashboard/exams',
+      icon: (
+        <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+        </svg>
+      )
+    },
+    {
+      name: 'Classroom & Attendance',
+      path: '/dashboard/classes',
+      icon: (
+        <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
+        </svg>
+      )
+    }
+  ];
+
+  // System Admin gets user invite panel
+  if (user.role === 'admin') {
+    menuItems.push({
+      name: 'Manage Users & Invites',
+      path: '/dashboard/admin',
+      icon: (
+        <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
+        </svg>
+      )
+    });
+  }
+
+  const navigateTo = (path) => {
+    router.push(path);
+    setMobileMenuOpen(false);
+  };
+
+  const getRoleBadgeColor = (role) => {
+    switch (role) {
+      case 'admin': return 'bg-purple-100 text-purple-700 border-purple-200';
+      case 'dvc': return 'bg-amber-100 text-amber-700 border-amber-200';
+      case 'dean': return 'bg-blue-100 text-blue-700 border-blue-200';
+      case 'lecturer': return 'bg-emerald-100 text-emerald-700 border-emerald-200';
+      default: return 'bg-slate-100 text-slate-700 border-slate-200';
+    }
+  };
+
+  return (
+    <div className="flex-1 flex flex-row min-h-screen bg-slate-50">
+      
+      {/* Sidebar - Desktop */}
+      <aside className="hidden md:flex flex-col w-64 bg-brand-dark text-white border-r border-brand-light/10 shadow-lg shrink-0">
+        {/* Sidebar Header */}
+        <div className="px-6 py-6 border-b border-white/5 flex items-center space-x-3">
+          <div className="p-1.5 bg-brand-light rounded-lg">
+            <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6 text-brand-emerald" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+            </svg>
+          </div>
+          <div>
+            <h2 className="font-bold text-sm leading-tight text-white">My Kampus</h2>
+            <p className="text-[10px] text-white/50 font-medium tracking-wider uppercase">Kampus Portal</p>
+          </div>
+        </div>
+
+        {/* Sidebar Nav */}
+        <nav className="flex-1 px-4 py-6 space-y-1">
+          {menuItems.map((item) => {
+            const isActive = pathname === item.path;
+            return (
+              <button
+                key={item.name}
+                onClick={() => navigateTo(item.path)}
+                className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-sm font-medium transition-all ${isActive ? 'bg-brand-light text-white shadow-md' : 'text-white/70 hover:bg-white/5 hover:text-white'}`}
+              >
+                {item.icon}
+                <span>{item.name}</span>
+              </button>
+            );
+          })}
+        </nav>
+
+        {/* User Info & Logout */}
+        <div className="p-4 border-t border-white/5 bg-black/10">
+          <div className="flex items-center space-x-3 mb-3">
+            <div className="w-10 h-10 rounded-full bg-brand-light flex items-center justify-center font-bold text-sm text-brand-emerald border border-white/10 uppercase">
+              {user.username.slice(0, 2)}
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold truncate text-white">{user.first_name} {user.last_name}</p>
+              <span className={`inline-block px-2 py-0.5 mt-1 rounded text-[10px] font-bold border capitalize ${getRoleBadgeColor(user.role)}`}>
+                {user.role}
+              </span>
+            </div>
+          </div>
+          <button
+            onClick={logout}
+            className="w-full flex items-center justify-center space-x-2 px-3 py-2 text-xs font-semibold text-white bg-white/5 hover:bg-red-950/20 hover:text-red-300 rounded-lg border border-white/5 transition-all"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+            </svg>
+            <span>Sign Out</span>
+          </button>
+        </div>
+      </aside>
+
+      {/* Main Content Area */}
+      <div className="flex-1 flex flex-col min-w-0 min-h-screen">
+        
+        {/* Header Bar */}
+        <header className="flex items-center justify-between px-6 py-4 bg-white border-b border-slate-100 shadow-sm md:shadow-none">
+          <div className="flex items-center">
+            {/* Mobile menu toggle */}
+            <button
+              onClick={() => setMobileMenuOpen(true)}
+              className="md:hidden p-2 text-slate-600 hover:bg-slate-50 rounded-lg mr-2"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+              </svg>
+            </button>
+            <div>
+              <h1 className="text-lg font-bold text-slate-850">Clarke International University</h1>
+              <p className="text-xs text-slate-500 font-medium hidden sm:block">Welcome, {user.first_name} ({user.role.toUpperCase()}) · Local Time: {new Date().toLocaleDateString(undefined, {weekday: 'long', month: 'short', day: 'numeric'})}</p>
+            </div>
+          </div>
+          
+          <div className="flex items-center space-x-3">
+            <span className="text-xs text-slate-450 hidden md:inline-block font-medium">Secured Session</span>
+            <div className="w-2.5 h-2.5 bg-brand-emerald rounded-full animate-pulse-slow"></div>
+          </div>
+        </header>
+
+        {/* Page Content */}
+        <main className="flex-1 p-6 md:p-8 overflow-y-auto custom-scrollbar">
+          {children}
+        </main>
+      </div>
+
+      {/* Mobile Sidebar Modal/Drawer */}
+      {mobileMenuOpen && (
+        <div className="fixed inset-0 z-50 flex md:hidden bg-slate-900/40 backdrop-blur-sm animate-fade-in">
+          <div className="relative flex flex-col w-64 max-w-xs bg-brand-dark text-white border-r border-brand-light/10 shadow-2xl h-full p-0">
+            {/* Close Button */}
+            <button
+              onClick={() => setMobileMenuOpen(false)}
+              className="absolute top-4 right-4 p-2 text-white/70 hover:text-white rounded-lg"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+
+            {/* Logo */}
+            <div className="px-6 py-6 border-b border-white/5 flex items-center space-x-3">
+              <div className="p-1.5 bg-brand-light rounded-lg">
+                <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6 text-brand-emerald" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+                </svg>
+              </div>
+              <h2 className="font-bold text-sm text-white">My Kampus</h2>
+            </div>
+
+            {/* Menu */}
+            <nav className="flex-1 px-4 py-6 space-y-1 overflow-y-auto">
+              {menuItems.map((item) => {
+                const isActive = pathname === item.path;
+                return (
+                  <button
+                    key={item.name}
+                    onClick={() => navigateTo(item.path)}
+                    className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-sm font-medium transition-all ${isActive ? 'bg-brand-light text-white' : 'text-white/70 hover:bg-white/5'}`}
+                  >
+                    {item.icon}
+                    <span>{item.name}</span>
+                  </button>
+                );
+              })}
+            </nav>
+
+            {/* Profile */}
+            <div className="p-4 border-t border-white/5 bg-black/10">
+              <div className="flex items-center space-x-3 mb-3">
+                <div className="w-10 h-10 rounded-full bg-brand-light flex items-center justify-center font-bold text-sm text-brand-emerald">
+                  {user.username.slice(0, 2).toUpperCase()}
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-white">{user.first_name} {user.last_name}</p>
+                  <span className={`inline-block px-2 py-0.5 mt-1 rounded text-[10px] font-bold border capitalize ${getRoleBadgeColor(user.role)}`}>
+                    {user.role}
+                  </span>
+                </div>
+              </div>
+              <button
+                onClick={logout}
+                className="w-full flex items-center justify-center space-x-2 px-3 py-2 text-xs font-semibold text-white bg-white/5 rounded-lg border border-white/5"
+              >
+                Sign Out
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
