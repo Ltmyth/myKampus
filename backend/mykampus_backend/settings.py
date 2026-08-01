@@ -12,8 +12,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Quick-start development settings - unsuitable for production
 SECRET_KEY = 'django-insecure-e0=x0ac25p21jxo+#ufdtn-)8lgon*js4fbor6rg!t7o9ghsfk'
-DEBUG = True
-ALLOWED_HOSTS = ['*']
+DEBUG = False
+ALLOWED_HOSTS = ['102.34.27.136', 'localhost', '127.0.0.1']
 
 # Application definition
 
@@ -24,11 +24,11 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    
+
     # Third party apps
     'corsheaders',
     'rest_framework',
-    
+
     # Core app
     'ciu_portal',
 ]
