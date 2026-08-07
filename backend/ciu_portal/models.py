@@ -125,13 +125,3 @@ class AttendanceRecord(models.Model):
 
     def __str__(self):
         return f"{self.student.username} attended {self.session.course.code} on {self.marked_at}"
-
-
-class Student(models.Model):
-    user = models.OneToOneField(User, on_delete=models.CASCADE, db_index=True)
-    student_number = models.CharField(max_length=50, db_index=True)
-    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
-    class Meta:
-        indexes = [
-            models.Index(fields=['student_number', 'user']),
-        ]
