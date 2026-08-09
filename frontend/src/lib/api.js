@@ -1,9 +1,8 @@
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api';
-
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'https://examiner.ciu.ac.ug/api';
 
 export async function apiRequest(endpoint, options = {}) {
   const url = `${API_BASE_URL}${endpoint}`;
-  
+
   // Set headers
   const headers = {
     'Content-Type': 'application/json',

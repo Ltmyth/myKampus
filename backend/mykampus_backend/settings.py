@@ -14,9 +14,18 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Quick-start development settings - unsuitable for production
 SECRET_KEY = 'django-insecure-e0=x0ac25p21jxo+#ufdtn-)8lgon*js4fbor6rg!t7o9ghsfk'
 DEBUG = False
-ALLOWED_HOSTS = ['examiner.ciu.ac.ug','https://examiner.ciu.ac.ug','102.34.27.136','localhost','127.0.0.1']
-# Application definition
+ALLOWED_HOSTS = ['examiner.ciu.ac.ug','102.34.27.136','localhost','127.0.0.1']
+# 2. Trusted origins for CSRF security over HTTPS
+CSRF_TRUSTED_ORIGINS = [
+    'https://examiner.ciu.ac.ug',
+    'http://examiner.ciu.ac.ug',
+]
+# 3. Tell Django to trust Nginx reverse proxy headers for HTTPS detection
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+USE_X_FORWARDED_HOST = True
+USE_X_FORWARDED_PORT = True
 
+# Application definition
 INSTALLED_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',
