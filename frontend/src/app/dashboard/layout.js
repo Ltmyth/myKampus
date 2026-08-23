@@ -34,11 +34,11 @@ export default function DashboardLayout({ children }) {
       )
     },
     {
-      name: 'Course Applications',
-      path: '/dashboard/applications',
+      name: 'Test Portal',
+      path: '/dashboard/tests',
       icon: (
         <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
         </svg>
       )
     },
@@ -52,11 +52,29 @@ export default function DashboardLayout({ children }) {
       )
     },
     {
+      name: 'Faculty & Timetabling',
+      path: '/dashboard/faculty',
+      icon: (
+        <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+        </svg>
+      )
+    },
+    {
       name: 'Classroom & Attendance',
       path: '/dashboard/classes',
       icon: (
         <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
+        </svg>
+      )
+    },
+    {
+      name: 'Academic Reports',
+      path: '/dashboard/reports',
+      icon: (
+        <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9 19v-6a2 2 0 012-2h2a2 2 0 012 2v6m-6 0h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
         </svg>
       )
     }
@@ -84,9 +102,23 @@ export default function DashboardLayout({ children }) {
     switch (role) {
       case 'admin': return 'bg-purple-100 text-purple-700 border-purple-200';
       case 'dvc': return 'bg-amber-100 text-amber-700 border-amber-200';
+      case 'registrar': return 'bg-teal-100 text-teal-800 border-teal-200';
       case 'dean': return 'bg-blue-100 text-blue-700 border-blue-200';
+      case 'faculty_admin': return 'bg-indigo-100 text-indigo-700 border-indigo-200';
       case 'lecturer': return 'bg-emerald-100 text-emerald-700 border-emerald-200';
       default: return 'bg-slate-100 text-slate-700 border-slate-200';
+    }
+  };
+
+  const getRoleLabel = (role) => {
+    switch (role) {
+      case 'admin': return 'System Admin';
+      case 'dvc': return 'DVC / Chancellor';
+      case 'registrar': return 'Academic Registrar';
+      case 'dean': return 'Faculty Dean';
+      case 'faculty_admin': return 'Faculty Secretary';
+      case 'lecturer': return 'Lecturer';
+      default: return 'Student';
     }
   };
 
@@ -132,9 +164,9 @@ export default function DashboardLayout({ children }) {
               {user.username.slice(0, 2)}
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold truncate text-white">{user.first_name} {user.last_name}</p>
+              <p className="text-sm font-semibold truncate text-white">{user.first_name || user.username} {user.last_name}</p>
               <span className={`inline-block px-2 py-0.5 mt-1 rounded text-[10px] font-bold border capitalize ${getRoleBadgeColor(user.role)}`}>
-                {user.role}
+                {getRoleLabel(user.role)}
               </span>
             </div>
           </div>
@@ -167,7 +199,7 @@ export default function DashboardLayout({ children }) {
             </button>
             <div>
               <h1 className="text-lg font-bold text-slate-850">Clarke International University</h1>
-              <p className="text-xs text-slate-500 font-medium hidden sm:block">Welcome, {user.first_name} ({user.role.toUpperCase()}) · Local Time: {new Date().toLocaleDateString(undefined, {weekday: 'long', month: 'short', day: 'numeric'})}</p>
+              <p className="text-xs text-slate-500 font-medium hidden sm:block">Welcome, {user.first_name || user.username} ({getRoleLabel(user.role).toUpperCase()}) · Local Time: {new Date().toLocaleDateString(undefined, {weekday: 'long', month: 'short', day: 'numeric'})}</p>
             </div>
           </div>
           
@@ -231,9 +263,9 @@ export default function DashboardLayout({ children }) {
                   {user.username.slice(0, 2).toUpperCase()}
                 </div>
                 <div>
-                  <p className="text-sm font-semibold text-white">{user.first_name} {user.last_name}</p>
+                  <p className="text-sm font-semibold text-white">{user.first_name || user.username} {user.last_name}</p>
                   <span className={`inline-block px-2 py-0.5 mt-1 rounded text-[10px] font-bold border capitalize ${getRoleBadgeColor(user.role)}`}>
-                    {user.role}
+                    {getRoleLabel(user.role)}
                   </span>
                 </div>
               </div>
