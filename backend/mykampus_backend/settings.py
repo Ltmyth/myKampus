@@ -73,20 +73,40 @@ TEMPLATES = [
 WSGI_APPLICATION = 'mykampus_backend.wsgi.application'
 
 # Database
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': os.getenv('DB_NAME', 'mykampus_db'),
-        'USER': os.getenv('DB_USER', 'mykampus_user'),
-        'PASSWORD': os.getenv('DB_PASSWORD', 'examiner@c1u'),
-        'HOST': os.getenv('DB_HOST', '127.0.0.1'),
-        'PORT': os.getenv('DB_PORT', '5432'),
+use_sqlite = os.getenv('USE_SQLITE', 'False').lower() in ('true', '1', 'yes')
 
-        # ⚡ SQL Performance Tuning: Reuse database connections across HTTP requests (Connection Pooling)
-        'CONN_MAX_AGE': 600,  # 10 minutes connection persistence
-        'CONN_HEALTH_CHECKS': True,
+try:
+    import psycopg2
+    has_postgres = True
+except ImportError:
+    try:
+        import psycopg
+        has_postgres = True
+    except ImportError:
+        has_postgres = False
+
+if use_sqlite or not has_postgres:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
+        }
     }
-}
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': os.getenv('DB_NAME', 'mykampus_db'),
+            'USER': os.getenv('DB_USER', 'mykampus_user'),
+            'PASSWORD': os.getenv('DB_PASSWORD', 'examiner@c1u'),
+            'HOST': os.getenv('DB_HOST', '127.0.0.1'),
+            'PORT': os.getenv('DB_PORT', '5432'),
+
+            # ⚡ SQL Performance Tuning: Reuse database connections across HTTP requests (Connection Pooling)
+            'CONN_MAX_AGE': 600,  # 10 minutes connection persistence
+            'CONN_HEALTH_CHECKS': True,
+        }
+    }
 
 # Custom User Model
 AUTH_USER_MODEL = 'ciu_portal.User'
