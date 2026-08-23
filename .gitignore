@@ -3,3 +3,5 @@ node_modules/
 my_Kampus_local_login_flow_1782723839478.webp
 walkthrough.md
 db.sqlite3
+__pycache__/
+.DS_Store
