@@ -8,6 +8,7 @@ export default function ClassesPage() {
   const { user } = useAuth();
   const [contents, setContents] = useState([]);
   const [courses, setCourses] = useState([]);
+  const [courseUnits, setCourseUnits] = useState([]);
   const [sessions, setSessions] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -37,20 +38,27 @@ export default function ClassesPage() {
   async function loadClassroomData() {
     try {
       setLoading(true);
-      const [contentsData, coursesData, sessionsData] = await Promise.all([
+      const [contentsData, coursesData, unitsData, sessionsData] = await Promise.all([
         api.get('/contents/').catch(() => []),
         api.get('/courses/').catch(() => []),
+        api.get('/course-units/').catch(() => []),
         api.get('/attendance/sessions/').catch(() => [])
       ]);
-      setContents(contentsData);
-      setCourses(coursesData);
-      setSessions(sessionsData);
+      setContents(contentsData || []);
+      setCourses(coursesData || []);
+      setCourseUnits(unitsData || []);
+      setSessions(sessionsData || []);
     } catch (err) {
       setErrorMsg('Failed to load classroom files and sessions.');
     } finally {
       setLoading(false);
     }
   }
+
+  // Filter assigned courses for Lecturers
+  const assignedCourses = user?.role === 'lecturer'
+    ? courses.filter(c => courseUnits.some(u => u.course_code === c.code && u.lecturer_details?.some(l => l.id === user.id)))
+    : courses;
 
   const handleUploadContent = async (e) => {
     e.preventDefault();
@@ -67,7 +75,7 @@ export default function ClassesPage() {
         title: contentTitle,
         description: contentDesc,
         attachment_url: contentLink,
-        course: selectedCourse
+        course: parseInt(selectedCourse)
       });
       setSuccessMsg('Class content uploaded successfully!');
       setContentTitle('');
@@ -94,7 +102,7 @@ export default function ClassesPage() {
 
     try {
       const session = await api.post('/attendance/sessions/', {
-        course: attendanceCourse
+        course: parseInt(attendanceCourse)
       });
       setOpenedCode(session.code);
       setSuccessMsg(`Attendance window opened successfully! Code: ${session.code}`);
@@ -119,7 +127,7 @@ export default function ClassesPage() {
 
     try {
       await api.post('/attendance/sessions/check_in/', {
-        session_id: checkInSession,
+        session_id: parseInt(checkInSession),
         code: checkInCode
       });
       setSuccessMsg('Attendance checked in successfully! Marked present.');
@@ -147,7 +155,7 @@ export default function ClassesPage() {
     <div className="space-y-8 animate-fade-in">
       <div>
         <h2 className="text-xl font-bold text-slate-800">Classroom Content & Attendance</h2>
-        <p className="text-slate-500 text-xs font-medium">Access lecture materials and verify daily attendance for your courses.</p>
+        <p className="text-slate-500 text-xs font-medium">Access lecture materials and verify daily attendance for your assigned courses.</p>
       </div>
 
       {errorMsg && (
@@ -246,16 +254,24 @@ export default function ClassesPage() {
               {/* Start Attendance Card */}
               <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 space-y-4">
                 <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">Open Attendance Code</h3>
+                
+                {user.role === 'lecturer' && assignedCourses.length === 0 && (
+                  <div className="p-3 bg-amber-50 border-l-4 border-amber-500 rounded text-amber-800 text-xs font-semibold">
+                    Notice: You are not assigned to any course units. Contact your Faculty Secretary for assignment.
+                  </div>
+                )}
+
                 <form onSubmit={handleStartAttendance} className="space-y-4">
                   <div>
-                    <label className="block text-slate-700 text-xs font-semibold uppercase tracking-wider mb-1">Select Course</label>
+                    <label className="block text-slate-700 text-xs font-semibold uppercase tracking-wider mb-1">Select Course Program</label>
                     <select
                       value={attendanceCourse}
                       onChange={(e) => setAttendanceCourse(e.target.value)}
                       className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-slate-800 text-xs focus:outline-none focus:ring-2 focus:ring-brand-light/30 focus:border-brand-light transition-all"
+                      required
                     >
                       <option value="">Select Course...</option>
-                      {courses.map((c) => (
+                      {assignedCourses.map((c) => (
                         <option key={c.id} value={c.id}>[{c.code}] {c.name}</option>
                       ))}
                     </select>
@@ -284,14 +300,15 @@ export default function ClassesPage() {
                 <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">Share Lecture Resources</h3>
                 <form onSubmit={handleUploadContent} className="space-y-3">
                   <div>
-                    <label className="block text-slate-700 text-xs font-semibold uppercase tracking-wider mb-1">Course</label>
+                    <label className="block text-slate-700 text-xs font-semibold uppercase tracking-wider mb-1">Course Program</label>
                     <select
                       value={selectedCourse}
                       onChange={(e) => setSelectedCourse(e.target.value)}
                       className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-800 text-xs focus:outline-none focus:ring-2 focus:ring-brand-light/30 focus:border-brand-light transition-all"
+                      required
                     >
                       <option value="">Select Course...</option>
-                      {courses.map((c) => (
+                      {assignedCourses.map((c) => (
                         <option key={c.id} value={c.id}>[{c.code}] {c.name}</option>
                       ))}
                     </select>
@@ -305,6 +322,7 @@ export default function ClassesPage() {
                       onChange={(e) => setContentTitle(e.target.value)}
                       placeholder="e.g. Lecture Notes 1 - Intro"
                       className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-850 text-xs focus:outline-none focus:ring-2 focus:ring-brand-light/30 focus:border-brand-light transition-all"
+                      required
                     />
                   </div>
 

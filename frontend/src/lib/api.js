@@ -1,8 +1,10 @@
-const API_BASE_URL = 'http://localhost:8000/api';
+const rawBaseUrl = process.env.NEXT_PUBLIC_API_URL || 'https://examiner.ciu.ac.ug/api';
+const API_BASE_URL = rawBaseUrl.replace(/\/$/, '');
 
 export async function apiRequest(endpoint, options = {}) {
-  const url = `${API_BASE_URL}${endpoint}`;
-  
+  const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+  const url = `${API_BASE_URL}${cleanEndpoint}`;
+
   // Set headers
   const headers = {
     'Content-Type': 'application/json',

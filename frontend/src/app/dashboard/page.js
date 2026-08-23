@@ -10,16 +10,17 @@ export default function DashboardPage() {
   const router = useRouter();
   const [stats, setStats] = useState({
     courses: 0,
-    applications: 0,
     exams: 0,
-    attempts: 0,
+    tests: 0,
+    classTimetables: 0,
+    examTimetables: 0,
     users: 0,
     invites: 0,
-    contents: 0,
     sessions: 0
   });
   const [recentExams, setRecentExams] = useState([]);
-  const [recentApps, setRecentApps] = useState([]);
+  const [recentClassTimetables, setRecentClassTimetables] = useState([]);
+  const [recentExamTimetables, setRecentExamTimetables] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -27,9 +28,10 @@ export default function DashboardPage() {
       try {
         const fetchPromises = [
           api.get('/courses/').then(res => res.length).catch(() => 0),
-          api.get('/applications/').then(res => res.length).catch(() => 0),
           api.get('/exams/').then(res => res.length).catch(() => 0),
-          api.get('/contents/').then(res => res.length).catch(() => 0),
+          api.get('/tests/').then(res => res.length).catch(() => 0),
+          api.get('/class-timetables/').then(res => res.length).catch(() => 0),
+          api.get('/exam-timetables/').then(res => res.length).catch(() => 0),
         ];
 
         if (user.role === 'admin') {
@@ -40,42 +42,39 @@ export default function DashboardPage() {
           fetchPromises.push(Promise.resolve(0));
         }
 
-        if (user.role === 'student') {
-          fetchPromises.push(api.get('/attempts/').then(res => res.length).catch(() => 0));
-        } else {
-          fetchPromises.push(api.get('/attempts/').then(res => res.length).catch(() => 0));
-        }
-
         fetchPromises.push(api.get('/attendance/sessions/').then(res => res.length).catch(() => 0));
 
         const [
           coursesCount,
-          appsCount,
           examsCount,
-          contentsCount,
+          testsCount,
+          classTimetablesCount,
+          examTimetablesCount,
           usersCount,
           invitesCount,
-          attemptsCount,
           sessionsCount
         ] = await Promise.all(fetchPromises);
 
         setStats({
           courses: coursesCount,
-          applications: appsCount,
           exams: examsCount,
-          contents: contentsCount,
+          tests: testsCount,
+          classTimetables: classTimetablesCount,
+          examTimetables: examTimetablesCount,
           users: usersCount,
           invites: invitesCount,
-          attempts: attemptsCount,
           sessions: sessionsCount
         });
 
-        // Load some listings for context
+        // Load recent listings for context
         const examsData = await api.get('/exams/').catch(() => []);
         setRecentExams(examsData.slice(0, 3));
 
-        const appsData = await api.get('/applications/').catch(() => []);
-        setRecentApps(appsData.slice(0, 3));
+        const classTtData = await api.get('/class-timetables/').catch(() => []);
+        setRecentClassTimetables(classTtData.slice(0, 3));
+
+        const examTtData = await api.get('/exam-timetables/').catch(() => []);
+        setRecentExamTimetables(examTtData.slice(0, 3));
 
       } catch (err) {
         console.error("Error loading dashboard data", err);
@@ -99,45 +98,54 @@ export default function DashboardPage() {
     <div className="space-y-8 animate-fade-in">
       {/* Welcome Banner */}
       <div className="bg-gradient-to-r from-brand-dark via-brand-medium to-brand-light rounded-3xl p-6 md:p-8 text-white shadow-xl flex flex-col md:flex-row md:items-center justify-between border border-white/10 relative overflow-hidden">
-        {/* Decorative circle */}
         <div className="absolute right-0 top-0 w-80 h-80 bg-white/5 rounded-full -mr-20 -mt-20 pointer-events-none"></div>
         
         <div className="space-y-2 z-10">
-          <h2 className="text-2xl md:text-3xl font-extrabold tracking-tight">Welcome, {user.first_name}!</h2>
+          <h2 className="text-2xl md:text-3xl font-extrabold tracking-tight">Welcome, {user.first_name || user.username}!</h2>
           <p className="text-white/80 text-sm max-w-md font-light">
-            You are logged in as a <span className="font-semibold text-brand-emerald capitalize">{user.role}</span>. Access all My Kampus tools, coursework resources, and attendance forms below.
+            Logged in as <span className="font-semibold text-brand-emerald capitalize">{user.role.replace('_', ' ')}</span>. Manage academic timetables, course exams, tests, and attendance tracking.
           </p>
         </div>
         
-        <div className="mt-4 md:mt-0 flex space-x-3 z-10">
+        <div className="mt-4 md:mt-0 flex flex-wrap gap-2.5 z-10">
           {user.role === 'student' && (
             <>
               <button onClick={() => router.push('/dashboard/exams')} className="px-5 py-2.5 bg-brand-emerald hover:bg-brand-emerald/90 text-brand-dark rounded-xl font-bold text-sm shadow-md transition-all active:scale-[0.98]">
                 Take Exam
               </button>
-              <button onClick={() => router.push('/dashboard/applications')} className="px-5 py-2.5 bg-white/10 hover:bg-white/20 text-white rounded-xl font-semibold text-sm border border-white/15 transition-all">
-                Apply for Course
+              <button onClick={() => router.push('/dashboard/faculty')} className="px-5 py-2.5 bg-white/10 hover:bg-white/20 text-white rounded-xl font-semibold text-sm border border-white/15 transition-all">
+                View Class Timetable
               </button>
             </>
           )}
           {user.role === 'lecturer' && (
             <>
               <button onClick={() => router.push('/dashboard/exams')} className="px-5 py-2.5 bg-brand-emerald hover:bg-brand-emerald/90 text-brand-dark rounded-xl font-bold text-sm shadow-md transition-all active:scale-[0.98]">
-                Create Exam
+                Create Exam / Test
               </button>
               <button onClick={() => router.push('/dashboard/classes')} className="px-5 py-2.5 bg-white/10 hover:bg-white/20 text-white rounded-xl font-semibold text-sm border border-white/15 transition-all">
-                Start Class Attendance
+                Open Class Attendance
               </button>
             </>
           )}
+          {user.role === 'faculty_admin' && (
+            <button onClick={() => router.push('/dashboard/faculty')} className="px-5 py-2.5 bg-brand-emerald hover:bg-brand-emerald/90 text-brand-dark rounded-xl font-bold text-sm shadow-md transition-all active:scale-[0.98]">
+              Manage Class Timetables
+            </button>
+          )}
+          {user.role === 'registrar' && (
+            <button onClick={() => router.push('/dashboard/exams')} className="px-5 py-2.5 bg-brand-emerald hover:bg-brand-emerald/90 text-brand-dark rounded-xl font-bold text-sm shadow-md transition-all active:scale-[0.98]">
+              Manage Exam Timetables
+            </button>
+          )}
           {user.role === 'admin' && (
             <button onClick={() => router.push('/dashboard/admin')} className="px-5 py-2.5 bg-brand-emerald hover:bg-brand-emerald/90 text-brand-dark rounded-xl font-bold text-sm shadow-md transition-all active:scale-[0.98]">
-              Manage Users & Invites
+              Manage Users & Audit Logs
             </button>
           )}
           {['dean', 'dvc'].includes(user.role) && (
-            <button onClick={() => router.push('/dashboard/applications')} className="px-5 py-2.5 bg-brand-emerald hover:bg-brand-emerald/90 text-brand-dark rounded-xl font-bold text-sm shadow-md transition-all active:scale-[0.98]">
-              Review Applications
+            <button onClick={() => router.push('/dashboard/reports')} className="px-5 py-2.5 bg-brand-emerald hover:bg-brand-emerald/90 text-brand-dark rounded-xl font-bold text-sm shadow-md transition-all active:scale-[0.98]">
+              View Academic Analytics
             </button>
           )}
         </div>
@@ -146,7 +154,7 @@ export default function DashboardPage() {
       {/* Grid Statistics */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
         
-        {/* Card 1 */}
+        {/* Card 1: Courses */}
         <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 flex items-center space-x-4">
           <div className="p-3 bg-emerald-50 rounded-xl text-brand-light">
             <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -159,20 +167,20 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* Card 2 */}
+        {/* Card 2: Class Timetables */}
         <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 flex items-center space-x-4">
-          <div className="p-3 bg-blue-50 rounded-xl text-blue-600">
+          <div className="p-3 bg-indigo-50 rounded-xl text-indigo-600">
             <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
             </svg>
           </div>
           <div>
-            <p className="text-slate-400 text-xs font-semibold uppercase tracking-wider">Applications</p>
-            <h3 className="text-2xl font-bold text-slate-800">{stats.applications}</h3>
+            <p className="text-slate-400 text-xs font-semibold uppercase tracking-wider">Class Timetables</p>
+            <h3 className="text-2xl font-bold text-slate-800">{stats.classTimetables}</h3>
           </div>
         </div>
 
-        {/* Card 3 */}
+        {/* Card 3: Exams & Tests */}
         <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 flex items-center space-x-4">
           <div className="p-3 bg-purple-50 rounded-xl text-purple-600">
             <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -180,12 +188,12 @@ export default function DashboardPage() {
             </svg>
           </div>
           <div>
-            <p className="text-slate-400 text-xs font-semibold uppercase tracking-wider">Exams</p>
-            <h3 className="text-2xl font-bold text-slate-800">{stats.exams}</h3>
+            <p className="text-slate-400 text-xs font-semibold uppercase tracking-wider">Exams & Tests</p>
+            <h3 className="text-2xl font-bold text-slate-800">{stats.exams + stats.tests}</h3>
           </div>
         </div>
 
-        {/* Card 4 */}
+        {/* Card 4: Exam Schedules / Attendance */}
         <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 flex items-center space-x-4">
           <div className="p-3 bg-amber-50 rounded-xl text-amber-600">
             <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -194,10 +202,10 @@ export default function DashboardPage() {
           </div>
           <div>
             <p className="text-slate-400 text-xs font-semibold uppercase tracking-wider">
-              {user.role === 'admin' ? 'Active Invites' : 'Attendance Sessions'}
+              {user.role === 'admin' ? 'Active Invites' : 'Exam Schedules'}
             </p>
             <h3 className="text-2xl font-bold text-slate-800">
-              {user.role === 'admin' ? stats.invites : stats.sessions}
+              {user.role === 'admin' ? stats.invites : stats.examTimetables}
             </h3>
           </div>
         </div>
@@ -207,7 +215,7 @@ export default function DashboardPage() {
       {/* Main Panels Layout */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         
-        {/* Left Double Panel: Recent Exams and Applications */}
+        {/* Left Double Panel: Recent Exams and Timetables */}
         <div className="lg:col-span-2 space-y-8">
           
           {/* Exams Panel */}
@@ -221,7 +229,7 @@ export default function DashboardPage() {
 
             {recentExams.length === 0 ? (
               <div className="py-6 text-center text-slate-400 text-sm">
-                No exams available.
+                No active exams scheduled.
               </div>
             ) : (
               <div className="divide-y divide-slate-100">
@@ -233,7 +241,7 @@ export default function DashboardPage() {
                     </div>
                     {user.role === 'student' ? (
                       <button onClick={() => router.push(`/dashboard/exams`)} className="px-3 py-1.5 bg-brand-light text-white text-xs font-semibold rounded-lg hover:bg-brand-medium transition-all">
-                        Launch
+                        Launch Exam
                       </button>
                     ) : (
                       <span className={`px-2.5 py-1 rounded text-xs font-medium border ${ex.is_active ? 'bg-emerald-50 text-emerald-700 border-emerald-100' : 'bg-slate-50 text-slate-500 border-slate-100'}`}>
@@ -246,29 +254,29 @@ export default function DashboardPage() {
             )}
           </div>
 
-          {/* Applications Panel */}
+          {/* Class Timetables Quick Preview */}
           <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 space-y-4">
             <div className="flex items-center justify-between">
-              <h3 className="text-base font-bold text-slate-800">Course Application Filings</h3>
-              <button onClick={() => router.push('/dashboard/applications')} className="text-xs font-semibold text-brand-light hover:underline">
-                Manage
+              <h3 className="text-base font-bold text-slate-800">Faculty Class Schedules</h3>
+              <button onClick={() => router.push('/dashboard/faculty')} className="text-xs font-semibold text-brand-light hover:underline">
+                Full Timetable
               </button>
             </div>
 
-            {recentApps.length === 0 ? (
+            {recentClassTimetables.length === 0 ? (
               <div className="py-6 text-center text-slate-400 text-sm">
-                No application filings found.
+                No class timetables posted yet.
               </div>
             ) : (
               <div className="divide-y divide-slate-100">
-                {recentApps.map((ap) => (
-                  <div key={ap.id} className="py-3 flex items-center justify-between first:pt-0 last:pb-0">
+                {recentClassTimetables.map((tt) => (
+                  <div key={tt.id} className="py-3 flex items-center justify-between first:pt-0 last:pb-0">
                     <div>
-                      <h4 className="text-sm font-semibold text-slate-850">{ap.course_name} ({ap.course_code})</h4>
-                      <p className="text-xs text-slate-450">Filer: {ap.student_name} · Applied: {new Date(ap.applied_at).toLocaleDateString()}</p>
+                      <h4 className="text-sm font-semibold text-slate-850">{tt.course_code}: {tt.course_name}</h4>
+                      <p className="text-xs text-slate-450">{tt.day_of_week} · {tt.start_time} - {tt.end_time} · Room: {tt.room}</p>
                     </div>
-                    <span className={`px-2 py-0.5 rounded text-xs font-bold capitalize border ${ap.status === 'approved' ? 'bg-emerald-50 text-emerald-700 border-emerald-100' : ap.status === 'rejected' ? 'bg-red-50 text-red-700 border-red-100' : 'bg-amber-50 text-amber-700 border-amber-100'}`}>
-                      {ap.status}
+                    <span className="px-2.5 py-1 rounded text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-100 capitalize">
+                      {tt.class_type}
                     </span>
                   </div>
                 ))}
@@ -283,26 +291,26 @@ export default function DashboardPage() {
           
           {/* Quick Actions Panel */}
           <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 space-y-4">
-            <h3 className="text-base font-bold text-slate-800">Shortcut Actions</h3>
+            <h3 className="text-base font-bold text-slate-800">Role Quick Actions</h3>
             
             <div className="flex flex-col space-y-2">
               {user.role === 'admin' && (
                 <>
                   <button onClick={() => router.push('/dashboard/admin')} className="w-full text-left px-4 py-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-150 rounded-xl text-xs font-semibold text-slate-700 transition-all">
-                    + Generate Invite Link
+                    + Generate User Invite Link
                   </button>
                   <button onClick={() => router.push('/dashboard/admin')} className="w-full text-left px-4 py-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-150 rounded-xl text-xs font-semibold text-slate-700 transition-all">
-                    👥 View User Database
+                    🛡️ View System Audit Logs
                   </button>
                 </>
               )}
               {user.role === 'student' && (
                 <>
-                  <button onClick={() => router.push('/dashboard/classes')} className="w-full text-left px-4 py-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-150 rounded-xl text-xs font-semibold text-slate-700 transition-all">
-                    📝 Verify Daily Attendance
+                  <button onClick={() => router.push('/dashboard/faculty')} className="w-full text-left px-4 py-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-150 rounded-xl text-xs font-semibold text-slate-700 transition-all">
+                    📅 Check Weekly Class Timetable
                   </button>
-                  <button onClick={() => router.push('/dashboard/classes')} className="w-full text-left px-4 py-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-150 rounded-xl text-xs font-semibold text-slate-700 transition-all">
-                    📚 Fetch Class Materials
+                  <button onClick={() => router.push('/dashboard/exams')} className="w-full text-left px-4 py-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-150 rounded-xl text-xs font-semibold text-slate-700 transition-all">
+                    🎓 Check Exam Schedules
                   </button>
                 </>
               )}
@@ -311,20 +319,20 @@ export default function DashboardPage() {
                   <button onClick={() => router.push('/dashboard/classes')} className="w-full text-left px-4 py-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-150 rounded-xl text-xs font-semibold text-slate-700 transition-all">
                     🕒 Open Class Attendance Window
                   </button>
-                  <button onClick={() => router.push('/dashboard/classes')} className="w-full text-left px-4 py-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-150 rounded-xl text-xs font-semibold text-slate-700 transition-all">
-                    📤 Share Reading Materials
-                  </button>
                   <button onClick={() => router.push('/dashboard/exams')} className="w-full text-left px-4 py-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-150 rounded-xl text-xs font-semibold text-slate-700 transition-all">
-                    ✏️ Add Exam Questions
+                    ✏️ Set Exam / Test Questions
                   </button>
                 </>
               )}
-              {['dean', 'dvc'].includes(user.role) && (
-                <>
-                  <button onClick={() => router.push('/dashboard/applications')} className="w-full text-left px-4 py-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-150 rounded-xl text-xs font-semibold text-slate-700 transition-all">
-                    ✓ Action Pending Registrations
-                  </button>
-                </>
+              {user.role === 'faculty_admin' && (
+                <button onClick={() => router.push('/dashboard/faculty')} className="w-full text-left px-4 py-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-150 rounded-xl text-xs font-semibold text-slate-700 transition-all">
+                  📅 Create / Edit Faculty Timetables
+                </button>
+              )}
+              {user.role === 'registrar' && (
+                <button onClick={() => router.push('/dashboard/exams')} className="w-full text-left px-4 py-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-150 rounded-xl text-xs font-semibold text-slate-700 transition-all">
+                  📝 Create / Manage Exam Timetables
+                </button>
               )}
             </div>
           </div>
