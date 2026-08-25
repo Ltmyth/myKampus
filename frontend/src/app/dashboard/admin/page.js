@@ -12,6 +12,7 @@ export default function AdminPage() {
   const [faculties, setFaculties] = useState([]);
   const [deans, setDeans] = useState([]);
   const [secretaries, setSecretaries] = useState([]);
+  const [proctoringSetting, setProctoringSetting] = useState({ is_proctoring_enabled: true });
   const [loading, setLoading] = useState(true);
 
   // Tabs: 'users', 'faculties', 'logs', 'invites'
@@ -38,6 +39,7 @@ export default function AdminPage() {
   const [editLastName, setEditLastName] = useState('');
   const [editPhone, setEditPhone] = useState('');
   const [editRole, setEditRole] = useState('student');
+  const [editTuitionPaid, setEditTuitionPaid] = useState(100.0);
 
   // Form State (Create/Edit Faculty)
   const [showFacultyModal, setShowFacultyModal] = useState(false);
@@ -59,11 +61,12 @@ export default function AdminPage() {
   async function loadAdminData() {
     try {
       setLoading(true);
-      const [usersData, invitesData, logsData, facsData] = await Promise.all([
+      const [usersData, invitesData, logsData, facsData, procData] = await Promise.all([
         api.get('/admin/users/').catch(() => []),
         api.get('/invitations/').catch(() => []),
         api.get('/system-logs/').catch(() => []),
-        api.get('/faculties/').catch(() => [])
+        api.get('/faculties/').catch(() => []),
+        api.get('/proctoring-settings/').catch(() => ({ is_proctoring_enabled: true }))
       ]);
       const userList = usersData || [];
       setUsers(userList);
@@ -72,12 +75,36 @@ export default function AdminPage() {
       setFaculties(facsData || []);
       setDeans(userList.filter(u => u.role === 'dean'));
       setSecretaries(userList.filter(u => u.role === 'faculty_admin'));
+      setProctoringSetting(procData || { is_proctoring_enabled: true });
     } catch (err) {
       setErrorMsg('Failed to load admin resources.');
     } finally {
       setLoading(false);
     }
   }
+
+  const handleToggleProctoring = async () => {
+    setErrorMsg('');
+    setSuccessMsg('');
+    try {
+      const res = await api.post('/proctoring-settings/toggle/');
+      setSuccessMsg(res.detail);
+      loadAdminData();
+    } catch (err) {
+      setErrorMsg(err.message || 'Failed to toggle proctoring.');
+    }
+  };
+
+  const downloadAuditLogsCSV = () => {
+    const rawBaseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api';
+    const API_BASE_URL = rawBaseUrl.replace(/\/$/, '');
+    const tokensStr = localStorage.getItem('ciu_tokens');
+    let token = '';
+    if (tokensStr) {
+      try { token = JSON.parse(tokensStr).access; } catch (e) {}
+    }
+    window.open(`${API_BASE_URL}/system-logs/export_csv/?token=${token}&level=${logLevelFilter}&search=${logSearch}`, '_blank');
+  };
 
   // --- Faculty CRUD Handlers ---
   const handleOpenFacultyModal = (fac = null) => {
@@ -216,6 +243,7 @@ export default function AdminPage() {
     setEditLastName(u.last_name || '');
     setEditPhone(u.phone || '');
     setEditRole(u.role);
+    setEditTuitionPaid(u.tuition_paid_percentage ?? 100.0);
     setErrorMsg('');
     setSuccessMsg('');
   };
@@ -237,7 +265,8 @@ export default function AdminPage() {
         first_name: editFirstName,
         last_name: editLastName,
         phone: editPhone,
-        role: editRole
+        role: editRole,
+        tuition_paid_percentage: parseFloat(editTuitionPaid)
       });
       setSuccessMsg('User details updated successfully!');
       setEditingUser(null);
@@ -309,10 +338,24 @@ export default function AdminPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200 pb-5">
         <div>
           <h2 className="text-xl font-bold text-slate-800">System Admin Control Center</h2>
-          <p className="text-slate-500 text-xs font-medium">User management, Faculty CRUD & Leadership allocation, System Audit Logs, and Tokens.</p>
+          <p className="text-slate-500 text-xs font-medium">User management, Proctoring controls, System Audit Logs, and Tuition Gates.</p>
         </div>
 
-        <div className="flex items-center space-x-3">
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Global Proctoring Switch Card */}
+          <div className={`px-3 py-1.5 rounded-xl border flex items-center space-x-2 ${proctoringSetting.is_proctoring_enabled ? 'bg-red-50 text-red-800 border-red-200 animate-pulse' : 'bg-slate-100 text-slate-600 border-slate-200'}`}>
+            <span className="w-2.5 h-2.5 rounded-full bg-red-600"></span>
+            <span className="text-xs font-extrabold uppercase">
+              {proctoringSetting.is_proctoring_enabled ? 'Live Proctoring: ACTIVE' : 'Live Proctoring: OFF'}
+            </span>
+            <button
+              onClick={handleToggleProctoring}
+              className="ml-2 px-2.5 py-1 bg-slate-900 text-white text-[10px] font-bold rounded-lg hover:bg-slate-800 transition-all"
+            >
+              Toggle Switch
+            </button>
+          </div>
+
           <button
             onClick={() => handleOpenFacultyModal(null)}
             className="px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold rounded-xl shadow-sm transition-all"
@@ -325,9 +368,6 @@ export default function AdminPage() {
           >
             🔄 Refresh
           </button>
-          <div className="bg-purple-50 border border-purple-200 px-3 py-1.5 rounded-xl text-xs text-purple-800 font-bold uppercase">
-            SYSTEM ADMIN
-          </div>
         </div>
       </div>
 
@@ -384,8 +424,8 @@ export default function AdminPage() {
                     <tr className="bg-slate-50 border-b border-slate-100 text-slate-400 uppercase font-semibold">
                       <th className="px-4 py-3">Username</th>
                       <th className="px-4 py-3">Full Name</th>
-                      <th className="px-4 py-3">Email</th>
                       <th className="px-4 py-3">Role</th>
+                      <th className="px-4 py-3 text-center">Tuition Clearance</th>
                       <th className="px-4 py-3 text-center">Action</th>
                     </tr>
                   </thead>
@@ -394,11 +434,19 @@ export default function AdminPage() {
                       <tr key={u.id} className="hover:bg-slate-50">
                         <td className="px-4 py-3.5 font-bold text-slate-800">{u.username}</td>
                         <td className="px-4 py-3.5">{u.first_name} {u.last_name}</td>
-                        <td className="px-4 py-3.5">{u.email}</td>
                         <td className="px-4 py-3.5 capitalize">
                           <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${u.role === 'admin' ? 'bg-purple-50 text-purple-700 border-purple-100' : u.role === 'student' ? 'bg-slate-50 text-slate-700 border-slate-100' : 'bg-emerald-50 text-emerald-700 border-emerald-100'}`}>
                             {u.role.replace('_', ' ')}
                           </span>
+                        </td>
+                        <td className="px-4 py-3.5 text-center font-bold">
+                          {u.role === 'student' ? (
+                            <span className={`px-2 py-0.5 rounded text-[10px] ${u.tuition_paid_percentage >= 100 ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : u.tuition_paid_percentage >= 50 ? 'bg-amber-50 text-amber-700 border border-amber-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
+                              {u.tuition_paid_percentage}% Paid
+                            </span>
+                          ) : (
+                            <span className="text-slate-400 font-normal">N/A</span>
+                          )}
                         </td>
                         <td className="px-4 py-3.5 text-center flex justify-center items-center space-x-3">
                           <button
@@ -585,13 +633,22 @@ export default function AdminPage() {
               ))}
             </div>
 
-            <input
-              type="text"
-              placeholder="Search logs by action or user..."
-              value={logSearch}
-              onChange={(e) => setLogSearch(e.target.value)}
-              className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs w-full sm:w-64"
-            />
+            <div className="flex items-center space-x-2">
+              <input
+                type="text"
+                placeholder="Search logs by action or user..."
+                value={logSearch}
+                onChange={(e) => setLogSearch(e.target.value)}
+                className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs w-full sm:w-64"
+              />
+              <button
+                onClick={downloadAuditLogsCSV}
+                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg shadow-sm transition-all"
+                title="Export System Audit Logs to CSV"
+              >
+                📥 Export CSV
+              </button>
+            </div>
           </div>
 
           {/* Logs Table */}
@@ -857,7 +914,7 @@ export default function AdminPage() {
 
             <div>
               <h3 className="text-lg font-bold text-slate-800">Edit User Details</h3>
-              <p className="text-xs text-slate-500 font-medium">Modify credentials, contact information, and role assignments.</p>
+              <p className="text-xs text-slate-500 font-medium">Modify credentials, contact information, role, and tuition clearances.</p>
             </div>
 
             <form onSubmit={handleSaveUser} className="space-y-4">
@@ -906,15 +963,31 @@ export default function AdminPage() {
                 />
               </div>
 
-              <div>
-                <label className="block text-slate-700 text-xs font-semibold uppercase tracking-wider mb-1">Phone</label>
-                <input
-                  type="text"
-                  value={editPhone}
-                  onChange={(e) => setEditPhone(e.target.value)}
-                  placeholder="Phone Number"
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-850 text-xs focus:outline-none focus:ring-2 focus:ring-brand-light/30 focus:border-brand-light transition-all"
-                />
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-slate-700 text-xs font-semibold uppercase tracking-wider mb-1">Phone</label>
+                  <input
+                    type="text"
+                    value={editPhone}
+                    onChange={(e) => setEditPhone(e.target.value)}
+                    placeholder="Phone Number"
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-850 text-xs focus:outline-none focus:ring-2 focus:ring-brand-light/30 focus:border-brand-light transition-all"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-slate-700 text-xs font-semibold uppercase tracking-wider mb-1">Tuition Paid %</label>
+                  <input
+                    type="number"
+                    step="5"
+                    min="0"
+                    max="100"
+                    value={editTuitionPaid}
+                    onChange={(e) => setEditTuitionPaid(e.target.value)}
+                    placeholder="100"
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-850 text-xs focus:outline-none focus:ring-2 focus:ring-brand-light/30 focus:border-brand-light transition-all font-bold"
+                  />
+                </div>
               </div>
 
               <div>

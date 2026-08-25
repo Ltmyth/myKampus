@@ -12,6 +12,7 @@ export default function TestPortalPage() {
   const [courses, setCourses] = useState([]);
   const [courseUnits, setCourseUnits] = useState([]);
   const [attempts, setAttempts] = useState([]);
+  const [proctoringSetting, setProctoringSetting] = useState({ is_proctoring_enabled: true });
   const [loading, setLoading] = useState(true);
 
   // Filters & Tabs
@@ -19,6 +20,10 @@ export default function TestPortalPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCourseFilter, setSelectedCourseFilter] = useState('');
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState('');
+
+  // Fee Gate Alert Modal
+  const [showFeeGateModal, setShowFeeGateModal] = useState(false);
+  const [feeGateMessage, setFeeGateMessage] = useState('');
 
   // Test Builder State
   const [title, setTitle] = useState('');
@@ -47,6 +52,7 @@ export default function TestPortalPage() {
   const [successMsg, setSuccessMsg] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
+  const isAdmin = user?.role === 'admin';
   const isStaff = ['lecturer', 'admin', 'faculty_admin', 'dean', 'registrar', 'dvc'].includes(user?.role);
 
   useEffect(() => {
@@ -56,16 +62,18 @@ export default function TestPortalPage() {
   async function loadPortalData() {
     try {
       setLoading(true);
-      const [testsData, coursesData, unitsData, attemptsData] = await Promise.all([
+      const [testsData, coursesData, unitsData, attemptsData, procData] = await Promise.all([
         api.get('/tests/').catch(() => []),
         api.get('/courses/').catch(() => []),
         api.get('/course-units/').catch(() => []),
-        api.get('/test-attempts/').catch(() => [])
+        api.get('/test-attempts/').catch(() => []),
+        api.get('/proctoring-settings/').catch(() => ({ is_proctoring_enabled: true }))
       ]);
       setTests(testsData || []);
       setCourses(coursesData || []);
       setCourseUnits(unitsData || []);
       setAttempts(attemptsData || []);
+      setProctoringSetting(procData || { is_proctoring_enabled: true });
     } catch (err) {
       setErrorMsg('Failed to fetch test portal datasets.');
     } finally {
@@ -97,7 +105,8 @@ export default function TestPortalPage() {
         pass_percentage: parseFloat(passPercentage),
         allowed_attempts: parseInt(allowedAttempts),
         description,
-        is_published: false
+        is_published: false,
+        is_results_released: true
       });
       setSuccessMsg('Test created successfully! Select it below to add questions.');
       setTitle('');
@@ -121,6 +130,30 @@ export default function TestPortalPage() {
       loadPortalData();
     } catch (err) {
       setErrorMsg(err.message || 'Publication status toggle failed.');
+    }
+  };
+
+  const handleToggleResultsRelease = async (testItem) => {
+    setErrorMsg('');
+    setSuccessMsg('');
+    try {
+      const res = await api.post(`/tests/${testItem.id}/release_results/`);
+      setSuccessMsg(res.detail);
+      loadPortalData();
+    } catch (err) {
+      setErrorMsg(err.message || 'Failed to toggle test results release status.');
+    }
+  };
+
+  const handleToggleProctoring = async () => {
+    setErrorMsg('');
+    setSuccessMsg('');
+    try {
+      const res = await api.post('/proctoring-settings/toggle/');
+      setSuccessMsg(res.detail);
+      loadPortalData();
+    } catch (err) {
+      setErrorMsg(err.message || 'Failed to toggle proctoring.');
     }
   };
 
@@ -194,16 +227,30 @@ export default function TestPortalPage() {
 
   const startTestAttempt = async (testId) => {
     setErrorMsg('');
+
+    // Tuition Fee Gate Check: Must have at least 50% tuition clearance for tests!
+    const tuitionPaid = user?.tuition_paid_percentage ?? 100.0;
+    if (user?.role === 'student' && tuitionPaid < 50.0) {
+      setFeeGateMessage(`Test Access Barred: Continuous assessment quizzes require at least 50% tuition fee clearance. Your current clearance is ${tuitionPaid}%. Please visit the Bursar / Finance Office to clear your fees.`);
+      setShowFeeGateModal(true);
+      return;
+    }
+
     try {
       await api.post(`/tests/${testId}/start_attempt/`);
       router.push(`/dashboard/tests/${testId}`);
     } catch (err) {
-      setErrorMsg(err.message || 'Failed to launch test.');
+      if (err.message && err.message.includes('50%')) {
+        setFeeGateMessage(err.message);
+        setShowFeeGateModal(true);
+      } else {
+        setErrorMsg(err.message || 'Failed to launch test.');
+      }
     }
   };
 
   const downloadResultsCSV = (testId) => {
-    const rawBaseUrl = process.env.NEXT_PUBLIC_API_URL || 'https://examiner.ciu.ac.ug/api';
+    const rawBaseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api';
     const API_BASE_URL = rawBaseUrl.replace(/\/$/, '');
     const tokensStr = localStorage.getItem('ciu_tokens');
     let token = '';
@@ -242,25 +289,36 @@ export default function TestPortalPage() {
       {/* Header & Metrics */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-200 pb-5">
         <div>
-          <h2 className="text-xl font-bold text-slate-850">CIU Assessment & Test Portal</h2>
-          <p className="text-slate-500 text-xs font-medium mt-0.5">Seamlessly create, build question banks, conduct timed tests, and track class analytics.</p>
+          <h2 className="text-xl font-bold text-slate-850">CIU Continuous Assessment & Test Portal</h2>
+          <p className="text-slate-500 text-xs font-medium mt-0.5">Timed tests, automatic score release controls, live proctoring, and question banks.</p>
         </div>
 
-        {/* Quick Metrics Bar */}
+        {/* Quick Metrics Bar & Proctoring Badge */}
         <div className="flex flex-wrap items-center gap-3">
-          <div className="bg-white px-3 py-2 rounded-xl border border-slate-200 shadow-sm text-center">
+          <div className={`px-3 py-1.5 rounded-xl border flex items-center space-x-2 ${proctoringSetting.is_proctoring_enabled ? 'bg-red-50 text-red-700 border-red-200 animate-pulse' : 'bg-slate-100 text-slate-600 border-slate-200'}`}>
+            <span className="w-2.5 h-2.5 rounded-full bg-red-600"></span>
+            <span className="text-xs font-extrabold uppercase">
+              {proctoringSetting.is_proctoring_enabled ? 'Proctoring: ACTIVE' : 'Proctoring: OFF'}
+            </span>
+            {isAdmin && (
+              <button
+                onClick={handleToggleProctoring}
+                className="ml-2 px-2 py-0.5 bg-slate-900 text-white text-[10px] font-bold rounded hover:bg-slate-700"
+              >
+                Toggle
+              </button>
+            )}
+          </div>
+
+          <div className="bg-white px-3 py-1.5 rounded-xl border border-slate-200 shadow-sm text-center">
             <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Active Tests</span>
             <span className="text-sm font-extrabold text-brand-dark">{activeTestsCount}</span>
           </div>
-          <div className="bg-white px-3 py-2 rounded-xl border border-slate-200 shadow-sm text-center">
+          <div className="bg-white px-3 py-1.5 rounded-xl border border-slate-200 shadow-sm text-center">
             <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Submissions</span>
             <span className="text-sm font-extrabold text-brand-medium">{totalSubmissions}</span>
           </div>
-          <div className="bg-white px-3 py-2 rounded-xl border border-slate-200 shadow-sm text-center">
-            <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Avg. Score</span>
-            <span className="text-sm font-extrabold text-indigo-600">{avgScore}%</span>
-          </div>
-          <div className="bg-white px-3 py-2 rounded-xl border border-slate-200 shadow-sm text-center">
+          <div className="bg-white px-3 py-1.5 rounded-xl border border-slate-200 shadow-sm text-center">
             <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Pass Rate</span>
             <span className="text-sm font-extrabold text-emerald-600">{passRate}%</span>
           </div>
@@ -377,9 +435,14 @@ export default function TestPortalPage() {
                       <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider bg-emerald-50 text-emerald-700 border border-emerald-100">
                         {testItem.category.replace('_', ' ')}
                       </span>
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${testItem.is_published ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}>
-                        {testItem.is_published ? 'PUBLISHED' : 'DRAFT'}
-                      </span>
+                      <div className="flex items-center space-x-1">
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${testItem.is_published ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}>
+                          {testItem.is_published ? 'PUBLISHED' : 'DRAFT'}
+                        </span>
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${testItem.is_results_released ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-purple-50 text-purple-700 border-purple-200'}`}>
+                          {testItem.is_results_released ? 'RESULTS RELEASED' : 'WITHHELD'}
+                        </span>
+                      </div>
                     </div>
 
                     <h3 className="font-bold text-slate-850 text-base leading-tight">{testItem.title}</h3>
@@ -389,30 +452,40 @@ export default function TestPortalPage() {
                       <p>⏱️ Duration: <span className="font-bold text-slate-700">{testItem.duration_minutes} mins</span></p>
                       <p>🎯 Pass Mark: <span className="font-bold text-slate-700">{testItem.pass_percentage}%</span></p>
                       <p>❓ Questions: <span className="font-bold text-slate-700">{testItem.questions_count}</span></p>
-                      <p>🔒 Security: <span className="font-bold text-slate-700">Strict Tab Locking & Half-Time Cutoff</span></p>
+                      <p>💰 Fee Gate: <span className="font-bold text-slate-700">50% Minimum Tuition Paid</span></p>
                     </div>
                   </div>
 
                   {/* Actions */}
-                  <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
+                  <div className="pt-2 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
                     {isStaff ? (
                       <>
                         <button
                           onClick={() => handleSelectTestForQuestions(testItem)}
-                          className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold rounded-lg transition-all"
+                          className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold rounded-lg transition-all"
                         >
                           Questions ({testItem.questions_count})
                         </button>
+                        
                         <button
                           onClick={() => handleTogglePublish(testItem)}
-                          className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${testItem.is_published ? 'bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100' : 'bg-brand-light text-white hover:bg-brand-medium'}`}
+                          className={`px-2.5 py-1.5 text-xs font-bold rounded-lg transition-all ${testItem.is_published ? 'bg-amber-50 text-amber-700 border border-amber-200' : 'bg-brand-light text-white'}`}
                         >
                           {testItem.is_published ? 'Unpublish' : 'Publish'}
                         </button>
+
+                        <button
+                          onClick={() => handleToggleResultsRelease(testItem)}
+                          className={`px-2.5 py-1.5 text-xs font-bold rounded-lg transition-all ${testItem.is_results_released ? 'bg-purple-100 text-purple-800 border border-purple-200' : 'bg-blue-600 text-white'}`}
+                          title="Toggle student score release"
+                        >
+                          {testItem.is_results_released ? '🔒 Withhold' : '📢 Release'}
+                        </button>
+
                         <button
                           onClick={() => downloadResultsCSV(testItem.id)}
                           className="p-1.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-600 rounded-lg text-xs font-bold"
-                          title="Export CSV"
+                          title="Export Test Results CSV"
                         >
                           📊 CSV
                         </button>
@@ -422,15 +495,23 @@ export default function TestPortalPage() {
                       myAttempt ? (
                         myAttempt.completed_at ? (
                           <div className="w-full flex items-center justify-between">
-                            <span className={`px-2.5 py-1 rounded text-xs font-bold border ${myAttempt.passed ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-red-50 text-red-700 border-red-200'}`}>
-                              Score: {myAttempt.score}% ({myAttempt.passed ? 'PASSED' : 'FAILED'})
-                            </span>
-                            <button
-                              onClick={() => router.push(`/dashboard/tests/${testItem.id}/results?attemptId=${myAttempt.id}`)}
-                              className="px-3 py-1.5 bg-brand-light text-white text-xs font-bold rounded-lg hover:bg-brand-medium transition-all"
-                            >
-                              View Scorecard
-                            </button>
+                            {testItem.is_results_released ? (
+                              <>
+                                <span className={`px-2.5 py-1 rounded text-xs font-bold border ${myAttempt.passed ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-red-50 text-red-700 border-red-200'}`}>
+                                  Score: {myAttempt.score}% ({myAttempt.passed ? 'PASSED' : 'FAILED'})
+                                </span>
+                                <button
+                                  onClick={() => router.push(`/dashboard/tests/${testItem.id}/results?attemptId=${myAttempt.id}`)}
+                                  className="px-3 py-1.5 bg-brand-light text-white text-xs font-bold rounded-lg hover:bg-brand-medium transition-all"
+                                >
+                                  View Scorecard
+                                </button>
+                              </>
+                            ) : (
+                              <span className="w-full text-center px-2.5 py-1.5 rounded text-xs font-bold bg-purple-50 text-purple-700 border border-purple-200">
+                                🔒 Results Pending Release by Lecturer
+                              </span>
+                            )}
                           </div>
                         ) : (
                           <button
@@ -466,12 +547,6 @@ export default function TestPortalPage() {
           {/* Create Test Form */}
           <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-4">
             <h3 className="text-sm font-bold text-slate-850 uppercase tracking-wider">Create New Test</h3>
-            
-            {user.role === 'lecturer' && assignedCourses.length === 0 && (
-              <div className="p-3 bg-amber-50 border-l-4 border-amber-500 rounded text-amber-800 text-xs font-semibold">
-                Notice: You are not assigned to any course units. Please contact your Faculty Secretary for assignment.
-              </div>
-            )}
 
             <form onSubmit={handleCreateTest} className="space-y-3">
               <div>
@@ -766,20 +841,62 @@ export default function TestPortalPage() {
                     <p className="text-xs text-slate-500">Course: {att.test_course_code} · Attempt #{att.attempt_number} · Submitted: {att.completed_at ? new Date(att.completed_at).toLocaleString() : 'In Progress'}</p>
                   </div>
                   <div className="flex items-center gap-3">
-                    <span className={`px-3 py-1 rounded text-xs font-bold border ${att.passed ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-red-50 text-red-700 border-red-200'}`}>
-                      {att.score}% ({att.passed ? 'PASSED' : 'FAILED'})
-                    </span>
-                    <button
-                      onClick={() => router.push(`/dashboard/tests/${att.test}/results?attemptId=${att.id}`)}
-                      className="px-3 py-1.5 bg-brand-light text-white text-xs font-bold rounded-lg hover:bg-brand-medium"
-                    >
-                      View Review Scorecard
-                    </button>
+                    {att.is_results_released ? (
+                      <>
+                        <span className={`px-3 py-1 rounded text-xs font-bold border ${att.passed ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-red-50 text-red-700 border-red-200'}`}>
+                          {att.score}% ({att.passed ? 'PASSED' : 'FAILED'})
+                        </span>
+                        <button
+                          onClick={() => router.push(`/dashboard/tests/${att.test}/results?attemptId=${att.id}`)}
+                          className="px-3 py-1.5 bg-brand-light text-white text-xs font-bold rounded-lg hover:bg-brand-medium"
+                        >
+                          View Review Scorecard
+                        </button>
+                      </>
+                    ) : (
+                      <span className="px-3 py-1 rounded text-xs font-bold bg-purple-50 text-purple-700 border border-purple-200">
+                        🔒 Results Withheld by Lecturer
+                      </span>
+                    )}
                   </div>
                 </div>
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {/* FEE GATE MODAL */}
+      {showFeeGateModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fade-in">
+          <div className="bg-white rounded-3xl p-6 md:p-8 max-w-md w-full shadow-2xl border border-red-100 space-y-5 text-center relative animate-scale-up">
+            <div className="w-14 h-14 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto text-2xl font-bold">
+              ⛔
+            </div>
+
+            <div>
+              <h3 className="text-lg font-bold text-slate-900">Tuition Fee Clearance Required</h3>
+              <p className="text-xs text-slate-500 font-medium mt-1">Continuous Assessment Access Gate Policy</p>
+            </div>
+
+            <div className="p-4 bg-red-50 border border-red-200 rounded-2xl text-xs text-red-800 space-y-2 text-left">
+              <p className="font-semibold">{feeGateMessage}</p>
+              <div className="pt-2 border-t border-red-200/60 text-[11px] text-red-700 space-y-1 font-mono">
+                <p>• Test Minimum Threshold: <strong>50% Paid</strong></p>
+                <p>• Exam Minimum Threshold: <strong>100% Full Clearance</strong></p>
+                <p>• Your Current Clearance: <strong>{user?.tuition_paid_percentage ?? 0}%</strong></p>
+              </div>
+            </div>
+
+            <div className="flex space-x-3 pt-2">
+              <button
+                onClick={() => setShowFeeGateModal(false)}
+                className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-xl transition-all"
+              >
+                Close & Contact Bursar Office
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

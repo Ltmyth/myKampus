@@ -14,6 +14,7 @@ export default function TestRunnerPage({ params }) {
   const [testObj, setTestObj] = useState(null);
   const [questions, setQuestions] = useState([]);
   const [activeAttempt, setActiveAttempt] = useState(null);
+  const [proctoringSetting, setProctoringSetting] = useState({ is_proctoring_enabled: true });
   const [loading, setLoading] = useState(true);
 
   // Runner state
@@ -35,15 +36,17 @@ export default function TestRunnerPage({ params }) {
   async function initTestRunner() {
     try {
       setLoading(true);
-      const [testData, qData, attemptData] = await Promise.all([
+      const [testData, qData, attemptData, procData] = await Promise.all([
         api.get(`/tests/${testId}/`),
         api.get(`/tests/${testId}/questions/`),
-        api.post(`/tests/${testId}/start_attempt/`)
+        api.post(`/tests/${testId}/start_attempt/`),
+        api.get('/proctoring-settings/').catch(() => ({ is_proctoring_enabled: true }))
       ]);
 
       setTestObj(testData);
       setQuestions(qData || []);
       setActiveAttempt(attemptData);
+      setProctoringSetting(procData || { is_proctoring_enabled: true });
 
       // Load saved local draft if present
       const draftKey = `ciu_test_draft_${testId}_${user.id}`;
@@ -65,7 +68,7 @@ export default function TestRunnerPage({ params }) {
       setTimeLeftSeconds(remainingSecs);
     } catch (err) {
       setSecurityNotice(err.message || 'Unable to launch test session.');
-    } fontFinally: {
+    } finally {
       setLoading(false);
     }
   }
@@ -203,6 +206,20 @@ export default function TestRunnerPage({ params }) {
   return (
     <div className="space-y-6 animate-fade-in max-w-6xl mx-auto">
       
+      {/* Live Proctoring Banner */}
+      {proctoringSetting.is_proctoring_enabled && (
+        <div className="bg-red-950 text-white p-3 rounded-2xl border border-red-800 shadow-md flex items-center justify-between text-xs animate-pulse">
+          <div className="flex items-center space-x-2">
+            <span className="w-3 h-3 rounded-full bg-red-500 animate-ping"></span>
+            <span className="font-bold">🔴 LIVE AI & WEBCAM PROCTORING ACTIVE</span>
+            <span className="hidden md:inline text-red-300">| Camera stream and tab focus are being monitored by the System Admin</span>
+          </div>
+          <span className="bg-red-900 px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase border border-red-700">
+            Anti-Cheat ON
+          </span>
+        </div>
+      )}
+
       {/* Sticky Security Header Bar */}
       <div className="sticky top-0 z-30 bg-white border border-slate-200 p-4 rounded-2xl shadow-md flex flex-wrap items-center justify-between gap-4">
         <div>

@@ -33,6 +33,12 @@ export default function FacultyManagementPage() {
     secretary: ''
   });
 
+  // CSV Import State
+  const [showCsvModal, setShowCsvModal] = useState(false);
+  const [csvFile, setCsvFile] = useState(null);
+  const [csvText, setCsvText] = useState('');
+  const [csvTargetCourse, setCsvTargetCourse] = useState('');
+
   // Form State (Create Class Timetable)
   const [showTimetableModal, setShowTimetableModal] = useState(false);
   const [ttFormData, setTtFormData] = useState({
@@ -49,6 +55,7 @@ export default function FacultyManagementPage() {
   
   // Filtering
   const [selectedDayFilter, setSelectedDayFilter] = useState('All');
+  const [selectedCourseFilter, setSelectedCourseFilter] = useState('All');
   
   // UI Messages
   const [errorMsg, setErrorMsg] = useState('');
@@ -57,6 +64,8 @@ export default function FacultyManagementPage() {
 
   const isAdmin = user?.role === 'admin';
   const isSecretaryOrStaff = ['faculty_admin', 'admin', 'dean', 'dvc'].includes(user?.role);
+  const isStudent = user?.role === 'student';
+  const canAssignLecturer = ['admin', 'faculty_admin'].includes(user?.role);
 
   useEffect(() => {
     loadFacultyData();
@@ -84,12 +93,68 @@ export default function FacultyManagementPage() {
       if (facs.length > 0 && !ttFormData.faculty) {
         setTtFormData(prev => ({ ...prev, faculty: facs[0].id }));
       }
+      if (crs.length > 0 && !csvTargetCourse) {
+        setCsvTargetCourse(crs[0].code);
+      }
     } catch (err) {
       setErrorMsg('Failed to load faculty datasets.');
     } finally {
       setLoading(false);
     }
   }
+
+  // --- CSV Upload Handler ---
+  const handleUploadCsvUnits = async (e) => {
+    e.preventDefault();
+    if (!csvFile && !csvText.trim()) {
+      setErrorMsg('Please select a CSV file or paste CSV unit data.');
+      return;
+    }
+    setErrorMsg('');
+    setSuccessMsg('');
+    setSubmitting(true);
+
+    try {
+      const formData = new FormData();
+      if (csvFile) {
+        formData.append('file', csvFile);
+      } else {
+        formData.append('csv_text', csvText);
+      }
+      if (csvTargetCourse) {
+        formData.append('course_code', csvTargetCourse);
+      }
+
+      const res = await api.post('/course-units/upload_csv/', formData);
+      setSuccessMsg(res.detail || 'Course units imported from CSV successfully!');
+      setShowCsvModal(false);
+      setCsvFile(null);
+      setCsvText('');
+      loadFacultyData();
+    } catch (err) {
+      setErrorMsg(err.message || 'Failed to import CSV course units.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const downloadSampleCsv = (type = 'curriculum') => {
+    let sample = '';
+    let filename = '';
+    if (type === 'curriculum') {
+      sample = "Year,Semester,Course Code,Course Name,Credit Units\nYear 1,Semester 1,BML 1101-T,ENGLISH LANGUAGE AND SCIENTIFIC WRITING,3\nYear 1,Semester 1,BML 1102-T,HUMAN ANATOMY I,3\nYear 1,Semester 1,BML 1103-T,MEDICAL PHYSIOLOGY I,3\nYear 1,Semester 1,BML 1104-T,MEDICAL BIOCHEMISTRY I,4";
+      filename = "sample_curriculum_units.csv";
+    } else {
+      sample = "code,name,credit_units,course_code\nBIT2104,Cloud Infrastructure Systems,4,BIT2026\nBIT2105,Cybersecurity & Cryptography Principles,3,BIT2026\nBSE2203,DevOps & Continuous Integration,4,BSE2026\nBSN1103,Pharmacology & Medical Admin,4,BSN2026";
+      filename = "sample_course_units.csv";
+    }
+    const blob = new Blob([sample], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+  };
 
   // --- Faculty CRUD Handlers (Admin) ---
   const handleOpenFacultyModal = (fac = null) => {
@@ -207,7 +272,8 @@ export default function FacultyManagementPage() {
 
     try {
       const res = await api.post(`/course-units/${selectedUnit.id}/assign_lecturer/`, {
-        lecturer_id: parseInt(selectedLecturerId)
+        lecturer_id: parseInt(selectedLecturerId),
+        action: 'assign'
       });
       setSuccessMsg(res.detail || 'Lecturer assigned successfully!');
       setSelectedUnit(null);
@@ -217,6 +283,21 @@ export default function FacultyManagementPage() {
       setErrorMsg(err.message || 'Failed to assign lecturer.');
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleUnassignLecturer = async (unitId, lecturerId) => {
+    setErrorMsg('');
+    setSuccessMsg('');
+    try {
+      const res = await api.post(`/course-units/${unitId}/assign_lecturer/`, {
+        lecturer_id: parseInt(lecturerId),
+        action: 'unassign'
+      });
+      setSuccessMsg(res.detail || 'Lecturer unassigned.');
+      loadFacultyData();
+    } catch (err) {
+      setErrorMsg(err.message || 'Failed to unassign lecturer.');
     }
   };
 
@@ -265,8 +346,10 @@ export default function FacultyManagementPage() {
     }
   };
 
+  // Filter timetables according to day filter and course filter
   const filteredTimetables = classTimetables.filter(tt => {
     if (selectedDayFilter !== 'All' && tt.day_of_week !== selectedDayFilter) return false;
+    if (selectedCourseFilter !== 'All' && tt.course_code !== selectedCourseFilter) return false;
     return true;
   });
 
@@ -284,11 +367,23 @@ export default function FacultyManagementPage() {
       {/* Header Bar */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200 pb-5">
         <div>
-          <h2 className="text-xl font-bold text-slate-850">Faculty & Class Timetabling Portal</h2>
-          <p className="text-slate-500 text-xs font-medium">Faculty Administration, Course assignments, Leadership allocation, and timetable management.</p>
+          <h2 className="text-xl font-bold text-slate-850">
+            {isStudent ? 'My Course Class Timetable' : 'Faculty & Class Timetabling Portal'}
+          </h2>
+          <p className="text-slate-500 text-xs font-medium">
+            {isStudent ? 'Weekly schedule for your designated course program.' : 'Faculty Administration, Course assignments, Leadership allocation, and timetable management.'}
+          </p>
         </div>
 
-        <div className="flex items-center space-x-3">
+        <div className="flex flex-wrap items-center gap-3">
+          {isSecretaryOrStaff && (
+            <button
+              onClick={() => setShowCsvModal(true)}
+              className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-sm transition-all"
+            >
+              📤 Upload CSV Units Package
+            </button>
+          )}
           {isAdmin && (
             <button
               onClick={() => handleOpenFacultyModal(null)}
@@ -312,14 +407,20 @@ export default function FacultyManagementPage() {
       </div>
 
       {errorMsg && (
-        <div className="p-3 bg-red-50 border-l-4 border-red-500 rounded text-red-700 text-xs font-semibold animate-slide-up">
-          {errorMsg}
+        <div className="p-3.5 bg-red-50 border-l-4 border-red-500 rounded-xl text-red-800 text-xs font-bold flex items-center justify-between shadow-sm animate-slide-up">
+          <div className="flex items-center space-x-2">
+            <span>⚠️ {errorMsg}</span>
+          </div>
+          <button onClick={() => setErrorMsg('')} className="text-red-600 hover:text-red-900 font-bold text-xs">✕</button>
         </div>
       )}
 
       {successMsg && (
-        <div className="p-3 bg-emerald-50 border-l-4 border-brand-emerald rounded text-brand-medium text-xs font-semibold animate-slide-up">
-          {successMsg}
+        <div className="p-3.5 bg-emerald-50 border-l-4 border-emerald-500 rounded-xl text-emerald-800 text-xs font-bold flex items-center justify-between shadow-sm animate-slide-up">
+          <div className="flex items-center space-x-2">
+            <span>✅ {successMsg}</span>
+          </div>
+          <button onClick={() => setSuccessMsg('')} className="text-emerald-600 hover:text-emerald-900 font-bold text-xs">✕</button>
         </div>
       )}
 
@@ -329,7 +430,7 @@ export default function FacultyManagementPage() {
           onClick={() => setActiveTab('timetables')}
           className={`pb-3 text-xs font-bold border-b-2 transition-all ${activeTab === 'timetables' ? 'border-brand-light text-brand-dark' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
         >
-          📅 Class Timetables ({classTimetables.length})
+          📅 Class Timetables ({filteredTimetables.length})
         </button>
         <button
           onClick={() => setActiveTab('faculties')}
@@ -351,17 +452,34 @@ export default function FacultyManagementPage() {
           
           {/* Filter Bar */}
           <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-wrap items-center justify-between gap-4">
-            <div className="flex items-center space-x-2">
-              <span className="text-xs font-bold text-slate-500 uppercase">Filter Day:</span>
-              {['All', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map((day) => (
-                <button
-                  key={day}
-                  onClick={() => setSelectedDayFilter(day)}
-                  className={`px-3 py-1 text-xs font-semibold rounded-lg transition-all ${selectedDayFilter === day ? 'bg-brand-dark text-white shadow-sm' : 'bg-slate-50 text-slate-600 hover:bg-slate-100'}`}
+            <div className="flex flex-wrap items-center gap-4">
+              <div className="flex items-center space-x-2">
+                <span className="text-xs font-bold text-slate-500 uppercase">Day:</span>
+                {['All', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map((day) => (
+                  <button
+                    key={day}
+                    onClick={() => setSelectedDayFilter(day)}
+                    className={`px-3 py-1 text-xs font-semibold rounded-lg transition-all ${selectedDayFilter === day ? 'bg-brand-dark text-white shadow-sm' : 'bg-slate-50 text-slate-600 hover:bg-slate-100'}`}
+                  >
+                    {day}
+                  </button>
+                ))}
+              </div>
+
+              {/* Course Program Filter Dropdown */}
+              <div className="flex items-center space-x-2 border-l border-slate-200 pl-4">
+                <span className="text-xs font-bold text-slate-500 uppercase">Course Program:</span>
+                <select
+                  value={selectedCourseFilter}
+                  onChange={(e) => setSelectedCourseFilter(e.target.value)}
+                  className="px-3 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800"
                 >
-                  {day}
-                </button>
-              ))}
+                  <option value="All">All Course Programs</option>
+                  {courses.map(c => (
+                    <option key={c.id} value={c.code}>[{c.code}] {c.name}</option>
+                  ))}
+                </select>
+              </div>
             </div>
 
             <div className="text-xs text-slate-400 font-medium">
@@ -372,7 +490,7 @@ export default function FacultyManagementPage() {
           {/* Timetable Cards / Grid */}
           {filteredTimetables.length === 0 ? (
             <div className="bg-white rounded-2xl p-12 text-center border border-slate-200">
-              <p className="text-slate-400 text-sm font-medium">No class timetables scheduled for this day selection.</p>
+              <p className="text-slate-400 text-sm font-medium">No class timetables scheduled for this day or course selection.</p>
               {isSecretaryOrStaff && (
                 <button
                   onClick={() => setShowTimetableModal(true)}
@@ -548,7 +666,17 @@ export default function FacultyManagementPage() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           {/* Course Units Table */}
           <div className="lg:col-span-2 bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-4">
-            <h3 className="text-sm font-bold text-slate-850 uppercase tracking-wider">Faculty Course Units & Assigned Lecturers</h3>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <h3 className="text-sm font-bold text-slate-850 uppercase tracking-wider">Faculty Course Units & Assigned Lecturers</h3>
+              {isSecretaryOrStaff && (
+                <button
+                  onClick={() => setShowCsvModal(true)}
+                  className="px-3 py-1.5 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 text-xs font-bold rounded-lg transition-all"
+                >
+                  📤 Upload CSV Package
+                </button>
+              )}
+            </div>
 
             {courseUnits.length === 0 ? (
               <p className="text-slate-400 text-xs py-8 text-center">No course units registered yet.</p>
@@ -562,7 +690,7 @@ export default function FacultyManagementPage() {
                       <th className="px-4 py-3">Course Program</th>
                       <th className="px-4 py-3 text-center">Credits</th>
                       <th className="px-4 py-3">Assigned Lecturers</th>
-                      {isSecretaryOrStaff && <th className="px-4 py-3 text-center">Action</th>}
+                      {canAssignLecturer && <th className="px-4 py-3 text-center">Action</th>}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 text-slate-700">
@@ -576,8 +704,17 @@ export default function FacultyManagementPage() {
                           {unit.lecturer_details && unit.lecturer_details.length > 0 ? (
                             <div className="flex flex-wrap gap-1">
                               {unit.lecturer_details.map(l => (
-                                <span key={l.id} className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
-                                  {l.first_name || l.username} {l.last_name}
+                                <span key={l.id} className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 flex items-center space-x-1">
+                                  <span>{l.first_name || l.username} {l.last_name}</span>
+                                  {canAssignLecturer && (
+                                    <button
+                                      onClick={() => handleUnassignLecturer(unit.id, l.id)}
+                                      className="text-emerald-700 hover:text-red-600 font-bold ml-1"
+                                      title="Unassign lecturer"
+                                    >
+                                      ✕
+                                    </button>
+                                  )}
                                 </span>
                               ))}
                             </div>
@@ -585,7 +722,7 @@ export default function FacultyManagementPage() {
                             <span className="text-slate-400 italic text-[11px]">Unassigned</span>
                           )}
                         </td>
-                        {isSecretaryOrStaff && (
+                        {canAssignLecturer && (
                           <td className="px-4 py-3 text-center">
                             <button
                               onClick={() => setSelectedUnit(unit)}
@@ -607,51 +744,156 @@ export default function FacultyManagementPage() {
           <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-4 h-fit">
             <h3 className="text-sm font-bold text-slate-850 uppercase tracking-wider">Assign Lecturer to Unit</h3>
             
-            {selectedUnit ? (
-              <form onSubmit={handleAssignLecturer} className="space-y-4 animate-slide-up">
-                <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 text-xs space-y-1">
-                  <p className="font-bold text-slate-800">Unit: {selectedUnit.name}</p>
-                  <p className="text-slate-500">Code: {selectedUnit.code} · Program: {selectedUnit.course_code}</p>
-                </div>
+            {canAssignLecturer ? (
+              selectedUnit ? (
+                <form onSubmit={handleAssignLecturer} className="space-y-4 animate-slide-up">
+                  <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 text-xs space-y-1">
+                    <p className="font-bold text-slate-800">Unit: {selectedUnit.name}</p>
+                    <p className="text-slate-500">Code: {selectedUnit.code} · Program: {selectedUnit.course_code}</p>
+                  </div>
 
-                <div>
-                  <label className="block text-slate-700 text-xs font-bold uppercase mb-1">Select Lecturer</label>
-                  <select
-                    value={selectedLecturerId}
-                    onChange={(e) => setSelectedLecturerId(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
-                  >
-                    <option value="">Select Lecturer...</option>
-                    {lecturers.map((lec) => (
-                      <option key={lec.id} value={lec.id}>
-                        {lec.first_name || lec.username} {lec.last_name} ({lec.email})
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                  <div>
+                    <label className="block text-slate-700 text-xs font-bold uppercase mb-1">Select Lecturer</label>
+                    <select
+                      value={selectedLecturerId}
+                      onChange={(e) => setSelectedLecturerId(e.target.value)}
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
+                      required
+                    >
+                      <option value="">Select Lecturer...</option>
+                      {lecturers.map((lec) => (
+                        <option key={lec.id} value={lec.id}>
+                          {lec.first_name || lec.username} {lec.last_name} ({lec.email})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
 
-                <div className="flex items-center justify-end space-x-2">
+                  <div className="flex items-center justify-end space-x-2">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedUnit(null)}
+                      className="px-3 py-1.5 bg-slate-100 text-slate-600 text-xs font-bold rounded-lg hover:bg-slate-200"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={submitting}
+                      className="px-4 py-1.5 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-lg shadow-sm"
+                    >
+                      {submitting ? 'Assigning...' : 'Confirm Assignment'}
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                <p className="text-slate-400 text-xs text-center py-10">
+                  Select a Course Unit from the list on the left to assign a Lecturer.
+                </p>
+              )
+            ) : (
+              <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl text-center text-xs text-slate-500 font-medium">
+                🔒 Lecturer assignments are managed exclusively by System Administrators and Faculty Secretaries.
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: UPLOAD CSV COURSE UNITS */}
+      {showCsvModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4 animate-fade-in">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-6 space-y-5 shadow-2xl border border-slate-100">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <h3 className="text-base font-bold text-slate-850">Upload Course Units CSV Package</h3>
+              <button onClick={() => setShowCsvModal(false)} className="text-slate-400 hover:text-slate-600 font-bold">✕</button>
+            </div>
+
+            <form onSubmit={handleUploadCsvUnits} className="space-y-4 text-xs">
+              <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl space-y-2 text-emerald-800">
+                <p className="font-bold">Supported CSV Header Formats:</p>
+                <div className="space-y-1 font-mono text-[11px]">
+                  <code className="block bg-white px-2 py-0.5 rounded border border-emerald-200">Year,Semester,Course Code,Course Name,Credit Units</code>
+                  <code className="block bg-white px-2 py-0.5 rounded border border-emerald-200">code,name,credit_units,course_code</code>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-slate-700 font-bold uppercase mb-1">Target Course Program (If missing from CSV)</label>
+                <select
+                  value={csvTargetCourse}
+                  onChange={(e) => setCsvTargetCourse(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-semibold text-xs"
+                >
+                  {courses.map(c => (
+                    <option key={c.id} value={c.code}>[{c.code}] {c.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-slate-700 font-bold uppercase mb-1">Select CSV File</label>
+                <input
+                  type="file"
+                  accept=".csv"
+                  onChange={(e) => setCsvFile(e.target.files[0])}
+                  className="w-full text-xs text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-bold file:bg-brand-light/10 file:text-brand-dark hover:file:bg-brand-light/20"
+                />
+              </div>
+
+              <div className="relative flex py-1 items-center">
+                <div className="flex-grow border-t border-slate-200"></div>
+                <span className="flex-shrink mx-3 text-slate-400 text-[10px] uppercase font-bold">Or Paste Raw CSV</span>
+                <div className="flex-grow border-t border-slate-200"></div>
+              </div>
+
+              <div>
+                <textarea
+                  rows={4}
+                  value={csvText}
+                  onChange={(e) => setCsvText(e.target.value)}
+                  placeholder="Year,Semester,Course Code,Course Name,Credit Units&#10;Year 1,Semester 1,BML 1101-T,ENGLISH LANGUAGE AND SCIENTIFIC WRITING,3"
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-mono text-[11px] resize-none"
+                />
+              </div>
+
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-2 border-t border-slate-100">
+                <div className="flex items-center space-x-2">
                   <button
                     type="button"
-                    onClick={() => setSelectedUnit(null)}
-                    className="px-3 py-1.5 bg-slate-100 text-slate-600 text-xs font-bold rounded-lg hover:bg-slate-200"
+                    onClick={() => downloadSampleCsv('curriculum')}
+                    className="text-brand-light hover:text-brand-medium text-[11px] font-bold underline"
+                  >
+                    📥 Sample Curriculum CSV
+                  </button>
+                  <span className="text-slate-300">|</span>
+                  <button
+                    type="button"
+                    onClick={() => downloadSampleCsv('standard')}
+                    className="text-brand-light hover:text-brand-medium text-[11px] font-bold underline"
+                  >
+                    📥 Standard CSV
+                  </button>
+                </div>
+
+                <div className="flex items-center space-x-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowCsvModal(false)}
+                    className="px-4 py-2 bg-slate-100 text-slate-600 font-bold rounded-xl hover:bg-slate-200"
                   >
                     Cancel
                   </button>
                   <button
                     type="submit"
                     disabled={submitting}
-                    className="px-4 py-1.5 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-lg shadow-sm"
+                    className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-md"
                   >
-                    {submitting ? 'Assigning...' : 'Confirm Assignment'}
+                    {submitting ? 'Importing...' : 'Upload & Import Units'}
                   </button>
                 </div>
-              </form>
-            ) : (
-              <p className="text-slate-400 text-xs text-center py-10">
-                Select a Course Unit from the list on the left to assign a Lecturer.
-              </p>
-            )}
+              </div>
+            </form>
           </div>
         </div>
       )}

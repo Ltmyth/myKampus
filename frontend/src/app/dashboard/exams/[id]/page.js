@@ -13,6 +13,7 @@ export default function TakeExamPage() {
   const [exam, setExam] = useState(null);
   const [questions, setQuestions] = useState([]);
   const [attempt, setAttempt] = useState(null);
+  const [proctoringSetting, setProctoringSetting] = useState({ is_proctoring_enabled: true });
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
 
@@ -74,12 +75,17 @@ export default function TakeExamPage() {
   async function loadExamAttempt() {
     try {
       setLoading(true);
-      // Get exam details
-      const examData = await api.get(`/exams/${examId}/`);
-      setExam(examData);
+      // Fetch exam details, start attempt, and proctoring setting
+      const [examData, attemptData, qData, procData] = await Promise.all([
+        api.get(`/exams/${examId}/`),
+        api.post(`/exams/${examId}/start_attempt/`),
+        api.get(`/exams/${examId}/questions/`),
+        api.get('/proctoring-settings/').catch(() => ({ is_proctoring_enabled: true }))
+      ]);
 
-      // Start/Retrieve attempt
-      const attemptData = await api.post(`/exams/${examId}/start_attempt/`);
+      setExam(examData);
+      setProctoringSetting(procData || { is_proctoring_enabled: true });
+
       if (attemptData.completed_at) {
         // Already finished
         router.push(`/dashboard/exams/${examId}/results`);
@@ -87,10 +93,7 @@ export default function TakeExamPage() {
       }
       setAttempt(attemptData);
       setAnswers(attemptData.answers || {});
-
-      // Load questions (correct options hidden)
-      const qData = await api.get(`/exams/${examId}/questions/`);
-      setQuestions(qData);
+      setQuestions(qData || []);
 
       // Calculate time remaining based on duration and start time
       const startTime = new Date(attemptData.started_at).getTime();
@@ -106,7 +109,7 @@ export default function TakeExamPage() {
 
     } catch (err) {
       setErrorMsg(err.message || 'Failed to load exam paper.');
-    } finally {
+    } fontFinally: {
       setLoading(false);
     }
   }
@@ -182,6 +185,20 @@ export default function TakeExamPage() {
   return (
     <div className="space-y-6 max-w-5xl mx-auto animate-fade-in relative">
       
+      {/* Live Proctoring Banner */}
+      {proctoringSetting.is_proctoring_enabled && (
+        <div className="bg-red-950 text-white p-3 rounded-2xl border border-red-800 shadow-md flex items-center justify-between text-xs animate-pulse">
+          <div className="flex items-center space-x-2">
+            <span className="w-3 h-3 rounded-full bg-red-500 animate-ping"></span>
+            <span className="font-bold">🔴 LIVE AI & WEBCAM PROCTORING ACTIVE</span>
+            <span className="hidden md:inline text-red-300">| Final Examination stream monitored by Academic Registrar & System Admin</span>
+          </div>
+          <span className="bg-red-900 px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase border border-red-700">
+            Anti-Cheat ON
+          </span>
+        </div>
+      )}
+
       {/* Security Warning Modal banner */}
       {showSecurityWarning && (
         <div className="p-4 bg-red-100 border-l-4 border-red-600 rounded-xl text-red-800 text-xs font-semibold flex items-center justify-between animate-pulse">
@@ -232,7 +249,7 @@ export default function TakeExamPage() {
                 <span>Question {currentIdx + 1} of {questions.length}</span>
                 <span>Value: 1 Mark</span>
               </div>
-              <h3 className="text-base font-bold text-slate-800 leading-relaxed">
+              <h3 className="text-base font-bold text-slate-880 leading-relaxed">
                 {currentQ.question_text}
               </h3>
 

@@ -2,19 +2,19 @@ from rest_framework import serializers
 from .models import (
     User, Faculty, Invitation, Course, CourseUnit, Application, Exam, Question, ExamAttempt, 
     Test, TestQuestion, TestAttempt, ClassContent, AttendanceSession, AttendanceRecord,
-    ClassTimetable, ExamTimetable, SystemLog
+    ClassTimetable, ExamTimetable, SystemLog, ProctoringSetting
 )
 
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ('id', 'username', 'email', 'first_name', 'last_name', 'role', 'phone')
+        fields = ('id', 'username', 'email', 'first_name', 'last_name', 'role', 'phone', 'tuition_paid_percentage')
         read_only_fields = ('role',)
 
 class AdminUserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ('id', 'username', 'email', 'first_name', 'last_name', 'role', 'phone')
+        fields = ('id', 'username', 'email', 'first_name', 'last_name', 'role', 'phone', 'tuition_paid_percentage')
 
 class UserCreateSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True)
@@ -194,11 +194,28 @@ class TestAttemptSerializer(serializers.ModelSerializer):
     test_category = serializers.CharField(source='test.category', read_only=True)
     duration_minutes = serializers.IntegerField(source='test.duration_minutes', read_only=True)
     pass_percentage = serializers.FloatField(source='test.pass_percentage', read_only=True)
+    is_results_released = serializers.BooleanField(source='test.is_results_released', read_only=True)
 
     class Meta:
         model = TestAttempt
         fields = '__all__'
         read_only_fields = ('student', 'started_at', 'completed_at', 'score', 'passed')
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        request = self.context.get('request')
+        if request and request.user and request.user.role == 'student':
+            if not instance.test.is_results_released:
+                data['score'] = None
+                data['answers'] = {}
+                data['feedback'] = None
+                data['passed'] = None
+                data['results_released'] = False
+            else:
+                data['results_released'] = True
+        else:
+            data['results_released'] = True
+        return data
 
 class ClassContentSerializer(serializers.ModelSerializer):
     course_code = serializers.CharField(source='course.code', read_only=True)
@@ -264,3 +281,9 @@ class SystemLogSerializer(serializers.ModelSerializer):
         model = SystemLog
         fields = '__all__'
 
+class ProctoringSettingSerializer(serializers.ModelSerializer):
+    updated_by_name = serializers.CharField(source='updated_by.username', read_only=True, allow_null=True)
+
+    class Meta:
+        model = ProctoringSetting
+        fields = '__all__'

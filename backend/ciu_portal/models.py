@@ -15,6 +15,7 @@ class User(AbstractUser):
     )
     role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='student')
     phone = models.CharField(max_length=20, blank=True, null=True)
+    tuition_paid_percentage = models.FloatField(default=100.0, help_text="Tuition clearance percentage (0.0 to 100.0)")
 
     def __str__(self):
         return f"{self.username} ({self.get_role_display()})"
@@ -124,7 +125,6 @@ class ExamAttempt(models.Model):
     def __str__(self):
         return f"{self.student.username} - {self.exam.title} (Score: {self.score}%)"
 
-# New Test Models
 class Test(models.Model):
     CATEGORY_CHOICES = (
         ('quiz', 'Quiz'),
@@ -145,6 +145,7 @@ class Test(models.Model):
     pass_percentage = models.FloatField(default=50.0)
     allowed_attempts = models.IntegerField(default=1, help_text="Set to 0 or -1 for unlimited attempts")
     is_published = models.BooleanField(default=False)
+    is_results_released = models.BooleanField(default=True, help_text="Whether test results & scorecards are released to students")
     due_date = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -283,6 +284,16 @@ class SystemLog(models.Model):
     def __str__(self):
         return f"[{self.timestamp.strftime('%Y-%m-%d %H:%M:%S')}] [{self.level}] {self.action} by {self.user.username if self.user else 'System'}"
 
+class ProctoringSetting(models.Model):
+    is_proctoring_enabled = models.BooleanField(default=True, help_text="Global live assessment proctoring toggle controlled by System Admin")
+    require_webcam = models.BooleanField(default=True, help_text="Requires webcam / camera stream monitoring during assessment")
+    strict_tab_switch_limit = models.IntegerField(default=3, help_text="Max tab switches allowed before auto-submit")
+    updated_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Proctoring Active: {self.is_proctoring_enabled}"
+
 def log_system_event(user, action, level='INFO', details='', ip_address=None):
     try:
         SystemLog.objects.create(
@@ -294,4 +305,3 @@ def log_system_event(user, action, level='INFO', details='', ip_address=None):
         )
     except Exception:
         pass
-

@@ -6,7 +6,7 @@ from .views import (
     AdminUserViewSet, InvitationViewSet, FacultyViewSet, CourseViewSet, CourseUnitViewSet, 
     ApplicationViewSet, ExamViewSet, ExamAttemptViewSet, TestViewSet, TestAttemptViewSet,
     ClassContentViewSet, AttendanceSessionViewSet, ReportsViewSet,
-    ClassTimetableViewSet, ExamTimetableViewSet, SystemLogViewSet
+    ClassTimetableViewSet, ExamTimetableViewSet, SystemLogViewSet, ProctoringSettingViewSet
 )
 
 router = DefaultRouter()
@@ -26,6 +26,7 @@ router.register('reports', ReportsViewSet, basename='reports')
 router.register('class-timetables', ClassTimetableViewSet, basename='class-timetables')
 router.register('exam-timetables', ExamTimetableViewSet, basename='exam-timetables')
 router.register('system-logs', SystemLogViewSet, basename='system-logs')
+router.register('proctoring-settings', ProctoringSettingViewSet, basename='proctoring-settings')
 
 urlpatterns = [
     path('auth/login/', MyTokenObtainPairView.as_view(), name='token_obtain_pair'),
