@@ -101,6 +101,7 @@ export default function DashboardLayout({ children }) {
   const getRoleBadgeColor = (role) => {
     switch (role) {
       case 'admin': return 'bg-purple-100 text-purple-700 border-purple-200';
+      case 'vc': return 'bg-purple-100 text-purple-800 border-purple-200';
       case 'dvc': return 'bg-amber-100 text-amber-700 border-amber-200';
       case 'registrar': return 'bg-teal-100 text-teal-800 border-teal-200';
       case 'dean': return 'bg-blue-100 text-blue-700 border-blue-200';
@@ -113,6 +114,7 @@ export default function DashboardLayout({ children }) {
   const getRoleLabel = (role) => {
     switch (role) {
       case 'admin': return 'System Admin';
+      case 'vc': return 'Vice-Chancellor (VC)';
       case 'dvc': return 'DVC / Chancellor';
       case 'registrar': return 'Academic Registrar';
       case 'dean': return 'Faculty Dean';
@@ -204,10 +206,63 @@ export default function DashboardLayout({ children }) {
           </div>
           
           <div className="flex items-center space-x-3">
-            <span className="text-xs text-slate-450 hidden md:inline-block font-medium">Secured Session</span>
-            <div className="w-2.5 h-2.5 bg-brand-emerald rounded-full animate-pulse-slow"></div>
+            <div className="hidden sm:flex items-center space-x-2 text-xs text-slate-500 font-medium bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-100">
+              <div className="w-2 h-2 bg-brand-emerald rounded-full animate-pulse"></div>
+              <span>{user.first_name || user.username} ({getRoleLabel(user.role)})</span>
+            </div>
+            
+            <button
+              onClick={logout}
+              className="flex items-center space-x-1.5 px-3.5 py-1.5 bg-red-50 hover:bg-red-100 text-red-700 text-xs font-bold rounded-xl border border-red-200 transition-all shadow-sm active:scale-95"
+              title="Sign out of system"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+              </svg>
+              <span>Log Out</span>
+            </button>
           </div>
         </header>
+
+        {/* Student Academic Info Banner */}
+        {user.role === 'student' && (
+          <div className="bg-white text-slate-800 px-6 py-3 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 shadow-md animate-fade-in">
+            <div className="flex items-center space-x-3">
+              <div className="w-9 h-9 rounded-xl bg-brand-light/10 border border-brand-light/20 flex items-center justify-center font-extrabold text-brand-dark text-sm shadow-sm">
+                🎓
+              </div>
+              <div>
+                <p className="text-xs font-black tracking-wide uppercase text-slate-800">
+                  {user.first_name || user.username} {user.last_name}
+                </p>
+                <p className="text-[11px] text-brand-dark font-bold">
+                  Reg No: <span className="font-mono text-brand-dark bg-slate-100 px-2 py-0.5 rounded border border-slate-200 ml-1">{user.registration_number || `2026/CIU/FST/${user.id}`}</span>
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-4 text-xs font-semibold">
+              <div className="flex items-center space-x-1.5 bg-slate-50 px-3 py-1 rounded-xl border border-slate-200 shadow-sm">
+                <span className="text-slate-500 font-bold uppercase text-[10px]">Faculty:</span>
+                <span className="text-emerald-700 font-bold">{user.faculty_name ? `${user.faculty_code} (${user.faculty_name})` : 'Faculty of Science & Technology (FST)'}</span>
+              </div>
+
+              <div className="flex items-center space-x-1.5 bg-slate-50 px-3 py-1 rounded-xl border border-slate-200 shadow-sm">
+                <span className="text-slate-500 font-bold uppercase text-[10px]">Registered Program:</span>
+                <span className="text-indigo-700 font-bold">
+                  {user.assigned_course_codes && user.assigned_course_codes.length > 0 
+                    ? user.assigned_course_codes.join(', ') 
+                    : 'Bachelor of Information Technology (BIT)'}
+                </span>
+              </div>
+
+              <div className="flex items-center space-x-1.5 bg-emerald-50 px-3 py-1 rounded-xl border border-emerald-200 shadow-sm">
+                <span className="text-emerald-800 font-bold uppercase text-[10px]">Status:</span>
+                <span className="text-emerald-700 font-bold">Active Registered Student</span>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Page Content */}
         <main className="flex-1 p-6 md:p-8 overflow-y-auto custom-scrollbar">

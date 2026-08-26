@@ -124,6 +124,63 @@ export default function ExamsPage() {
     }
   };
 
+  const [scheduledStart, setScheduledStart] = useState('');
+
+  // Edit Exam Modal State
+  const [editingExamModal, setEditingExamModal] = useState(null);
+  const [editExamTitle, setEditExamTitle] = useState('');
+  const [editExamDuration, setEditExamDuration] = useState(60);
+  const [editExamScheduledStart, setEditExamScheduledStart] = useState('');
+  const [editExamIsActive, setEditExamIsActive] = useState(true);
+
+  const handleDeleteExam = async (examId) => {
+    if (!confirm('Are you sure you want to delete this exam paper?')) return;
+    setErrorMsg('');
+    setSuccessMsg('');
+    try {
+      await api.delete(`/exams/${examId}/`);
+      setSuccessMsg('Exam paper deleted successfully.');
+      if (selectedExam?.id === examId) setSelectedExam(null);
+      loadExamData();
+    } catch (err) {
+      setErrorMsg(err.message || 'Failed to delete exam paper.');
+    }
+  };
+
+  const handleOpenEditExamModal = (exam) => {
+    setEditingExamModal(exam);
+    setEditExamTitle(exam.title);
+    setEditExamDuration(exam.duration_minutes || 60);
+    setEditExamScheduledStart(exam.scheduled_start ? new Date(exam.scheduled_start).toISOString().slice(0, 16) : '');
+    setEditExamIsActive(exam.is_active);
+  };
+
+  const handleSaveEditExam = async (e) => {
+    e.preventDefault();
+    if (!editingExamModal) return;
+    setErrorMsg('');
+    setSuccessMsg('');
+    setSubmitting(true);
+
+    try {
+      const payload = {
+        title: editExamTitle,
+        duration_minutes: parseInt(editExamDuration),
+        is_active: editExamIsActive,
+        scheduled_start: editExamScheduledStart ? new Date(editExamScheduledStart).toISOString() : null
+      };
+
+      await api.patch(`/exams/${editingExamModal.id}/`, payload);
+      setSuccessMsg(`Exam paper '${editExamTitle}' updated successfully!`);
+      setEditingExamModal(null);
+      loadExamData();
+    } catch (err) {
+      setErrorMsg(err.message || 'Failed to update exam paper.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const handleCreateExam = async (e) => {
     e.preventDefault();
     if (!examTitle || !selectedCourse) {
@@ -135,17 +192,22 @@ export default function ExamsPage() {
     setSubmitting(true);
 
     try {
-      const created = await api.post('/exams/', {
+      const payload = {
         title: examTitle,
         course: parseInt(selectedCourse),
         course_unit: selectedCourseUnit ? parseInt(selectedCourseUnit) : null,
         duration_minutes: parseInt(duration),
-        is_active: false
-      });
+        is_active: true
+      };
+      if (scheduledStart) {
+        payload.scheduled_start = new Date(scheduledStart).toISOString();
+      }
+      const created = await api.post('/exams/', payload);
       setSuccessMsg('Exam paper created successfully! Select it below to add questions.');
       setExamTitle('');
       setSelectedCourse('');
       setSelectedCourseUnit('');
+      setScheduledStart('');
       loadExamData();
       setSelectedExam(created);
     } catch (err) {
@@ -421,19 +483,38 @@ export default function ExamsPage() {
                           </div>
 
                           <h4 className="font-bold text-slate-850 text-base">{examItem.title}</h4>
-                          <p className="text-xs text-slate-500">Duration: <strong className="text-slate-800">{examItem.duration_minutes} mins</strong> · Questions: <strong className="text-slate-800">{examItem.questions_count}</strong> · Lecturer: <strong className="text-slate-800">{examItem.lecturer_name}</strong></p>
+                          <p className="text-xs text-slate-500 font-medium">Duration: <strong className="text-slate-800">{examItem.duration_minutes} mins</strong> · Questions: <strong className="text-slate-800">{examItem.questions_count}</strong> · Lecturer: <strong className="text-slate-800">{examItem.lecturer_name}</strong></p>
+                          <p className="text-xs text-slate-600 font-medium pt-1">
+                            📅 Scheduled Start: <strong className="text-slate-800">{examItem.scheduled_start ? new Date(examItem.scheduled_start).toLocaleString([], {year:'numeric', month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'}) : 'Set by Dean/Lecturer'}</strong>
+                          </p>
                           <p className="text-[11px] text-red-600 font-medium pt-0.5">💰 Fee Gate: 100% Full Tuition Clearance Required</p>
                         </div>
 
                         {/* Actions */}
                         <div className="flex flex-wrap items-center gap-2 shrink-0">
-                          {isLecturer && (
-                            <button
-                              onClick={() => handleSelectExamForQuestions(examItem)}
-                              className="px-3 py-1.5 bg-white border border-slate-200 hover:bg-slate-100 text-slate-800 text-xs font-bold rounded-xl transition-all"
-                            >
-                              Questions ({examItem.questions_count})
-                            </button>
+                          {(isLecturer || isAdmin) && (
+                            <>
+                              <button
+                                onClick={() => handleSelectExamForQuestions(examItem)}
+                                className="px-3 py-1.5 bg-white border border-slate-200 hover:bg-slate-100 text-slate-800 text-xs font-bold rounded-xl transition-all"
+                              >
+                                Questions ({examItem.questions_count})
+                              </button>
+                              <button
+                                onClick={() => handleOpenEditExamModal(examItem)}
+                                className="px-3 py-1.5 bg-blue-50 border border-blue-200 hover:bg-blue-100 text-blue-700 text-xs font-bold rounded-xl transition-all"
+                                title="Edit exam details"
+                              >
+                                ✏️ Edit
+                              </button>
+                              <button
+                                onClick={() => handleDeleteExam(examItem.id)}
+                                className="px-3 py-1.5 bg-red-50 border border-red-200 hover:bg-red-100 text-red-700 text-xs font-bold rounded-xl transition-all"
+                                title="Delete exam paper"
+                              >
+                                🗑️ Delete
+                              </button>
+                            </>
                           )}
 
                           {isDeanOrStaff && (
@@ -563,6 +644,16 @@ export default function ExamsPage() {
                       onChange={(e) => setDuration(e.target.value)}
                       className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
                       required
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-700 text-xs font-bold uppercase mb-1">Scheduled Date & Time (Optional)</label>
+                    <input
+                      type="datetime-local"
+                      value={scheduledStart}
+                      onChange={(e) => setScheduledStart(e.target.value)}
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800"
                     />
                   </div>
 
@@ -850,6 +941,81 @@ export default function ExamsPage() {
                 Close & Contact Bursar Office
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* EDIT EXAM MODAL (STAFF / LECTURER) */}
+      {editingExamModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fade-in">
+          <div className="bg-white rounded-3xl p-6 max-w-lg w-full shadow-2xl border border-slate-100 space-y-5 relative">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <h3 className="text-base font-bold text-slate-850">Edit Examination Details</h3>
+              <button onClick={() => setEditingExamModal(null)} className="text-slate-400 hover:text-slate-600 font-bold">✕</button>
+            </div>
+
+            <form onSubmit={handleSaveEditExam} className="space-y-4 text-xs">
+              <div>
+                <label className="block text-slate-700 font-bold uppercase mb-1">Examination Title</label>
+                <input
+                  type="text"
+                  value={editExamTitle}
+                  onChange={(e) => setEditExamTitle(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold"
+                  required
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-slate-700 font-bold uppercase mb-1">Duration (Minutes)</label>
+                  <input
+                    type="number"
+                    value={editExamDuration}
+                    onChange={(e) => setEditExamDuration(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-700 font-bold uppercase mb-1">Scheduled Start Date & Time</label>
+                  <input
+                    type="datetime-local"
+                    value={editExamScheduledStart}
+                    onChange={(e) => setEditExamScheduledStart(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-semibold text-slate-800"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center space-x-2 pt-1">
+                <input
+                  type="checkbox"
+                  id="editExamIsActive"
+                  checked={editExamIsActive}
+                  onChange={(e) => setEditExamIsActive(e.target.checked)}
+                  className="w-4 h-4 text-brand-light rounded border-slate-300"
+                />
+                <label htmlFor="editExamIsActive" className="text-xs font-bold text-slate-700">Exam Active & Accessible for Approved Students</label>
+              </div>
+
+              <div className="flex space-x-3 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setEditingExamModal(null)}
+                  className="flex-1 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  className="flex-1 py-2 bg-brand-light hover:bg-brand-medium text-white font-bold rounded-xl shadow-md"
+                >
+                  {submitting ? 'Saving...' : 'Save Exam Changes'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

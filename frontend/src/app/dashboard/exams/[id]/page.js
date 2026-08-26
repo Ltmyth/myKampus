@@ -41,6 +41,9 @@ export default function TakeExamPage() {
         setTabSwitches(prev => {
           const updated = prev + 1;
           setShowSecurityWarning(true);
+          if (updated >= 3) {
+            autoSubmitExam(null, null, updated, 'Security Lockdown: Exceeded maximum allowed tab switches (3/3).');
+          }
           return updated;
         });
       }
@@ -126,24 +129,30 @@ export default function TakeExamPage() {
     setConfirmCheckbox(false);
   };
 
-  const autoSubmitExam = async (attId = null, currentAnswers = null) => {
+  const autoSubmitExam = async (attId = null, currentAnswers = null, switches = tabSwitches, reason = 'Time Expired') => {
     const finalAttId = attId || attempt?.id;
     const finalAnswers = currentAnswers || answers;
     if (!finalAttId) return;
 
-    alert('Time has expired! Submitting answers automatically.');
-    performSubmit(finalAttId, finalAnswers);
+    alert(`Security Notice: ${reason}`);
+    performSubmit(finalAttId, finalAnswers, switches, reason);
   };
 
-  const performSubmit = async (attId, answersPayload) => {
+  const performSubmit = async (attId, answersPayload, switches = tabSwitches, reason = null) => {
     try {
       setLoading(true);
+      setErrorMsg('');
+      setSuccessMsg('✅ Exam paper submitted successfully! Redirecting to results...');
       await api.post(`/attempts/${attId}/submit/`, {
-        answers: answersPayload
+        answers: answersPayload,
+        tab_switches: switches,
+        auto_submitted_reason: reason
       });
-      router.push(`/dashboard/exams/${examId}/results`);
+      setTimeout(() => {
+        router.push(`/dashboard/exams/${examId}/results`);
+      }, 700);
     } catch (err) {
-      setErrorMsg('Failed to submit exam paper. Please contact lecturer.');
+      setErrorMsg(err.message || '⚠️ Failed to submit exam paper. Please check network connection and contact your lecturer.');
       setLoading(false);
     }
   };

@@ -71,6 +71,31 @@ export default function TestResultsPage({ params }) {
     );
   }
 
+  if (resultData && resultData.is_results_released === false) {
+    return (
+      <div className="max-w-lg mx-auto py-20 text-center space-y-5 animate-fade-in">
+        <div className="p-8 bg-purple-50 border-2 border-purple-200 rounded-3xl shadow-sm space-y-3">
+          <div className="w-14 h-14 bg-purple-100 rounded-2xl flex items-center justify-center mx-auto text-purple-700 font-black text-2xl">
+            🔒
+          </div>
+          <h3 className="font-extrabold text-purple-950 text-lg">Test Results Currently Withheld</h3>
+          <p className="text-xs text-purple-800 font-medium leading-relaxed">
+            {resultData.detail || 'Your attempt was submitted successfully. Scores and answer breakdowns are currently withheld by the lecturer and will be published once released.'}
+          </p>
+          <div className="pt-2 text-[11px] text-purple-700 font-mono font-semibold">
+            Attempt Submitted At: {resultData.attempt?.completed_at ? new Date(resultData.attempt.completed_at).toLocaleString() : 'Just now'}
+          </div>
+        </div>
+        <button
+          onClick={() => router.push('/dashboard/tests')}
+          className="px-5 py-2.5 bg-brand-dark hover:bg-brand-medium text-white text-xs font-bold rounded-xl transition-all shadow-sm"
+        >
+          ← Return to Test Portal
+        </button>
+      </div>
+    );
+  }
+
   const { attempt, questions } = resultData;
   const isPassed = attempt.passed;
 
@@ -140,16 +165,18 @@ export default function TestResultsPage({ params }) {
                   </span>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-3 text-xs">
-                  <div className="p-2.5 rounded-xl bg-white border border-slate-200">
-                    <span className="text-[10px] text-slate-400 font-bold uppercase block">Your Answer</span>
-                    <span className={`font-bold ${isCorrect ? 'text-emerald-700' : 'text-red-600'}`}>
-                      {studentAns || '(No Answer)'}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-3 text-xs">
+                  <div className={`p-3 rounded-xl border ${isCorrect ? 'bg-emerald-50 border-emerald-200' : 'bg-red-50 border-red-200'}`}>
+                    <span className="text-[10px] text-slate-500 font-bold uppercase block">Student Selected Answer</span>
+                    <span className={`font-bold text-sm block mt-0.5 ${isCorrect ? 'text-emerald-800' : 'text-red-700'}`}>
+                      {formatAnswerText(q, studentAns)}
                     </span>
                   </div>
-                  <div className="p-2.5 rounded-xl bg-white border border-slate-200">
-                    <span className="text-[10px] text-slate-400 font-bold uppercase block">Correct Answer Key</span>
-                    <span className="font-bold text-emerald-700">{correctAns}</span>
+                  <div className="p-3 rounded-xl bg-emerald-100/60 border border-emerald-300">
+                    <span className="text-[10px] text-emerald-900 font-bold uppercase block">✓ Official Correct Answer Key</span>
+                    <span className="font-bold text-sm text-emerald-950 block mt-0.5">
+                      {formatAnswerText(q, correctAns)}
+                    </span>
                   </div>
                 </div>
 
@@ -190,4 +217,17 @@ export default function TestResultsPage({ params }) {
 function strVal(val) {
   if (val === undefined || val === null) return '';
   return String(val).trim();
+}
+
+function formatAnswerText(q, key) {
+  if (!key) return '(No Answer Provided)';
+  const k = String(key).trim();
+  if (q.question_type === 'mcq') {
+    const upper = k.toUpperCase();
+    if (upper === 'A' && q.option_a) return `Option A: ${q.option_a}`;
+    if (upper === 'B' && q.option_b) return `Option B: ${q.option_b}`;
+    if (upper === 'C' && q.option_c) return `Option C: ${q.option_c}`;
+    if (upper === 'D' && q.option_d) return `Option D: ${q.option_d}`;
+  }
+  return k;
 }

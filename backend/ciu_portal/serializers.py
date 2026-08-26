@@ -6,15 +6,27 @@ from .models import (
 )
 
 class UserSerializer(serializers.ModelSerializer):
+    faculty_name = serializers.CharField(source='faculty.name', read_only=True, allow_null=True)
+    faculty_code = serializers.CharField(source='faculty.code', read_only=True, allow_null=True)
+    registration_number = serializers.ReadOnlyField()
+
     class Meta:
         model = User
-        fields = ('id', 'username', 'email', 'first_name', 'last_name', 'role', 'phone', 'tuition_paid_percentage')
-        read_only_fields = ('role',)
+        fields = ('id', 'username', 'email', 'first_name', 'last_name', 'role', 'phone', 'tuition_paid_percentage', 'faculty', 'faculty_name', 'faculty_code', 'assigned_courses', 'reg_number', 'registration_number')
+        read_only_fields = ('role', 'registration_number')
 
 class AdminUserSerializer(serializers.ModelSerializer):
+    faculty_name = serializers.CharField(source='faculty.name', read_only=True, allow_null=True)
+    faculty_code = serializers.CharField(source='faculty.code', read_only=True, allow_null=True)
+    registration_number = serializers.ReadOnlyField()
+    assigned_course_codes = serializers.SerializerMethodField()
+
     class Meta:
         model = User
-        fields = ('id', 'username', 'email', 'first_name', 'last_name', 'role', 'phone', 'tuition_paid_percentage')
+        fields = ('id', 'username', 'email', 'first_name', 'last_name', 'role', 'phone', 'tuition_paid_percentage', 'faculty', 'faculty_name', 'faculty_code', 'assigned_courses', 'assigned_course_codes', 'reg_number', 'registration_number')
+
+    def get_assigned_course_codes(self, obj):
+        return [c.code for c in obj.assigned_courses.all()]
 
 class UserCreateSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True)
@@ -22,7 +34,7 @@ class UserCreateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ('username', 'email', 'password', 'first_name', 'last_name', 'role', 'phone', 'invitation_code')
+        fields = ('username', 'email', 'password', 'first_name', 'last_name', 'role', 'phone', 'faculty', 'assigned_courses', 'invitation_code')
 
     def validate(self, attrs):
         invitation_code = attrs.get('invitation_code')

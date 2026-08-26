@@ -1,5 +1,6 @@
 import csv
 import random
+from django.db import models
 from django.utils import timezone
 from django.http import HttpResponse
 from rest_framework import viewsets, status, permissions, generics
@@ -71,9 +72,31 @@ class ProfileView(generics.RetrieveUpdateAPIView):
 
 # 4. System Admin User Management ViewSet
 class AdminUserViewSet(viewsets.ModelViewSet):
-    queryset = User.objects.all().order_by('-date_joined')
     serializer_class = AdminUserSerializer
-    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+
+    def get_permissions(self):
+        if self.action in ['list', 'retrieve']:
+            return [permissions.IsAuthenticated()]
+        return [permissions.IsAuthenticated(), IsAdmin()]
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = User.objects.all().order_by('-date_joined')
+        role_param = self.request.query_params.get('role')
+        if role_param:
+            qs = qs.filter(role=role_param)
+
+        if user.role == 'student':
+            student_courses = Course.objects.filter(
+                models.Q(applications__student=user, applications__status='approved') |
+                models.Q(assigned_students=user) |
+                models.Q(faculty=user.faculty)
+            ).distinct()
+            return User.objects.filter(
+                role='lecturer',
+                assigned_course_units__course__in=student_courses
+            ).distinct().order_by('-date_joined')
+        return qs
 
 # 4b. Invitation Management ViewSet
 class InvitationViewSet(viewsets.ModelViewSet):
@@ -155,6 +178,49 @@ class FacultyViewSet(viewsets.ModelViewSet):
         except User.DoesNotExist:
             return Response({'detail': 'Faculty Secretary user not found.'}, status=status.HTTP_404_NOT_FOUND)
 
+    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsAdmin | IsFacultyAdmin])
+    def assign_student(self, request, pk=None):
+        faculty = self.get_object()
+        user = request.user
+        if user.role == 'faculty_admin' and faculty.secretary != user:
+            return Response({'detail': 'Permission Denied: You can only assign students to your managed faculty.'}, status=status.HTTP_403_FORBIDDEN)
+        
+        student_id = request.data.get('student_id')
+        course_ids = request.data.get('course_ids', [])
+        if not student_id:
+            return Response({'detail': 'student_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            student = User.objects.get(id=student_id, role='student')
+            student.faculty = faculty
+            if course_ids:
+                courses = Course.objects.filter(id__in=course_ids, faculty=faculty)
+                student.assigned_courses.set(courses)
+            student.save()
+            log_system_event(user, f"Assigned Student {student.username} to Faculty {faculty.code}", level='INFO')
+            return Response({'detail': f'Assigned student {student.get_full_name() or student.username} to {faculty.name}.', 'student': UserSerializer(student).data})
+        except User.DoesNotExist:
+            return Response({'detail': 'Student user not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsAdmin | IsFacultyAdmin])
+    def remove_student(self, request, pk=None):
+        faculty = self.get_object()
+        user = request.user
+        if user.role == 'faculty_admin' and faculty.secretary != user:
+            return Response({'detail': 'Permission Denied: You can only remove students from your managed faculty.'}, status=status.HTTP_403_FORBIDDEN)
+        
+        student_id = request.data.get('student_id')
+        if not student_id:
+            return Response({'detail': 'student_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            student = User.objects.get(id=student_id, role='student', faculty=faculty)
+            student.faculty = None
+            student.assigned_courses.clear()
+            student.save()
+            log_system_event(user, f"Removed Student {student.username} from Faculty {faculty.code}", level='INFO')
+            return Response({'detail': f'Removed student {student.get_full_name() or student.username} from {faculty.name}.', 'student': UserSerializer(student).data})
+        except User.DoesNotExist:
+            return Response({'detail': 'Student not found in this faculty.'}, status=status.HTTP_404_NOT_FOUND)
+
 class CourseViewSet(viewsets.ModelViewSet):
     queryset = Course.objects.all().order_by('code')
     serializer_class = CourseSerializer
@@ -165,7 +231,6 @@ class CourseViewSet(viewsets.ModelViewSet):
         return [permissions.IsAuthenticated(), (IsAdmin | IsDVC | IsDean | IsFacultyAdmin)()]
 
 class CourseUnitViewSet(viewsets.ModelViewSet):
-    queryset = CourseUnit.objects.all().order_by('code')
     serializer_class = CourseUnitSerializer
 
     def get_permissions(self):
@@ -174,6 +239,24 @@ class CourseUnitViewSet(viewsets.ModelViewSet):
         if self.action == 'assign_lecturer':
             return [permissions.IsAuthenticated(), (IsAdmin | IsFacultyAdmin)()]
         return [permissions.IsAuthenticated(), (IsAdmin | IsDVC | IsDean | IsFacultyAdmin)()]
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = CourseUnit.objects.all().order_by('code')
+        if not user or not user.is_authenticated:
+            return qs
+        if user.role == 'student':
+            student_courses = Course.objects.filter(
+                models.Q(applications__student=user, applications__status='approved') |
+                models.Q(assigned_students=user) |
+                models.Q(faculty=user.faculty)
+            ).distinct()
+            return CourseUnit.objects.filter(course__in=student_courses).order_by('code')
+        elif user.role == 'lecturer':
+            return CourseUnit.objects.filter(
+                models.Q(lecturers=user) | models.Q(course__units__lecturers=user)
+            ).distinct().order_by('code')
+        return qs
 
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsAdmin | IsFacultyAdmin])
     def assign_lecturer(self, request, pk=None):
@@ -290,7 +373,12 @@ class ExamViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         if user.role == 'student':
-            return Exam.objects.filter(is_active=True).order_by('-created_at')
+            student_courses = Course.objects.filter(
+                models.Q(applications__student=user, applications__status='approved') |
+                models.Q(assigned_students=user) |
+                models.Q(faculty=user.faculty)
+            ).distinct()
+            return Exam.objects.filter(is_active=True, course__in=student_courses).order_by('-created_at')
         elif user.role == 'lecturer':
             return Exam.objects.filter(lecturer=user).order_by('-created_at')
         return Exam.objects.all().order_by('-created_at')
@@ -309,6 +397,20 @@ class ExamViewSet(viewsets.ModelViewSet):
                 raise generics.serializers.ValidationError({"detail": "Permission Denied: You can only set exams for your assigned courses or course units."})
         exam = serializer.save(lecturer=user)
         log_system_event(user, f"Exam Created: {exam.title} ({exam.course.code})", level="INFO")
+
+    def perform_update(self, serializer):
+        user = self.request.user
+        if user.role == 'lecturer':
+            if serializer.instance.lecturer != user:
+                raise generics.serializers.ValidationError({"detail": "Permission Denied: You can only update your own created exams."})
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        user = self.request.user
+        if user.role == 'lecturer':
+            if instance.lecturer != user:
+                raise generics.serializers.ValidationError({"detail": "Permission Denied: You can only delete your own created exams."})
+        instance.delete()
 
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsDean | IsAdmin])
     def approve_exam(self, request, pk=None):
@@ -365,11 +467,23 @@ class ExamViewSet(viewsets.ModelViewSet):
                 'detail': f'Exam Access Denied: 100% full tuition clearance required to sit for final examinations. Your current clearance is {student.tuition_paid_percentage}%. Please clear your outstanding balance with the Bursar.'
             }, status=status.HTTP_403_FORBIDDEN)
 
+        # Dean Approval check (PDF Requirement: available upon respective dean approval)
+        if not exam.is_approved_by_dean:
+            return Response({'detail': 'Exam Access Denied: This examination is pending approval from the Faculty Dean and is not yet available.'}, status=status.HTTP_400_BAD_REQUEST)
+
         if not exam.is_active:
             return Response({'detail': 'This exam is not active.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Security check: Late entry rule
+        # Scheduled Date & Time Availability check (PDF Requirement: only on the set date and time)
         now = timezone.now()
+        if exam.scheduled_start:
+            if now < exam.scheduled_start:
+                return Response({'detail': f'Exam Access Denied: This exam is scheduled for {exam.scheduled_start.strftime("%Y-%m-%d %H:%M")} and is not yet open.'}, status=status.HTTP_400_BAD_REQUEST)
+            end_window = exam.scheduled_start + timezone.timedelta(minutes=exam.duration_minutes)
+            if now > end_window:
+                return Response({'detail': 'Exam Access Denied: Scheduled exam time window has expired.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Security check: Late entry rule
         start_time = exam.scheduled_start or exam.created_at
         allowed_delay_minutes = exam.duration_minutes / 3.0
         elapsed_minutes = (now - start_time).total_seconds() / 60.0
@@ -425,11 +539,24 @@ class ExamAttemptViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
+        qs = ExamAttempt.objects.all().order_by('-started_at')
         if user.role == 'student':
-            return ExamAttempt.objects.filter(student=user).order_by('-started_at')
-        return ExamAttempt.objects.all().order_by('-started_at')
+            qs = qs.filter(student=user)
+        elif user.role == 'lecturer':
+            qs = qs.filter(exam__lecturer=user)
 
-    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsStudent])
+        unit_id = self.request.query_params.get('course_unit')
+        lecturer_id = self.request.query_params.get('lecturer')
+        exam_id = self.request.query_params.get('exam')
+        if unit_id:
+            qs = qs.filter(exam__course_unit_id=unit_id)
+        if lecturer_id:
+            qs = qs.filter(exam__lecturer_id=lecturer_id)
+        if exam_id:
+            qs = qs.filter(exam_id=exam_id)
+        return qs
+
+    @action(detail=True, methods=['post'], url_path='submit', permission_classes=[permissions.IsAuthenticated, IsStudent])
     def submit_exam(self, request, pk=None):
         attempt = self.get_object()
         if attempt.student != request.user:
@@ -462,6 +589,31 @@ class ExamAttemptViewSet(viewsets.ReadOnlyModelViewSet):
         log_system_event(request.user, f"Exam Submitted: {attempt.exam.title} (Score: {attempt.score}%)", level="INFO")
         return Response(ExamAttemptSerializer(attempt, context={'request': request}).data)
 
+    @action(detail=True, methods=['get'], permission_classes=[permissions.IsAuthenticated])
+    def results(self, request, pk=None):
+        attempt = self.get_object()
+        user = request.user
+
+        if user.role == 'student' and attempt.student != user:
+            return Response({'detail': 'Permission denied.'}, status=status.HTTP_403_FORBIDDEN)
+
+        if user.role == 'student' and not attempt.exam.is_results_released:
+            return Response({
+                'is_results_released': False,
+                'detail': f"Examination results for '{attempt.exam.title}' are currently withheld by the Academic Registrar / Lecturer. Official scorecards will be visible here once released.",
+                'attempt': ExamAttemptSerializer(attempt, context={'request': request}).data,
+                'questions': []
+            }, status=status.HTTP_200_OK)
+
+        questions = attempt.exam.questions.all()
+        q_serializer = QuestionLecturerSerializer(questions, many=True)
+
+        return Response({
+            'is_results_released': True,
+            'attempt': ExamAttemptSerializer(attempt, context={'request': request}).data,
+            'questions': q_serializer.data
+        })
+
 # 9. Test ViewSet
 class TestViewSet(viewsets.ModelViewSet):
     serializer_class = TestSerializer
@@ -469,7 +621,12 @@ class TestViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         if user.role == 'student':
-            return Test.objects.filter(is_published=True).order_by('-created_at')
+            student_courses = Course.objects.filter(
+                models.Q(applications__student=user, applications__status='approved') |
+                models.Q(assigned_students=user) |
+                models.Q(faculty=user.faculty)
+            ).distinct()
+            return Test.objects.filter(is_published=True, course__in=student_courses).order_by('-created_at')
         elif user.role == 'lecturer':
             return Test.objects.filter(lecturer=user).order_by('-created_at')
         return Test.objects.all().order_by('-created_at')
@@ -488,6 +645,20 @@ class TestViewSet(viewsets.ModelViewSet):
                 raise generics.serializers.ValidationError({"detail": "Permission Denied: You can only set tests for your assigned courses or course units."})
         test = serializer.save(lecturer=user)
         log_system_event(user, f"Test Created: {test.title} ({test.course.code})", level="INFO")
+
+    def perform_update(self, serializer):
+        user = self.request.user
+        if user.role == 'lecturer':
+            if serializer.instance.lecturer != user:
+                raise generics.serializers.ValidationError({"detail": "Permission Denied: You can only update your own created tests."})
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        user = self.request.user
+        if user.role == 'lecturer':
+            if instance.lecturer != user:
+                raise generics.serializers.ValidationError({"detail": "Permission Denied: You can only delete your own created tests."})
+        instance.delete()
 
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsLecturer | IsAdmin])
     def publish(self, request, pk=None):
@@ -603,8 +774,19 @@ class TestViewSet(viewsets.ModelViewSet):
         if not test_obj.is_published:
             return Response({'detail': 'This test is currently unpublished.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Security check: Late entry rule
+        # Scheduled Date & Time Availability check (PDF Requirement: only on the set date and time)
         now = timezone.now()
+        if test_obj.scheduled_start:
+            if now < test_obj.scheduled_start:
+                return Response({'detail': f'Test Access Denied: This test is scheduled for {test_obj.scheduled_start.strftime("%Y-%m-%d %H:%M")} and is not yet open.'}, status=status.HTTP_400_BAD_REQUEST)
+            end_window = test_obj.scheduled_start + timezone.timedelta(minutes=test_obj.duration_minutes)
+            if now > end_window:
+                return Response({'detail': 'Test Access Denied: Scheduled test time window has expired.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if test_obj.due_date and now > test_obj.due_date:
+            return Response({'detail': 'Test Access Denied: The deadline for submitting this test has passed.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Security check: Late entry rule
         start_time = test_obj.scheduled_start or test_obj.created_at
         allowed_delay_minutes = test_obj.duration_minutes / 2.0
         elapsed_minutes = (now - start_time).total_seconds() / 60.0
@@ -669,11 +851,24 @@ class TestAttemptViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
+        qs = TestAttempt.objects.all().order_by('-started_at')
         if user.role == 'student':
-            return TestAttempt.objects.filter(student=user).order_by('-started_at')
-        return TestAttempt.objects.all().order_by('-started_at')
+            qs = qs.filter(student=user)
+        elif user.role == 'lecturer':
+            qs = qs.filter(test__lecturer=user)
 
-    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsStudent])
+        unit_id = self.request.query_params.get('course_unit')
+        lecturer_id = self.request.query_params.get('lecturer')
+        test_id = self.request.query_params.get('test')
+        if unit_id:
+            qs = qs.filter(test__course_unit_id=unit_id)
+        if lecturer_id:
+            qs = qs.filter(test__lecturer_id=lecturer_id)
+        if test_id:
+            qs = qs.filter(test_id=test_id)
+        return qs
+
+    @action(detail=True, methods=['post'], url_path='submit', permission_classes=[permissions.IsAuthenticated, IsStudent])
     def submit_test(self, request, pk=None):
         attempt = self.get_object()
         if attempt.student != request.user:
@@ -713,6 +908,31 @@ class TestAttemptViewSet(viewsets.ReadOnlyModelViewSet):
 
         log_system_event(request.user, f"Test Submitted: {attempt.test.title} (Score: {attempt.score}%, Passed: {passed})", level="INFO")
         return Response(TestAttemptSerializer(attempt).data)
+
+    @action(detail=True, methods=['get'], permission_classes=[permissions.IsAuthenticated])
+    def results(self, request, pk=None):
+        attempt = self.get_object()
+        user = request.user
+
+        if user.role == 'student' and attempt.student != user:
+            return Response({'detail': 'Permission denied.'}, status=status.HTTP_403_FORBIDDEN)
+
+        if user.role == 'student' and not attempt.test.is_results_released:
+            return Response({
+                'is_results_released': False,
+                'detail': f"Results for '{attempt.test.title}' are currently withheld by the lecturer. Official scorecards will be published here once released.",
+                'attempt': TestAttemptSerializer(attempt).data,
+                'questions': []
+            }, status=status.HTTP_200_OK)
+
+        questions = attempt.test.questions.all()
+        q_serializer = TestQuestionLecturerSerializer(questions, many=True)
+
+        return Response({
+            'is_results_released': True,
+            'attempt': TestAttemptSerializer(attempt).data,
+            'questions': q_serializer.data
+        })
 
 # 11. Class Content ViewSet
 class ClassContentViewSet(viewsets.ModelViewSet):
@@ -780,12 +1000,20 @@ class ReportsViewSet(viewsets.ViewSet):
 
     @action(detail=False, methods=['get'])
     def summary(self, request):
+        user = request.user
+        
+        # General stats
         total_students = User.objects.filter(role='student').count()
+        total_lecturers = User.objects.filter(role='lecturer').count()
+        total_faculties = Faculty.objects.count()
         total_courses = Course.objects.count()
         total_course_units = CourseUnit.objects.count()
         total_exams = Exam.objects.count()
+        approved_exams = Exam.objects.filter(is_approved_by_dean=True).count()
         total_tests = Test.objects.count()
-        total_timetables = ClassTimetable.objects.count()
+        published_tests = Test.objects.filter(is_published=True).count()
+        total_class_timetables = ClassTimetable.objects.count()
+        total_exam_timetables = ExamTimetable.objects.count()
 
         exam_attempts = ExamAttempt.objects.filter(completed_at__isnull=False)
         test_attempts = TestAttempt.objects.filter(completed_at__isnull=False)
@@ -799,24 +1027,107 @@ class ReportsViewSet(viewsets.ViewSet):
         exam_pass_rate = round((exam_pass_count / exam_attempts.count()) * 100, 1) if exam_attempts.exists() else 0.0
         test_pass_rate = round((test_pass_count / test_attempts.count()) * 100, 1) if test_attempts.exists() else 0.0
 
-        return Response({
+        res_data = {
             'total_students': total_students,
+            'total_lecturers': total_lecturers,
+            'total_faculties': total_faculties,
             'total_courses': total_courses,
             'total_course_units': total_course_units,
             'total_exams': total_exams,
+            'approved_exams': approved_exams,
+            'dean_approved_exams': approved_exams,
             'total_tests': total_tests,
-            'total_timetables': total_timetables,
+            'published_tests': published_tests,
+            'published_active_tests': published_tests,
+            'total_class_timetables': total_class_timetables,
+            'total_exam_timetables': total_exam_timetables,
+            'total_timetables': total_class_timetables,
             'avg_exam_score': avg_exam_score,
             'avg_test_score': avg_test_score,
             'exam_pass_rate': exam_pass_rate,
             'test_pass_rate': test_pass_rate,
             'total_exam_submissions': exam_attempts.count(),
             'total_test_submissions': test_attempts.count(),
-        })
+            'total_exam_attempts': exam_attempts.count(),
+            'total_test_attempts': test_attempts.count(),
+            'students_100_tuition': User.objects.filter(role='student', tuition_paid_percentage__gte=100.0).count(),
+            'students_50_tuition': User.objects.filter(role='student', tuition_paid_percentage__gte=50.0, tuition_paid_percentage__lt=100.0).count(),
+            'students_below_50_tuition': User.objects.filter(role='student', tuition_paid_percentage__lt=50.0).count(),
+        }
+
+        # Role-specific additions
+        if user.role == 'student':
+            student_exam_attempts = ExamAttempt.objects.filter(student=user, completed_at__isnull=False)
+            student_test_attempts = TestAttempt.objects.filter(student=user, completed_at__isnull=False)
+            
+            res_data['exams_done'] = student_exam_attempts.count()
+            res_data['exams_passed'] = sum(1 for a in student_exam_attempts if a.score >= 50.0)
+            res_data['exams_failed'] = res_data['exams_done'] - res_data['exams_passed']
+            
+            res_data['tests_done'] = student_test_attempts.count()
+            res_data['tests_passed'] = sum(1 for a in student_test_attempts if a.passed)
+            res_data['tests_failed'] = res_data['tests_done'] - res_data['tests_passed']
+
+            res_data['average_exam_score'] = round(sum(a.score for a in student_exam_attempts) / student_exam_attempts.count(), 1) if student_exam_attempts.exists() else 0.0
+            res_data['average_test_score'] = round(sum(a.score for a in student_test_attempts) / student_test_attempts.count(), 1) if student_test_attempts.exists() else 0.0
+            res_data['attendance_count'] = AttendanceRecord.objects.filter(student=user).count()
+
+            # Course Unit breakdown with ZERO for unsubmitted work!
+            registered_units = CourseUnit.objects.filter(
+                models.Q(course__applications__student=user, course__applications__status='approved') |
+                models.Q(course__assigned_students=user) |
+                models.Q(course__faculty=user.faculty)
+            ).distinct()
+            if not registered_units.exists():
+                registered_units = CourseUnit.objects.all()[:10]
+
+            course_reports = []
+            for unit in registered_units:
+                latest_exam_att = student_exam_attempts.filter(exam__course_unit=unit).order_by('-completed_at').first()
+                if not latest_exam_att:
+                    latest_exam_att = student_exam_attempts.filter(exam__course=unit.course).order_by('-completed_at').first()
+                
+                latest_test_att = student_test_attempts.filter(test__course_unit=unit).order_by('-completed_at').first()
+                if not latest_test_att:
+                    latest_test_att = student_test_attempts.filter(test__course=unit.course).order_by('-completed_at').first()
+
+                exam_score = latest_exam_att.score if latest_exam_att else 0.0
+                test_score = latest_test_att.score if latest_test_att else 0.0
+
+                course_reports.append({
+                    'id': unit.id,
+                    'code': unit.code,
+                    'name': unit.name,
+                    'course_code': unit.course.code,
+                    'exam_score': exam_score,
+                    'test_score': test_score,
+                    'has_exam_submission': bool(latest_exam_att),
+                    'has_test_submission': bool(latest_test_att),
+                    'status': 'PASSED' if (exam_score >= 50.0 or test_score >= 50.0) else ('NO SUBMISSIONS (0%)' if not (latest_exam_att or latest_test_att) else 'FAILED')
+                })
+            res_data['course_reports'] = course_reports
+
+        elif user.role == 'lecturer':
+            lecturer_exams = Exam.objects.filter(lecturer=user)
+            lecturer_tests = Test.objects.filter(lecturer=user)
+            lecturer_exam_att = ExamAttempt.objects.filter(exam__in=lecturer_exams, completed_at__isnull=False)
+            lecturer_test_att = TestAttempt.objects.filter(test__in=lecturer_tests, completed_at__isnull=False)
+            
+            res_data['exams_created'] = lecturer_exams.count()
+            res_data['tests_created'] = lecturer_tests.count()
+            res_data['total_exam_submissions'] = lecturer_exam_att.count()
+            res_data['total_test_submissions'] = lecturer_test_att.count()
+
+            exam_pass = sum(1 for a in lecturer_exam_att if a.score >= 50.0)
+            test_pass = sum(1 for a in lecturer_test_att if a.passed)
+            res_data['exam_pass_rate'] = round((exam_pass / lecturer_exam_att.count()) * 100, 1) if lecturer_exam_att.exists() else 0.0
+            res_data['test_pass_rate'] = round((test_pass / lecturer_test_att.count()) * 100, 1) if lecturer_test_att.exists() else 0.0
+
+        return Response(res_data)
 
 # 14. Class Timetable ViewSet
 class ClassTimetableViewSet(viewsets.ModelViewSet):
-    queryset = ClassTimetable.objects.all().order_by('day_of_week', 'start_time')
+    queryset = ClassTimetable.objects.all().order_by('class_date', 'day_of_week', 'start_time')
     serializer_class = ClassTimetableSerializer
 
     def get_permissions(self):
@@ -826,7 +1137,7 @@ class ClassTimetableViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        qs = ClassTimetable.objects.all().order_by('day_of_week', 'start_time')
+        qs = ClassTimetable.objects.all().order_by('class_date', 'day_of_week', 'start_time')
         if not user or not user.is_authenticated:
             return qs.none()
 

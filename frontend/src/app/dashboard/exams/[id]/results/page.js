@@ -52,8 +52,14 @@ export default function ExamResultsPage() {
 
       // Fetch results details (includes questions and correct options)
       const data = await api.get(`/attempts/${targetAttemptId}/results/`);
+      if (data.is_results_released === false) {
+        setErrorMsg(data.detail || 'Examination results are currently withheld by the Academic Registrar / Dean and will be visible once released.');
+        setAttempt(data.attempt);
+        setQuestions([]);
+        return;
+      }
       setAttempt(data.attempt);
-      setQuestions(data.questions);
+      setQuestions(data.questions || []);
 
     } catch (err) {
       setErrorMsg(err.message || 'Failed to load results.');
@@ -172,9 +178,19 @@ export default function ExamResultsPage() {
                   })}
                 </div>
 
-                <div className="text-[10px] text-slate-450 flex space-x-4 pt-1 font-medium">
-                  <span>Your Answer: <strong className={isCorrect ? 'text-brand-medium' : 'text-red-750'}>{studentAns || 'None'}</strong></span>
-                  <span>Correct Answer: <strong className="text-brand-medium">{correctAns}</strong></span>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 text-xs">
+                  <div className={`p-3 rounded-xl border ${isCorrect ? 'bg-emerald-50 border-emerald-200' : 'bg-red-50 border-red-200'}`}>
+                    <span className="text-[10px] text-slate-500 font-bold uppercase block">Student Selected Answer</span>
+                    <span className={`font-bold text-sm block mt-0.5 ${isCorrect ? 'text-emerald-800' : 'text-red-700'}`}>
+                      {formatExamAnswerText(q, studentAns)}
+                    </span>
+                  </div>
+                  <div className="p-3 rounded-xl bg-emerald-100/60 border border-emerald-300">
+                    <span className="text-[10px] text-emerald-900 font-bold uppercase block">✓ Official Correct Answer Key</span>
+                    <span className="font-bold text-sm text-emerald-950 block mt-0.5">
+                      {formatExamAnswerText(q, correctAns)}
+                    </span>
+                  </div>
                 </div>
               </div>
             );
@@ -193,4 +209,14 @@ export default function ExamResultsPage() {
 
     </div>
   );
+}
+
+function formatExamAnswerText(q, key) {
+  if (!key) return '(No Answer Provided)';
+  const k = String(key).trim().toUpperCase();
+  if (k === 'A' && q.option_a) return `Option A: ${q.option_a}`;
+  if (k === 'B' && q.option_b) return `Option B: ${q.option_b}`;
+  if (k === 'C' && q.option_c) return `Option C: ${q.option_c}`;
+  if (k === 'D' && q.option_d) return `Option D: ${q.option_d}`;
+  return k;
 }

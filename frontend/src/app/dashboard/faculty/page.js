@@ -12,15 +12,22 @@ export default function FacultyManagementPage() {
   const [lecturers, setLecturers] = useState([]);
   const [deans, setDeans] = useState([]);
   const [secretaries, setSecretaries] = useState([]);
+  const [students, setStudents] = useState([]);
   const [classTimetables, setClassTimetables] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  // Active Tab: 'timetables', 'faculties', 'assignments'
+  // Active Tab: 'timetables', 'faculties', 'assignments', 'students'
   const [activeTab, setActiveTab] = useState('timetables');
 
   // Form State (Assign Lecturer to Unit)
   const [selectedUnit, setSelectedUnit] = useState(null);
   const [selectedLecturerId, setSelectedLecturerId] = useState('');
+  const [showAssignModal, setShowAssignModal] = useState(false);
+
+  // Student Enrollment Form State
+  const [selectedStudentId, setSelectedStudentId] = useState('');
+  const [targetFacultyId, setTargetFacultyId] = useState('');
+  const [targetCourseIds, setTargetCourseIds] = useState([]);
 
   // Form State (Create/Edit Faculty)
   const [showFacultyModal, setShowFacultyModal] = useState(false);
@@ -46,6 +53,7 @@ export default function FacultyManagementPage() {
     course: '',
     course_unit: '',
     lecturer: '',
+    class_date: '',
     day_of_week: 'Monday',
     start_time: '09:00',
     end_time: '11:00',
@@ -88,6 +96,7 @@ export default function FacultyManagementPage() {
       setLecturers(userList.filter(u => u.role === 'lecturer'));
       setDeans(userList.filter(u => u.role === 'dean'));
       setSecretaries(userList.filter(u => u.role === 'faculty_admin'));
+      setStudents(userList.filter(u => u.role === 'student'));
       setClassTimetables(timetables || []);
       
       if (facs.length > 0 && !ttFormData.faculty) {
@@ -102,6 +111,48 @@ export default function FacultyManagementPage() {
       setLoading(false);
     }
   }
+
+  const handleAssignStudentToFaculty = async (e) => {
+    e.preventDefault();
+    if (!selectedStudentId || !targetFacultyId) {
+      setErrorMsg('Please select a student and a target faculty.');
+      return;
+    }
+    setErrorMsg('');
+    setSuccessMsg('');
+    setSubmitting(true);
+
+    try {
+      const res = await api.post(`/faculties/${targetFacultyId}/assign_student/`, {
+        student_id: parseInt(selectedStudentId),
+        course_ids: targetCourseIds.map(id => parseInt(id))
+      });
+      setSuccessMsg(res.detail || 'Student assigned to faculty and courses successfully!');
+      setSelectedStudentId('');
+      setTargetCourseIds([]);
+      loadFacultyData();
+    } catch (err) {
+      setErrorMsg(err.message || 'Failed to assign student to faculty.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleRemoveStudentFromFaculty = async (facultyId, studentId) => {
+    if (!confirm('Are you sure you want to remove this student from the faculty?')) return;
+    setErrorMsg('');
+    setSuccessMsg('');
+
+    try {
+      const res = await api.post(`/faculties/${facultyId}/remove_student/`, {
+        student_id: parseInt(studentId)
+      });
+      setSuccessMsg(res.detail || 'Student removed from faculty.');
+      loadFacultyData();
+    } catch (err) {
+      setErrorMsg(err.message || 'Failed to remove student from faculty.');
+    }
+  };
 
   // --- CSV Upload Handler ---
   const handleUploadCsvUnits = async (e) => {
@@ -278,6 +329,7 @@ export default function FacultyManagementPage() {
       setSuccessMsg(res.detail || 'Lecturer assigned successfully!');
       setSelectedUnit(null);
       setSelectedLecturerId('');
+      setShowAssignModal(false);
       loadFacultyData();
     } catch (err) {
       setErrorMsg(err.message || 'Failed to assign lecturer.');
@@ -317,6 +369,7 @@ export default function FacultyManagementPage() {
         course: parseInt(ttFormData.course),
         course_unit: ttFormData.course_unit ? parseInt(ttFormData.course_unit) : null,
         lecturer: parseInt(ttFormData.lecturer),
+        class_date: ttFormData.class_date || null,
         day_of_week: ttFormData.day_of_week,
         start_time: ttFormData.start_time.length === 5 ? `${ttFormData.start_time}:00` : ttFormData.start_time,
         end_time: ttFormData.end_time.length === 5 ? `${ttFormData.end_time}:00` : ttFormData.end_time,
@@ -444,6 +497,14 @@ export default function FacultyManagementPage() {
         >
           👨‍🏫 Course Units & Lecturers ({courseUnits.length})
         </button>
+        {isSecretaryOrStaff && (
+          <button
+            onClick={() => setActiveTab('students')}
+            className={`pb-3 text-xs font-bold border-b-2 transition-all ${activeTab === 'students' ? 'border-brand-light text-brand-dark' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
+          >
+            🎓 Student Allocations ({students.length})
+          </button>
+        )}
       </div>
 
       {/* TAB 1: CLASS TIMETABLES */}
@@ -507,7 +568,7 @@ export default function FacultyManagementPage() {
                   <div>
                     <div className="flex justify-between items-start mb-2">
                       <span className="px-2.5 py-0.5 rounded text-[10px] font-extrabold uppercase bg-brand-emerald/10 text-brand-dark border border-brand-emerald/20">
-                        {tt.day_of_week}
+                        {tt.class_date ? `${tt.class_date} (${tt.day_of_week})` : tt.day_of_week}
                       </span>
                       <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-indigo-50 text-indigo-700 border border-indigo-100">
                         {tt.class_type}
@@ -725,10 +786,14 @@ export default function FacultyManagementPage() {
                         {canAssignLecturer && (
                           <td className="px-4 py-3 text-center">
                             <button
-                              onClick={() => setSelectedUnit(unit)}
-                              className="px-2.5 py-1 bg-brand-light text-white text-[10px] font-bold rounded hover:bg-brand-medium"
+                              onClick={() => {
+                                setSelectedUnit(unit);
+                                setSelectedLecturerId('');
+                                setShowAssignModal(true);
+                              }}
+                              className="px-3 py-1 bg-brand-light text-white text-[10px] font-bold rounded-lg hover:bg-brand-medium shadow-sm transition-all flex items-center justify-center space-x-1 mx-auto"
                             >
-                              Assign
+                              <span>⚡ Assign</span>
                             </button>
                           </td>
                         )}
@@ -796,6 +861,222 @@ export default function FacultyManagementPage() {
                 🔒 Lecturer assignments are managed exclusively by System Administrators and Faculty Secretaries.
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* TAB 4: STUDENT FACULTY & COURSE ENROLLMENT */}
+      {activeTab === 'students' && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          
+          {/* Students Directory */}
+          <div className="lg:col-span-2 bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-4">
+            <h3 className="text-sm font-bold text-slate-850 uppercase tracking-wider">Registered Student Faculty Allocations</h3>
+            
+            {students.length === 0 ? (
+              <p className="text-slate-400 text-xs py-8 text-center">No student accounts registered in system.</p>
+            ) : (
+              <div className="overflow-x-auto custom-scrollbar border border-slate-200 rounded-xl">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 uppercase font-semibold">
+                      <th className="px-4 py-3">Student Name</th>
+                      <th className="px-4 py-3">Assigned Faculty</th>
+                      <th className="px-4 py-3">Enrolled Course Programs</th>
+                      <th className="px-4 py-3 text-center">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-slate-700">
+                    {students.map((st) => (
+                      <tr key={st.id} className="hover:bg-slate-50 transition-all">
+                        <td className="px-4 py-3 font-bold text-slate-850">
+                          {st.first_name || st.username} {st.last_name}
+                          <span className="block text-[10px] text-slate-400 font-normal">{st.email}</span>
+                        </td>
+                        <td className="px-4 py-3">
+                          {st.faculty_code ? (
+                            <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-blue-50 text-blue-700 border border-blue-200">
+                              {st.faculty_code} - {st.faculty_name}
+                            </span>
+                          ) : (
+                            <span className="text-slate-400 italic text-[11px]">Unassigned</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">
+                          {st.assigned_course_codes && st.assigned_course_codes.length > 0 ? (
+                            <div className="flex flex-wrap gap-1">
+                              {st.assigned_course_codes.map(cCode => (
+                                <span key={cCode} className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                                  {cCode}
+                                </span>
+                              ))}
+                            </div>
+                          ) : (
+                            <span className="text-slate-400 italic text-[11px]">No specific courses</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-center space-x-2">
+                          <button
+                            onClick={() => {
+                              setSelectedStudentId(st.id);
+                              setTargetFacultyId(st.faculty || (faculties[0]?.id || ''));
+                              setTargetCourseIds(st.assigned_courses || []);
+                            }}
+                            className="px-2.5 py-1 bg-brand-light text-white text-[10px] font-bold rounded hover:bg-brand-medium"
+                          >
+                            Assign / Edit
+                          </button>
+                          {st.faculty && (
+                            <button
+                              onClick={() => handleRemoveStudentFromFaculty(st.faculty, st.id)}
+                              className="px-2 py-1 bg-red-50 text-red-600 hover:bg-red-100 text-[10px] font-bold rounded"
+                              title="Remove student from faculty"
+                            >
+                              Remove
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {/* Student Assignment Form Panel */}
+          <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-4 h-fit">
+            <h3 className="text-sm font-bold text-slate-850 uppercase tracking-wider">Allocate Student to Faculty & Courses</h3>
+
+            <form onSubmit={handleAssignStudentToFaculty} className="space-y-4 text-xs">
+              <div>
+                <label className="block text-slate-700 font-bold uppercase mb-1">Select Student</label>
+                <select
+                  value={selectedStudentId}
+                  onChange={(e) => {
+                    setSelectedStudentId(e.target.value);
+                    const st = students.find(s => s.id === parseInt(e.target.value));
+                    if (st) {
+                      setTargetFacultyId(st.faculty || (faculties[0]?.id || ''));
+                      setTargetCourseIds(st.assigned_courses || []);
+                    }
+                  }}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
+                  required
+                >
+                  <option value="">Select Student Account...</option>
+                  {students.map((st) => (
+                    <option key={st.id} value={st.id}>
+                      {st.first_name || st.username} {st.last_name} ({st.email})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-slate-700 font-bold uppercase mb-1">Select Target Faculty</label>
+                <select
+                  value={targetFacultyId}
+                  onChange={(e) => setTargetFacultyId(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
+                  required
+                >
+                  <option value="">Select Faculty...</option>
+                  {faculties.map((f) => (
+                    <option key={f.id} value={f.id}>{f.code} - {f.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-slate-700 font-bold uppercase mb-1">Select Course Programs (Multiple)</label>
+                <div className="space-y-1.5 max-h-36 overflow-y-auto custom-scrollbar bg-slate-50 p-2.5 rounded-xl border border-slate-200">
+                  {courses.filter(c => !targetFacultyId || c.faculty === parseInt(targetFacultyId)).map((c) => {
+                    const isChecked = targetCourseIds.includes(c.id);
+                    return (
+                      <label key={c.id} className="flex items-center space-x-2 font-medium text-slate-700 text-xs cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setTargetCourseIds(prev => [...prev, c.id]);
+                            } else {
+                              setTargetCourseIds(prev => prev.filter(id => id !== c.id));
+                            }
+                          }}
+                          className="rounded text-brand-light"
+                        />
+                        <span>[{c.code}] {c.name}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={submitting}
+                className="w-full py-2 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-xl shadow-sm transition-all"
+              >
+                {submitting ? 'Assigning...' : 'Save Student Allocation'}
+              </button>
+            </form>
+          </div>
+
+        </div>
+      )}
+
+      {/* INLINE LECTURER ASSIGNMENT MODAL (Zero Scrolling Needed!) */}
+      {showAssignModal && selectedUnit && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4 animate-fade-in">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 space-y-4 shadow-2xl border border-slate-100 animate-scale-up">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <h3 className="text-base font-bold text-slate-850">Assign Lecturer to Course Unit</h3>
+              <button onClick={() => { setShowAssignModal(false); setSelectedUnit(null); }} className="text-slate-400 hover:text-slate-600 font-bold">✕</button>
+            </div>
+
+            <form onSubmit={handleAssignLecturer} className="space-y-4 text-xs">
+              <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-150 space-y-1">
+                <p className="font-bold text-slate-850 text-sm">{selectedUnit.name}</p>
+                <p className="text-slate-500 font-medium">Code: <strong className="text-brand-dark">{selectedUnit.code}</strong> · Program: {selectedUnit.course_code}</p>
+                <p className="text-slate-500 font-medium">Credits: {selectedUnit.credit_units} CU</p>
+              </div>
+
+              <div>
+                <label className="block text-slate-700 font-bold uppercase mb-1.5">Select Lecturer to Assign</label>
+                <select
+                  value={selectedLecturerId}
+                  onChange={(e) => setSelectedLecturerId(e.target.value)}
+                  className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-850"
+                  required
+                >
+                  <option value="">Select Lecturer...</option>
+                  {lecturers.map((lec) => (
+                    <option key={lec.id} value={lec.id}>
+                      {lec.first_name || lec.username} {lec.last_name} ({lec.email})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="flex items-center justify-end space-x-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => { setShowAssignModal(false); setSelectedUnit(null); }}
+                  className="px-4 py-2 bg-slate-100 text-slate-600 font-bold rounded-xl hover:bg-slate-200"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  className="px-5 py-2 bg-brand-light hover:bg-brand-medium text-white font-bold rounded-xl shadow-md transition-all"
+                >
+                  {submitting ? 'Assigning...' : 'Confirm Assignment'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
@@ -1072,13 +1353,23 @@ export default function FacultyManagementPage() {
                 </select>
               </div>
 
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-4 gap-2">
                 <div>
-                  <label className="block text-slate-700 font-bold uppercase mb-1">Day of Week</label>
+                  <label className="block text-slate-700 font-bold uppercase mb-1">Date</label>
+                  <input
+                    type="date"
+                    value={ttFormData.class_date}
+                    onChange={(e) => setTtFormData({ ...ttFormData, class_date: e.target.value })}
+                    className="w-full px-2 py-2 bg-slate-50 border border-slate-200 rounded-xl"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-slate-700 font-bold uppercase mb-1">Day</label>
                   <select
                     value={ttFormData.day_of_week}
                     onChange={(e) => setTtFormData({ ...ttFormData, day_of_week: e.target.value })}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl"
+                    className="w-full px-2 py-2 bg-slate-50 border border-slate-200 rounded-xl"
                   >
                     {['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map(d => (
                       <option key={d} value={d}>{d}</option>

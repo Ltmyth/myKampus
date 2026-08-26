@@ -25,6 +25,8 @@ export default function TestRunnerPage({ params }) {
   const [timeLeftSeconds, setTimeLeftSeconds] = useState(0);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [securityNotice, setSecurityNotice] = useState('');
+  const [submitSuccess, setSubmitSuccess] = useState('');
+  const [submitError, setSubmitError] = useState('');
 
   const [submitting, setSubmitting] = useState(false);
   const autoSubmittedRef = useRef(false);
@@ -143,6 +145,8 @@ export default function TestRunnerPage({ params }) {
     if (autoSubmittedRef.current) return;
     autoSubmittedRef.current = true;
     setSubmitting(true);
+    setSubmitError('');
+    setSubmitSuccess('');
 
     try {
       await api.post(`/test-attempts/${activeAttempt.id}/submit/`, {
@@ -155,9 +159,14 @@ export default function TestRunnerPage({ params }) {
       const draftKey = `ciu_test_draft_${testId}_${user.id}`;
       localStorage.removeItem(draftKey);
 
-      router.push(`/dashboard/tests/${testId}/results?attemptId=${activeAttempt.id}`);
+      setSubmitSuccess('✅ Test submitted successfully! Redirecting to your academic scorecard...');
+      setTimeout(() => {
+        router.push(`/dashboard/tests/${testId}/results?attemptId=${activeAttempt.id}`);
+      }, 700);
     } catch (err) {
-      setSecurityNotice(err.message || 'Auto-submit failed. Retrying...');
+      const msg = err.message || 'Test submission failed. Please check network connection and try again.';
+      setSubmitError(`⚠️ Submission Error: ${msg}`);
+      setSecurityNotice(msg);
       autoSubmittedRef.current = false;
       setSubmitting(false);
     }
@@ -255,6 +264,20 @@ export default function TestRunnerPage({ params }) {
       <div className="w-full bg-slate-200 rounded-full h-1.5 overflow-hidden">
         <div className="bg-brand-emerald h-1.5 transition-all duration-300" style={{ width: `${progressPercent}%` }}></div>
       </div>
+
+      {/* Submission Success & Error Feedback Banners */}
+      {submitSuccess && (
+        <div className="p-4 bg-emerald-50 border-l-4 border-emerald-500 rounded-xl text-emerald-800 text-xs font-bold flex items-center justify-between shadow-sm animate-slide-up">
+          <span>{submitSuccess}</span>
+        </div>
+      )}
+
+      {submitError && (
+        <div className="p-4 bg-red-50 border-l-4 border-red-500 rounded-xl text-red-800 text-xs font-bold flex items-center justify-between shadow-sm animate-slide-up">
+          <span>{submitError}</span>
+          <button onClick={() => setSubmitError('')} className="text-red-700 font-bold text-xs ml-2">Dismiss</button>
+        </div>
+      )}
 
       {/* Security Toast Notice */}
       {securityNotice && (

@@ -184,6 +184,65 @@ export default function ReportsDashboardPage() {
             </div>
 
           </div>
+
+          {/* Course Unit Grades & Submissions Table */}
+          {report.course_reports && report.course_reports.length > 0 && (
+            <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-4">
+              <h3 className="text-sm font-bold text-slate-850 uppercase tracking-wider">Registered Course Units Grade Report</h3>
+              <div className="overflow-x-auto border border-slate-200 rounded-xl">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 uppercase font-semibold">
+                      <th className="px-4 py-3">Course Unit Code</th>
+                      <th className="px-4 py-3">Course Unit Name</th>
+                      <th className="px-4 py-3">Program Code</th>
+                      <th className="px-4 py-3 text-center">Exam Score (%)</th>
+                      <th className="px-4 py-3 text-center">Test Score (%)</th>
+                      <th className="px-4 py-3 text-center">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-slate-700">
+                    {report.course_reports.map((cr) => (
+                      <tr key={cr.id} className="hover:bg-slate-50 transition-all">
+                        <td className="px-4 py-3 font-extrabold text-brand-dark">{cr.code}</td>
+                        <td className="px-4 py-3 font-bold text-slate-850">{cr.name}</td>
+                        <td className="px-4 py-3 font-medium text-slate-600">{cr.course_code}</td>
+                        <td className="px-4 py-3 text-center font-bold">
+                          {cr.has_exam_submission ? (
+                            <span className="text-emerald-700 font-extrabold">{cr.exam_score}%</span>
+                          ) : (
+                            <span className="text-slate-400 font-normal">0% (No Submission)</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-center font-bold">
+                          {cr.has_test_submission ? (
+                            <span className="text-indigo-700 font-extrabold">{cr.test_score}%</span>
+                          ) : (
+                            <span className="text-slate-400 font-normal">0% (No Submission)</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          {cr.status === 'PASSED' ? (
+                            <span className="px-2.5 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                              PASSED
+                            </span>
+                          ) : cr.status === 'FAILED' ? (
+                            <span className="px-2.5 py-0.5 rounded text-[10px] font-bold bg-red-50 text-red-700 border border-red-200">
+                              FAILED
+                            </span>
+                          ) : (
+                            <span className="px-2.5 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                              0% (NO SUBMISSIONS)
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -267,8 +326,8 @@ export default function ReportsDashboardPage() {
         </div>
       )}
 
-      {/* EXECUTIVE / DEAN / SECRETARY / REGISTRAR / DVC / ADMIN VIEW */}
-      {['dean', 'faculty_admin', 'registrar', 'dvc', 'admin'].includes(user.role) && (
+      {/* EXECUTIVE / DEAN / SECRETARY / REGISTRAR / DVC / VC / ADMIN VIEW */}
+      {['dean', 'faculty_admin', 'registrar', 'dvc', 'vc', 'admin'].includes(user.role) && (
         <div className="space-y-8">
           
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
@@ -289,6 +348,43 @@ export default function ReportsDashboardPage() {
               <span className="text-2xl font-black text-emerald-600">{report.total_courses} / {report.total_course_units}</span>
             </div>
           </div>
+
+          {/* DVC / Executive Institutional Financial & Fee Clearance Card */}
+          {['dvc', 'vc', 'admin'].includes(user.role) && (
+            <div className="bg-gradient-to-br from-slate-900 to-indigo-950 text-white rounded-2xl p-6 shadow-md border border-slate-800 space-y-4">
+              <div className="flex items-center justify-between border-b border-white/10 pb-3">
+                <div>
+                  <h3 className="text-sm font-extrabold uppercase tracking-wider text-amber-300">
+                    💰 Executive Financial & Fee Clearance Analytics
+                  </h3>
+                  <p className="text-xs text-slate-300 font-medium">Real-time tuition clearance metrics across registered student database.</p>
+                </div>
+                <span className="px-3 py-1 bg-amber-500/20 text-amber-300 text-[10px] font-bold rounded-xl border border-amber-400/30 uppercase">
+                  DVC / VC Live Feed
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-center pt-2">
+                <div className="bg-white/10 p-4 rounded-xl border border-white/15">
+                  <span className="text-[10px] uppercase font-bold text-emerald-300 block mb-1">100% Full Tuition Cleared</span>
+                  <span className="text-3xl font-black text-white">{report.students_100_tuition ?? 0}</span>
+                  <span className="text-[11px] text-slate-300 block mt-1 font-medium">Full Access to Exams & Tests</span>
+                </div>
+
+                <div className="bg-white/10 p-4 rounded-xl border border-white/15">
+                  <span className="text-[10px] uppercase font-bold text-amber-300 block mb-1">50% - 99% Partial Clearance</span>
+                  <span className="text-3xl font-black text-white">{report.students_50_tuition ?? 0}</span>
+                  <span className="text-[11px] text-slate-300 block mt-1 font-medium">Test Access Granted, Exam Barred</span>
+                </div>
+
+                <div className="bg-white/10 p-4 rounded-xl border border-white/15">
+                  <span className="text-[10px] uppercase font-bold text-red-400 block mb-1">Below 50% Tuition Clearance</span>
+                  <span className="text-3xl font-black text-white">{report.students_below_50_tuition ?? 0}</span>
+                  <span className="text-[11px] text-slate-300 block mt-1 font-medium">Barred from Assessments</span>
+                </div>
+              </div>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             

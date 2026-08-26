@@ -33,6 +33,17 @@ export default function TestPortalPage() {
   const [passPercentage, setPassPercentage] = useState(50);
   const [allowedAttempts, setAllowedAttempts] = useState(1);
   const [description, setDescription] = useState('');
+  const [scheduledStart, setScheduledStart] = useState('');
+  const [dueDate, setDueDate] = useState('');
+
+  // Edit Test Modal State
+  const [editingTestModal, setEditingTestModal] = useState(null);
+  const [editTitle, setEditTitle] = useState('');
+  const [editDuration, setEditDuration] = useState(30);
+  const [editPassPercentage, setEditPassPercentage] = useState(50);
+  const [editAllowedAttempts, setEditAllowedAttempts] = useState(1);
+  const [editScheduledStart, setEditScheduledStart] = useState('');
+  const [editDueDate, setEditDueDate] = useState('');
 
   // Question Builder State
   const [selectedTest, setSelectedTest] = useState(null);
@@ -86,6 +97,58 @@ export default function TestPortalPage() {
     ? courses.filter(c => courseUnits.some(u => u.course_code === c.code && u.lecturer_details?.some(l => l.id === user.id)))
     : courses;
 
+  const handleDeleteTest = async (testId) => {
+    if (!confirm('Are you sure you want to delete this test paper?')) return;
+    setErrorMsg('');
+    setSuccessMsg('');
+    try {
+      await api.delete(`/tests/${testId}/`);
+      setSuccessMsg('Test paper deleted successfully.');
+      if (selectedTest?.id === testId) setSelectedTest(null);
+      loadPortalData();
+    } catch (err) {
+      setErrorMsg(err.message || 'Failed to delete test paper.');
+    }
+  };
+
+  const handleOpenEditTestModal = (testItem) => {
+    setEditingTestModal(testItem);
+    setEditTitle(testItem.title);
+    setEditDuration(testItem.duration_minutes || 30);
+    setEditPassPercentage(testItem.pass_percentage || 50);
+    setEditAllowedAttempts(testItem.allowed_attempts || 1);
+    setEditScheduledStart(testItem.scheduled_start ? new Date(testItem.scheduled_start).toISOString().slice(0, 16) : '');
+    setEditDueDate(testItem.due_date ? new Date(testItem.due_date).toISOString().slice(0, 16) : '');
+  };
+
+  const handleSaveEditTest = async (e) => {
+    e.preventDefault();
+    if (!editingTestModal) return;
+    setErrorMsg('');
+    setSuccessMsg('');
+    setSubmitting(true);
+
+    try {
+      const payload = {
+        title: editTitle,
+        duration_minutes: parseInt(editDuration),
+        pass_percentage: parseFloat(editPassPercentage),
+        allowed_attempts: parseInt(editAllowedAttempts),
+        scheduled_start: editScheduledStart ? new Date(editScheduledStart).toISOString() : null,
+        due_date: editDueDate ? new Date(editDueDate).toISOString() : null
+      };
+
+      await api.patch(`/tests/${editingTestModal.id}/`, payload);
+      setSuccessMsg(`Test paper '${editTitle}' updated successfully!`);
+      setEditingTestModal(null);
+      loadPortalData();
+    } catch (err) {
+      setErrorMsg(err.message || 'Failed to update test paper.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const handleCreateTest = async (e) => {
     e.preventDefault();
     if (!title || !selectedCourse) {
@@ -97,7 +160,7 @@ export default function TestPortalPage() {
     setSubmitting(true);
 
     try {
-      const created = await api.post('/tests/', {
+      const payload = {
         title,
         course: parseInt(selectedCourse),
         category,
@@ -105,17 +168,25 @@ export default function TestPortalPage() {
         pass_percentage: parseFloat(passPercentage),
         allowed_attempts: parseInt(allowedAttempts),
         description,
-        is_published: false,
-        is_results_released: true
-      });
+        is_published: true
+      };
+      if (scheduledStart) {
+        payload.scheduled_start = new Date(scheduledStart).toISOString();
+      }
+      if (dueDate) {
+        payload.due_date = new Date(dueDate).toISOString();
+      }
+      const created = await api.post('/tests/', payload);
       setSuccessMsg('Test created successfully! Select it below to add questions.');
       setTitle('');
-      setDescription('');
       setSelectedCourse('');
+      setDescription('');
+      setScheduledStart('');
+      setDueDate('');
       loadPortalData();
       setSelectedTest(created);
     } catch (err) {
-      setErrorMsg(err.message || 'Test creation failed.');
+      setErrorMsg(err.message || 'Failed to create test paper.');
     } finally {
       setSubmitting(false);
     }
@@ -448,11 +519,13 @@ export default function TestPortalPage() {
                     <h3 className="font-bold text-slate-850 text-base leading-tight">{testItem.title}</h3>
                     <p className="text-xs text-slate-500 font-medium">Course: <span className="font-semibold text-slate-800">[{testItem.course_code}] {testItem.course_name}</span></p>
                     
-                    <div className="pt-2 text-[11px] text-slate-500 space-y-1 bg-slate-50 p-2.5 rounded-xl border border-slate-100">
-                      <p>⏱️ Duration: <span className="font-bold text-slate-700">{testItem.duration_minutes} mins</span></p>
-                      <p>🎯 Pass Mark: <span className="font-bold text-slate-700">{testItem.pass_percentage}%</span></p>
-                      <p>❓ Questions: <span className="font-bold text-slate-700">{testItem.questions_count}</span></p>
-                      <p>💰 Fee Gate: <span className="font-bold text-slate-700">50% Minimum Tuition Paid</span></p>
+                    <div className="pt-2 text-[11px] text-slate-600 space-y-1 bg-slate-50 p-2.5 rounded-xl border border-slate-100 font-medium">
+                      <p>⏱️ Duration: <span className="font-bold text-slate-800">{testItem.duration_minutes} mins</span> | 🎯 Pass Mark: <span className="font-bold text-slate-800">{testItem.pass_percentage}%</span></p>
+                      <p>📅 Scheduled Start: <span className="font-bold text-slate-800">{testItem.scheduled_start ? new Date(testItem.scheduled_start).toLocaleString([], {year:'numeric', month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'}) : 'Open Anytime'}</span></p>
+                      {testItem.due_date && (
+                        <p>⏳ Due Date (Deadline): <span className="font-bold text-amber-700">{new Date(testItem.due_date).toLocaleString([], {year:'numeric', month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'})}</span></p>
+                      )}
+                      <p>❓ Questions: <span className="font-bold text-slate-800">{testItem.questions_count}</span> | 💰 Fee Gate: <span className="font-bold text-emerald-700">50%+ Paid</span></p>
                     </div>
                   </div>
 
@@ -480,6 +553,22 @@ export default function TestPortalPage() {
                           title="Toggle student score release"
                         >
                           {testItem.is_results_released ? '🔒 Withhold' : '📢 Release'}
+                        </button>
+
+                        <button
+                          onClick={() => handleOpenEditTestModal(testItem)}
+                          className="px-2.5 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-bold rounded-lg transition-all"
+                          title="Edit test paper details"
+                        >
+                          ✏️ Edit
+                        </button>
+
+                        <button
+                          onClick={() => handleDeleteTest(testItem.id)}
+                          className="px-2.5 py-1.5 bg-red-50 hover:bg-red-100 text-red-700 text-xs font-bold rounded-lg transition-all"
+                          title="Delete test paper"
+                        >
+                          🗑️ Delete
                         </button>
 
                         <button
@@ -619,6 +708,27 @@ export default function TestPortalPage() {
                     value={allowedAttempts}
                     onChange={(e) => setAllowedAttempts(e.target.value)}
                     className="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Scheduled Start Date/Time</label>
+                  <input
+                    type="datetime-local"
+                    value={scheduledStart}
+                    onChange={(e) => setScheduledStart(e.target.value)}
+                    className="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs font-semibold text-slate-800"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Due Date/Time (Deadline)</label>
+                  <input
+                    type="datetime-local"
+                    value={dueDate}
+                    onChange={(e) => setDueDate(e.target.value)}
+                    className="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs font-semibold text-slate-800"
                   />
                 </div>
               </div>
@@ -896,6 +1006,102 @@ export default function TestPortalPage() {
                 Close & Contact Bursar Office
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* EDIT TEST MODAL (STAFF / LECTURER) */}
+      {editingTestModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fade-in">
+          <div className="bg-white rounded-3xl p-6 max-w-lg w-full shadow-2xl border border-slate-100 space-y-5 relative">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <h3 className="text-base font-bold text-slate-850">Edit Test Paper Details</h3>
+              <button onClick={() => setEditingTestModal(null)} className="text-slate-400 hover:text-slate-600 font-bold">✕</button>
+            </div>
+
+            <form onSubmit={handleSaveEditTest} className="space-y-4 text-xs">
+              <div>
+                <label className="block text-slate-700 font-bold uppercase mb-1">Test Title</label>
+                <input
+                  type="text"
+                  value={editTitle}
+                  onChange={(e) => setEditTitle(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold"
+                  required
+                />
+              </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-slate-700 font-bold uppercase mb-1">Duration (Mins)</label>
+                  <input
+                    type="number"
+                    value={editDuration}
+                    onChange={(e) => setEditDuration(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-700 font-bold uppercase mb-1">Pass Mark %</label>
+                  <input
+                    type="number"
+                    value={editPassPercentage}
+                    onChange={(e) => setEditPassPercentage(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-700 font-bold uppercase mb-1">Max Attempts</label>
+                  <input
+                    type="number"
+                    value={editAllowedAttempts}
+                    onChange={(e) => setEditAllowedAttempts(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-slate-700 font-bold uppercase mb-1">Scheduled Start Date/Time</label>
+                  <input
+                    type="datetime-local"
+                    value={editScheduledStart}
+                    onChange={(e) => setEditScheduledStart(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-semibold text-slate-800"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-700 font-bold uppercase mb-1">Due Date/Time (Deadline)</label>
+                  <input
+                    type="datetime-local"
+                    value={editDueDate}
+                    onChange={(e) => setEditDueDate(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-semibold text-slate-800"
+                  />
+                </div>
+              </div>
+
+              <div className="flex space-x-3 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setEditingTestModal(null)}
+                  className="flex-1 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  className="flex-1 py-2 bg-brand-light hover:bg-brand-medium text-white font-bold rounded-xl shadow-md"
+                >
+                  {submitting ? 'Saving...' : 'Save Test Changes'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

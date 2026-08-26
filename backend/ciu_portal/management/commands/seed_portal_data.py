@@ -8,12 +8,12 @@ from ciu_portal.models import (
 )
 
 class Command(BaseCommand):
-    help = 'Populates Clarke International University (CIU) production-grade seed data (Roles, Faculties, Courses, Course Units, Timetables, Exams, Tests, Tuition Clearances, and Audit Logs).'
+    help = 'Populates Clarke International University (CIU) production-grade seed data (Roles, Faculties, Executive Officers, Deans, Secretaries, Courses, Course Units, Real Date Timetables, Exams, Tests, Tuition Clearances, and Audit Logs).'
 
     def handle(self, *args, **options):
         self.stdout.write(self.style.NOTICE('Seeding production portal data for Clarke International University...'))
 
-        # 1. System Users & Roles
+        # 1. System Administrative & Executive Officers
         admin, _ = User.objects.get_or_create(username='admin', defaults={
             'email': 'admin@ciu.ac.ug', 'first_name': 'System', 'last_name': 'Administrator', 'role': 'admin', 'tuition_paid_percentage': 100.0
         })
@@ -21,34 +21,89 @@ class Command(BaseCommand):
         admin.role = 'admin'
         admin.save()
 
-        dvc, _ = User.objects.get_or_create(username='dvc_nanyonga', defaults={
-            'email': 'dvc@ciu.ac.ug', 'first_name': 'Dr. Rose', 'last_name': 'Nanyonga', 'role': 'dvc', 'tuition_paid_percentage': 100.0
+        vc, _ = User.objects.get_or_create(username='vc_nanyonga', defaults={
+            'email': 'vc@ciu.ac.ug', 'first_name': 'Ass. Prof. Rose Clarke', 'last_name': 'Nanyonga', 'role': 'vc', 'tuition_paid_percentage': 100.0
+        })
+        vc.set_password('vc123')
+        vc.role = 'vc'
+        vc.save()
+
+        dvc, _ = User.objects.get_or_create(username='dvc_singh', defaults={
+            'email': 'dvc@ciu.ac.ug', 'first_name': 'Dr. Milka', 'last_name': 'Singh', 'role': 'dvc', 'tuition_paid_percentage': 100.0
         })
         dvc.set_password('dvc123')
         dvc.role = 'dvc'
         dvc.save()
 
-        registrar, _ = User.objects.get_or_create(username='registrar', defaults={
-            'email': 'registrar@ciu.ac.ug', 'first_name': 'Mr. Peter', 'last_name': 'Okello', 'role': 'registrar', 'tuition_paid_percentage': 100.0
+        registrar, _ = User.objects.get_or_create(username='registrar_ayot', defaults={
+            'email': 'registrar@ciu.ac.ug', 'first_name': 'Evelyn Grace', 'last_name': 'Ayot', 'role': 'registrar', 'tuition_paid_percentage': 100.0
         })
         registrar.set_password('registrar123')
         registrar.role = 'registrar'
         registrar.save()
 
-        dean, _ = User.objects.get_or_create(username='dean_fst', defaults={
-            'email': 'dean.fst@ciu.ac.ug', 'first_name': 'Dr. Sarah', 'last_name': 'Nabukeera', 'role': 'dean', 'tuition_paid_percentage': 100.0
+        # 2. Deans & Faculty Secretaries for all 4 CIU Faculties
+        # SOBAT: School of Business and Applied Technology
+        dean_sobat, _ = User.objects.get_or_create(username='dean_sobat', defaults={
+            'email': 'margaret.kareyo@ciu.ac.ug', 'first_name': 'Ass. Prof. Margaret', 'last_name': 'Kareyo', 'role': 'dean', 'tuition_paid_percentage': 100.0
         })
-        dean.set_password('dean123')
-        dean.role = 'dean'
-        dean.save()
+        dean_sobat.set_password('dean123')
+        dean_sobat.role = 'dean'
+        dean_sobat.save()
 
-        secretary, _ = User.objects.get_or_create(username='sec_fst', defaults={
-            'email': 'sec.fst@ciu.ac.ug', 'first_name': 'Jane', 'last_name': 'Namatovu', 'role': 'faculty_admin', 'tuition_paid_percentage': 100.0
+        sec_sobat, _ = User.objects.get_or_create(username='sec_sobat', defaults={
+            'email': 'lillian.achola@ciu.ac.ug', 'first_name': 'Lillian', 'last_name': 'Achola', 'role': 'faculty_admin', 'tuition_paid_percentage': 100.0
         })
-        secretary.set_password('sec123')
-        secretary.role = 'faculty_admin'
-        secretary.save()
+        sec_sobat.set_password('sec123')
+        sec_sobat.role = 'faculty_admin'
+        sec_sobat.save()
 
+        # SONM: School of Nursing and Midwifery
+        dean_sonm, _ = User.objects.get_or_create(username='dean_sonm', defaults={
+            'email': 'agnes.agwang@ciu.ac.ug', 'first_name': 'Agnes', 'last_name': 'Agwang', 'role': 'dean', 'tuition_paid_percentage': 100.0
+        })
+        dean_sonm.set_password('dean123')
+        dean_sonm.role = 'dean'
+        dean_sonm.save()
+
+        sec_sonm, _ = User.objects.get_or_create(username='sec_sonm', defaults={
+            'email': 'doreen.basemera@ciu.ac.ug', 'first_name': 'Doreen Agnes', 'last_name': 'Basemera', 'role': 'faculty_admin', 'tuition_paid_percentage': 100.0
+        })
+        sec_sonm.set_password('sec123')
+        sec_sonm.role = 'faculty_admin'
+        sec_sonm.save()
+
+        # SOPH: School of Public Health
+        dean_soph, _ = User.objects.get_or_create(username='dean_soph', defaults={
+            'email': 'john.alege@ciu.ac.ug', 'first_name': 'John Bosco', 'last_name': 'Alege', 'role': 'dean', 'tuition_paid_percentage': 100.0
+        })
+        dean_soph.set_password('dean123')
+        dean_soph.role = 'dean'
+        dean_soph.save()
+
+        sec_soph, _ = User.objects.get_or_create(username='sec_soph', defaults={
+            'email': 'anitah.mwebaze@ciu.ac.ug', 'first_name': 'Anitah', 'last_name': 'Mwebaze', 'role': 'faculty_admin', 'tuition_paid_percentage': 100.0
+        })
+        sec_soph.set_password('sec123')
+        sec_soph.role = 'faculty_admin'
+        sec_soph.save()
+
+        # IAH: Institute of Allied Health
+        dean_iah, _ = User.objects.get_or_create(username='dean_iah', defaults={
+            'email': 'john.okiria@ciu.ac.ug', 'first_name': 'Prof. John Charles', 'last_name': 'Okiria', 'role': 'dean', 'tuition_paid_percentage': 100.0
+        })
+        dean_iah.set_password('dean123')
+        dean_iah.role = 'dean'
+        dean_iah.save()
+
+        sec_iah, _ = User.objects.get_or_create(username='sec_iah', defaults={
+            'email': 'emilly.naiwumbwe@ciu.ac.ug', 'first_name': 'Emilly', 'last_name': 'Naiwumbwe', 'role': 'faculty_admin', 'tuition_paid_percentage': 100.0
+        })
+        sec_iah.set_password('sec123')
+        sec_iah.role = 'faculty_admin'
+        sec_iah.save()
+
+        # Lecturers
         lecturer1, _ = User.objects.get_or_create(username='lecturer1', defaults={
             'email': 'john.mugisha@ciu.ac.ug', 'first_name': 'Dr. John', 'last_name': 'Mugisha', 'role': 'lecturer', 'tuition_paid_percentage': 100.0
         })
@@ -88,47 +143,92 @@ class Command(BaseCommand):
         student3.role = 'student'
         student3.save()
 
-        # 2. Faculties
-        fst, _ = Faculty.objects.get_or_create(code='FST', defaults={
-            'name': 'Faculty of Science & Technology',
-            'description': 'Department of Computer Science, Software Engineering, and Information Technology.',
-            'dean': dean,
-            'secretary': secretary
+        # 3. Seed Official CIU Faculties
+        sobat, _ = Faculty.objects.get_or_create(code='SOBAT', defaults={
+            'name': 'School of Business and Applied Technology',
+            'description': 'Department of Computing, Software Engineering, Information Technology, and Business Management.',
+            'dean': dean_sobat,
+            'secretary': sec_sobat
         })
+        sobat.dean = dean_sobat
+        sobat.secretary = sec_sobat
+        sobat.save()
 
-        fhs, _ = Faculty.objects.get_or_create(code='FHS', defaults={
-            'name': 'Faculty of Health Sciences',
-            'description': 'School of Nursing, Public Health, Clinical Medicine, and Allied Health Sciences.',
+        sonm, _ = Faculty.objects.get_or_create(code='SONM', defaults={
+            'name': 'School of Nursing and Midwifery',
+            'description': 'Department of Clinical Nursing, Patient Care, General Midwifery, and Maternal Health.',
+            'dean': dean_sonm,
+            'secretary': sec_sonm
         })
+        sonm.dean = dean_sonm
+        sonm.secretary = sec_sonm
+        sonm.save()
 
-        fbm, _ = Faculty.objects.get_or_create(code='FBM', defaults={
-            'name': 'Faculty of Business & Management',
-            'description': 'Department of Accounting, Finance, Marketing, and Healthcare Management.',
+        soph, _ = Faculty.objects.get_or_create(code='SOPH', defaults={
+            'name': 'School of Public Health',
+            'description': 'Department of Epidemiology, Biostatistics, Environmental Health, and Health Policy.',
+            'dean': dean_soph,
+            'secretary': sec_soph
         })
+        soph.dean = dean_soph
+        soph.secretary = sec_soph
+        soph.save()
 
-        # 3. Courses
+        iah, _ = Faculty.objects.get_or_create(code='IAH', defaults={
+            'name': 'Institute of Allied Health',
+            'description': 'Department of Medical Laboratory Technology, Clinical Pharmacy, and Radiography.',
+            'dean': dean_iah,
+            'secretary': sec_iah
+        })
+        iah.dean = dean_iah
+        iah.secretary = sec_iah
+        iah.save()
+
+        # Assign students to default faculty SOBAT
+        student1.faculty = sobat
+        student1.save()
+        student2.faculty = sobat
+        student2.save()
+        student3.faculty = sonm
+        student3.save()
+
+        # 4. Courses
         cs_course, _ = Course.objects.get_or_create(code='BIT2026', defaults={
             'name': 'BSc. Computer Information Technology',
-            'faculty': fst,
-            'department': 'Computer Science',
+            'faculty': sobat,
+            'department': 'Applied Computing',
             'description': 'Undergraduate degree program in Information Technology, Enterprise Systems, and Web Engineering.'
         })
 
         se_course, _ = Course.objects.get_or_create(code='BSE2026', defaults={
             'name': 'BSc. Software Engineering',
-            'faculty': fst,
+            'faculty': sobat,
             'department': 'Software Engineering',
             'description': 'Advanced degree focusing on cloud systems, algorithmic computing, and software quality assurance.'
         })
 
         nursing_course, _ = Course.objects.get_or_create(code='BSN2026', defaults={
             'name': 'BSc. Nursing Sciences',
-            'faculty': fhs,
-            'department': 'Nursing',
+            'faculty': sonm,
+            'department': 'Nursing Care',
             'description': 'Professional degree program in Clinical Nursing, Patient Care, and Epidemiology.'
         })
 
-        # 4. Course Units & Lecturer Assignments
+        ph_course, _ = Course.objects.get_or_create(code='BPH2026', defaults={
+            'name': 'BSc. Public Health',
+            'faculty': soph,
+            'department': 'Community Health',
+            'description': 'Degree program in Epidemiology, Preventive Medicine, and Biostatistics.'
+        })
+
+        bml_course, _ = Course.objects.get_or_create(code='BML2026', defaults={
+            'name': 'BSc. Medical Laboratory Science',
+            'faculty': iah,
+            'department': 'Laboratory Medicine',
+            'description': 'Degree in Diagnostic Pathology, Clinical Microbiology, and Hematology.'
+        })
+
+        # 5. Course Units & Lecturer Assignments
         cu1, _ = CourseUnit.objects.get_or_create(code='BIT2101', course=cs_course, defaults={
             'name': 'Web Application Development',
             'credit_units': 4
@@ -153,46 +253,84 @@ class Command(BaseCommand):
         })
         cu4.lecturers.add(lecturer2)
 
-        # 5. Class Timetables
-        ClassTimetable.objects.get_or_create(course=cs_course, day_of_week='Monday', start_time=time(9, 0), room='Lab 3 - IT Complex', defaults={
-            'faculty': fst,
+        cu5, _ = CourseUnit.objects.get_or_create(code='BPH1101', course=ph_course, defaults={
+            'name': 'Principles of Epidemiology',
+            'credit_units': 3
+        })
+        cu5.lecturers.add(lecturer2)
+
+        cu6, _ = CourseUnit.objects.get_or_create(code='BML1101', course=bml_course, defaults={
+            'name': 'Clinical Biochemistry',
+            'credit_units': 4
+        })
+        cu6.lecturers.add(lecturer2)
+
+        # 6. Class Timetables WITH REAL SPECIFIC CALENDAR DATES
+        base_monday = date(2026, 8, 31) # Monday, August 31, 2026
+        
+        ClassTimetable.objects.get_or_create(course=cs_course, day_of_week='Monday', start_time=time(9, 0), room='Lab 3 - SOBAT IT Complex', defaults={
+            'faculty': sobat,
             'course_unit': cu1,
             'lecturer': lecturer1,
+            'class_date': base_monday,
             'end_time': time(11, 0),
             'class_type': 'lab',
-            'created_by': secretary
+            'created_by': sec_sobat
         })
 
         ClassTimetable.objects.get_or_create(course=cs_course, day_of_week='Wednesday', start_time=time(11, 30), room='Lecture Hall A', defaults={
-            'faculty': fst,
+            'faculty': sobat,
             'course_unit': cu2,
             'lecturer': lecturer1,
+            'class_date': base_monday + timedelta(days=2), # 2026-09-02
             'end_time': time(13, 30),
             'class_type': 'lecture',
-            'created_by': secretary
+            'created_by': sec_sobat
         })
 
         ClassTimetable.objects.get_or_create(course=se_course, day_of_week='Tuesday', start_time=time(14, 0), room='Lab 5 - SE Hub', defaults={
-            'faculty': fst,
+            'faculty': sobat,
             'course_unit': cu3,
             'lecturer': lecturer1,
+            'class_date': base_monday + timedelta(days=1), # 2026-09-01
             'end_time': time(16, 0),
             'class_type': 'workshop',
-            'created_by': secretary
+            'created_by': sec_sobat
         })
 
         ClassTimetable.objects.get_or_create(course=nursing_course, day_of_week='Thursday', start_time=time(8, 30), room='Health Complex Lab B', defaults={
-            'faculty': fhs,
+            'faculty': sonm,
             'course_unit': cu4,
             'lecturer': lecturer2,
+            'class_date': base_monday + timedelta(days=3), # 2026-09-03
             'end_time': time(11, 30),
             'class_type': 'lab',
-            'created_by': secretary
+            'created_by': sec_sonm
         })
 
-        # 6. Exam Timetables
-        ExamTimetable.objects.get_or_create(title='BIT2101 Final Practical Exam', course=cs_course, exam_date=date.today() + timedelta(days=14), defaults={
-            'faculty': fst,
+        ClassTimetable.objects.get_or_create(course=ph_course, day_of_week='Friday', start_time=time(10, 0), room='Auditorium 2 - SOPH Building', defaults={
+            'faculty': soph,
+            'course_unit': cu5,
+            'lecturer': lecturer2,
+            'class_date': base_monday + timedelta(days=4), # 2026-09-04
+            'end_time': time(12, 0),
+            'class_type': 'lecture',
+            'created_by': sec_soph
+        })
+
+        ClassTimetable.objects.get_or_create(course=bml_course, day_of_week='Monday', start_time=time(14, 0), room='Pathology Lab 1 - IAH', defaults={
+            'faculty': iah,
+            'course_unit': cu6,
+            'lecturer': lecturer2,
+            'class_date': base_monday + timedelta(days=7), # 2026-09-07
+            'end_time': time(16, 30),
+            'class_type': 'lab',
+            'created_by': sec_iah
+        })
+
+        # 7. Exam Timetables WITH REAL DATES
+        ExamTimetable.objects.get_or_create(title='BIT2101 Final Practical Exam', course=cs_course, exam_date=date(2026, 9, 14), defaults={
+            'faculty': sobat,
             'course_unit': cu1,
             'start_time': time(9, 0),
             'end_time': time(12, 0),
@@ -201,7 +339,17 @@ class Command(BaseCommand):
             'created_by': registrar
         })
 
-        # 7. Global Proctoring Setting
+        ExamTimetable.objects.get_or_create(title='BSN1101 Human Anatomy Final Exam', course=nursing_course, exam_date=date(2026, 9, 16), defaults={
+            'faculty': sonm,
+            'course_unit': cu4,
+            'start_time': time(9, 0),
+            'end_time': time(12, 0),
+            'venue': 'Clinical Simulation Center',
+            'invigilator': lecturer2,
+            'created_by': registrar
+        })
+
+        # 8. Global Proctoring Setting
         ProctoringSetting.objects.get_or_create(id=1, defaults={
             'is_proctoring_enabled': True,
             'require_webcam': True,
@@ -209,7 +357,7 @@ class Command(BaseCommand):
             'updated_by': admin
         })
 
-        # 8. Seed Official Exam Paper
+        # 9. Seed Official Exam Paper with Real Scheduled Date
         exam, _ = Exam.objects.get_or_create(title='End of Semester Examination 2026', course=cs_course, defaults={
             'course_unit': cu1,
             'lecturer': lecturer1,
@@ -249,15 +397,16 @@ class Command(BaseCommand):
                 correct_option='A'
             )
 
-        # 9. Seed Official Test Paper
-        test_item, _ = Test.objects.get_or_create(title='Continuous Assessment Test 1 (CAT)', course=cs_course, defaults={
+        # 10. Seed Official Test Paper (TEST101) with Real Scheduled Date & Due Date
+        test_item, _ = Test.objects.get_or_create(title='TEST101: Web Application Development CAT', course=cs_course, defaults={
             'course_unit': cu1,
             'lecturer': lecturer1,
             'category': 'unit_test',
             'duration_minutes': 30,
-            'scheduled_start': timezone.now() - timedelta(minutes=10),
+            'scheduled_start': timezone.now() - timedelta(minutes=5),
+            'due_date': timezone.now() + timedelta(days=7),
             'pass_percentage': 50.0,
-            'allowed_attempts': 2,
+            'allowed_attempts': 5,
             'is_published': True,
             'is_results_released': True
         })
@@ -285,8 +434,20 @@ class Command(BaseCommand):
                 points=2.0,
                 explanation='React and Next.js use JSX syntax to express UI component rendering.'
             )
+            TestQuestion.objects.create(
+                test=test_item,
+                question_text='What is the primary role of Django View function in MVT architecture?',
+                question_type='mcq',
+                option_a='Executes HTTP request handling and business logic processing',
+                option_b='Directly manages CSS styles',
+                option_c='Stores database tables',
+                option_d='Compiles Python binaries',
+                correct_answer='A',
+                points=2.0,
+                explanation='Views contain business logic and process incoming HTTP requests.'
+            )
 
-        # 10. Seed Completed Student Attempt & System Logs
+        # 11. Seed Completed Student Attempt & System Logs
         TestAttempt.objects.get_or_create(student=student1, test=test_item, attempt_number=1, defaults={
             'score': 100.0,
             'passed': True,
@@ -294,19 +455,27 @@ class Command(BaseCommand):
             'tab_switches_count': 0
         })
 
-        log_system_event(admin, "Production Portal Data Seeded & Initialized", level="AUDIT", details="Full CIU faculties, courses, timetables, fee thresholds, and proctoring controls loaded.")
+        log_system_event(admin, "Production Portal Data Seeded & Initialized", level="AUDIT", details="Full CIU faculties (SOBAT, SONM, SOPH, IAH), executive officers (VC, DVC, AR), timetables with real dates, fee thresholds, and proctoring controls loaded.")
 
         self.stdout.write(self.style.SUCCESS('\n================================================================='))
         self.stdout.write(self.style.SUCCESS('  Clarke International University Portal Production Data Ready!'))
         self.stdout.write(self.style.SUCCESS('================================================================='))
-        self.stdout.write(self.style.NOTICE('Demonstration Accounts:'))
-        self.stdout.write('  • System Admin:        admin / admin123')
-        self.stdout.write('  • DVC / Chancellor:    dvc_nanyonga / dvc123')
-        self.stdout.write('  • Academic Registrar:  registrar / registrar123')
-        self.stdout.write('  • Faculty Dean (FST):  dean_fst / dean123')
-        self.stdout.write('  • Faculty Secretary:   sec_fst / sec123')
-        self.stdout.write('  • Senior Lecturer:     lecturer1 / lecturer123')
-        self.stdout.write('  • Student (100% Fees): student1 / student123 (Full Access)')
-        self.stdout.write('  • Student (75% Fees):  student2 / student123 (Tests Only, Exam Barred)')
-        self.stdout.write('  • Student (35% Fees):  student3 / student123 (Barred from Tests & Exams)')
+        self.stdout.write(self.style.NOTICE('Executive & Administrative Accounts:'))
+        self.stdout.write('  • System Admin:             admin / admin123')
+        self.stdout.write('  • Vice-Chancellor (VC):     vc_nanyonga / vc123 (Ass. Prof. Rose Clarke Nanyonga)')
+        self.stdout.write('  • Chancellor / DVC:         dvc_singh / dvc123 (Dr. Milka Singh)')
+        self.stdout.write('  • Academic Registrar:       registrar_ayot / registrar123 (Evelyn Grace Ayot)')
+        self.stdout.write(self.style.NOTICE('Faculty Deans & Secretaries:'))
+        self.stdout.write('  • SOBAT Dean (Business & IT): dean_sobat / dean123 (Ass. Prof. Margaret Kareyo)')
+        self.stdout.write('  • SOBAT Secretary:          sec_sobat / sec123 (Lillian Achola)')
+        self.stdout.write('  • SONM Dean (Nursing):      dean_sonm / dean123 (Agnes Agwang)')
+        self.stdout.write('  • SONM Secretary:           sec_sonm / sec123 (Doreen Agnes Basemera)')
+        self.stdout.write('  • SOPH Dean (Public Health):dean_soph / dean123 (John Bosco Alege)')
+        self.stdout.write('  • SOPH Secretary:           sec_soph / sec123 (Anitah Mwebaze)')
+        self.stdout.write('  • IAH Dean (Allied Health): dean_iah / dean123 (Prof. John Charles Okiria)')
+        self.stdout.write('  • IAH Secretary:            sec_iah / sec123 (Emilly Naiwumbwe)')
+        self.stdout.write(self.style.NOTICE('Demonstration Students:'))
+        self.stdout.write('  • Student (100% Fees):      student1 / student123 (Full Access)')
+        self.stdout.write('  • Student (75% Fees):       student2 / student123 (Tests Only, Exam Barred)')
+        self.stdout.write('  • Student (35% Fees):       student3 / student123 (Barred from Tests & Exams)')
         self.stdout.write(self.style.SUCCESS('=================================================================\n'))

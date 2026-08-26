@@ -499,6 +499,7 @@ export default function AdminPage() {
                     <option value="registrar">Academic Registrar</option>
                     <option value="dean">School Dean</option>
                     <option value="dvc">Chancellor (DVC)</option>
+                    <option value="vc">Vice-Chancellor (VC)</option>
                     <option value="admin">System Admin</option>
                   </select>
                 </div>
@@ -977,16 +978,22 @@ export default function AdminPage() {
 
                 <div>
                   <label className="block text-slate-700 text-xs font-semibold uppercase tracking-wider mb-1">Tuition Paid %</label>
-                  <input
-                    type="number"
-                    step="5"
-                    min="0"
-                    max="100"
-                    value={editTuitionPaid}
-                    onChange={(e) => setEditTuitionPaid(e.target.value)}
-                    placeholder="100"
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-850 text-xs focus:outline-none focus:ring-2 focus:ring-brand-light/30 focus:border-brand-light transition-all font-bold"
-                  />
+                  {editRole === 'student' ? (
+                    <input
+                      type="number"
+                      step="5"
+                      min="0"
+                      max="100"
+                      value={editTuitionPaid}
+                      onChange={(e) => setEditTuitionPaid(e.target.value)}
+                      placeholder="100"
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-850 text-xs focus:outline-none focus:ring-2 focus:ring-brand-light/30 focus:border-brand-light transition-all font-bold"
+                    />
+                  ) : (
+                    <div className="w-full px-3 py-2 bg-slate-100 border border-slate-200 rounded-lg text-slate-400 text-xs italic font-medium">
+                      N/A (Fees Not Applicable for Staff)
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -1003,6 +1010,7 @@ export default function AdminPage() {
                   <option value="registrar">Academic Registrar</option>
                   <option value="dean">School Dean</option>
                   <option value="dvc">Chancellor (DVC)</option>
+                  <option value="vc">Vice-Chancellor (VC)</option>
                   <option value="admin">System Admin</option>
                 </select>
               </div>

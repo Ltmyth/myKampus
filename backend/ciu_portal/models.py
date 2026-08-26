@@ -11,11 +11,24 @@ class User(AbstractUser):
         ('faculty_admin', 'Faculty Secretary (Admin)'),
         ('registrar', 'Academic Registrar'),
         ('dvc', 'Chancellor (DVC)'),
+        ('vc', 'Vice-Chancellor (VC)'),
         ('admin', 'System Admin'),
     )
     role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='student')
     phone = models.CharField(max_length=20, blank=True, null=True)
     tuition_paid_percentage = models.FloatField(default=100.0, help_text="Tuition clearance percentage (0.0 to 100.0)")
+    faculty = models.ForeignKey('Faculty', on_delete=models.SET_NULL, null=True, blank=True, related_name='students')
+    assigned_courses = models.ManyToManyField('Course', blank=True, related_name='assigned_students')
+    reg_number = models.CharField(max_length=50, blank=True, null=True, help_text="Official Registration Number (e.g. 2026/CIU/BIT/001)")
+
+    @property
+    def registration_number(self):
+        if self.reg_number:
+            return self.reg_number
+        if self.role == 'student':
+            f_code = self.faculty.code if self.faculty else 'FST'
+            return f"2026/CIU/{f_code}/{self.id:03d}"
+        return None
 
     def __str__(self):
         return f"{self.username} ({self.get_role_display()})"
@@ -73,7 +86,7 @@ class Application(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     transcript_details = models.TextField(help_text="Academic details, GPA, previous school, etc.")
     applied_at = models.DateTimeField(auto_now_add=True)
-    reviewed_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, limit_choices_to={'role__in': ['dean', 'dvc']}, related_name='reviewed_applications')
+    reviewed_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, limit_choices_to={'role__in': ['dean', 'dvc', 'vc']}, related_name='reviewed_applications')
     reviewer_feedback = models.TextField(blank=True, null=True)
 
     def __str__(self):
@@ -239,6 +252,7 @@ class ClassTimetable(models.Model):
     course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='class_timetables')
     course_unit = models.ForeignKey(CourseUnit, on_delete=models.CASCADE, null=True, blank=True, related_name='class_timetables')
     lecturer = models.ForeignKey(User, on_delete=models.CASCADE, limit_choices_to={'role': 'lecturer'}, related_name='class_timetables')
+    class_date = models.DateField(null=True, blank=True, help_text="Specific calendar date for the class slot")
     day_of_week = models.CharField(max_length=15, choices=DAY_CHOICES)
     start_time = models.TimeField()
     end_time = models.TimeField()
@@ -248,7 +262,8 @@ class ClassTimetable(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
-        return f"{self.course.code} ({self.day_of_week} {self.start_time}-{self.end_time} in {self.room})"
+        date_str = f" on {self.class_date}" if self.class_date else ""
+        return f"{self.course.code} ({self.day_of_week}{date_str} {self.start_time}-{self.end_time} in {self.room})"
 
 class ExamTimetable(models.Model):
     faculty = models.ForeignKey(Faculty, on_delete=models.CASCADE, related_name='exam_timetables')
