@@ -19,15 +19,15 @@ class User(AbstractUser):
     tuition_paid_percentage = models.FloatField(default=100.0, help_text="Tuition clearance percentage (0.0 to 100.0)")
     faculty = models.ForeignKey('Faculty', on_delete=models.SET_NULL, null=True, blank=True, related_name='students')
     assigned_courses = models.ManyToManyField('Course', blank=True, related_name='assigned_students')
-    reg_number = models.CharField(max_length=50, blank=True, null=True, help_text="Official Registration Number (e.g. 2026/CIU/BIT/001)")
+    reg_number = models.CharField(max_length=50, blank=True, null=True, help_text="Official Registration Number (e.g. 2026SOBAT-A001)")
 
     @property
     def registration_number(self):
         if self.reg_number:
             return self.reg_number
         if self.role == 'student':
-            f_code = self.faculty.code if self.faculty else 'FST'
-            return f"2026/CIU/{f_code}/{self.id:03d}"
+            f_code = (self.faculty.code if self.faculty else 'SOBAT').upper().replace(' ', '')
+            return f"2026{f_code}-A{self.id:03d}"
         return None
 
     def __str__(self):

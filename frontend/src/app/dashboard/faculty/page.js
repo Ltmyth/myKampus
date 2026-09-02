@@ -70,10 +70,12 @@ export default function FacultyManagementPage() {
   const [successMsg, setSuccessMsg] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  const isAdmin = user?.role === 'admin';
-  const isSecretaryOrStaff = ['faculty_admin', 'admin', 'dean', 'dvc'].includes(user?.role);
+  const isExecutiveReadOnly = ['dvc', 'vc', 'dean'].includes(user?.role);
+  const isAdmin = user?.role === 'admin' && !isExecutiveReadOnly;
+  const isSecretaryOrStaff = ['faculty_admin', 'admin'].includes(user?.role) && !isExecutiveReadOnly;
   const isStudent = user?.role === 'student';
-  const canAssignLecturer = ['admin', 'faculty_admin'].includes(user?.role);
+  const isLecturer = user?.role === 'lecturer';
+  const canAssignLecturer = ['admin', 'faculty_admin'].includes(user?.role) && !isExecutiveReadOnly;
 
   useEffect(() => {
     loadFacultyData();

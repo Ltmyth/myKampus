@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { api } from '@/lib/api';
 
@@ -31,10 +31,21 @@ export default function LoginPage() {
   const [successMsg, setSuccessMsg] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const inviteParam = params.get('invite');
+      if (inviteParam) {
+        setRegInviteCode(inviteParam);
+        setIsRegister(true);
+      }
+    }
+  }, []);
+
   const handleLoginSubmit = async (e) => {
     e.preventDefault();
     if (!loginUsername || !loginPassword) {
-      setErrorMsg('Please enter both username and password.');
+      setErrorMsg('Please enter your Registration Number (Students) or Username (Staff/Admin) and password.');
       return;
     }
     setErrorMsg('');
@@ -179,14 +190,19 @@ export default function LoginPage() {
               /* Sign In Form */
               <form onSubmit={handleLoginSubmit} className="space-y-4">
                 <div>
-                  <label className="block text-slate-700 text-xs font-semibold uppercase tracking-wider mb-1">Username</label>
+                  <label className="block text-slate-700 text-xs font-semibold uppercase tracking-wider mb-1">
+                    Registration Number (Students) / Username (Staff)
+                  </label>
                   <input 
                     type="text" 
                     value={loginUsername}
                     onChange={(e) => setLoginUsername(e.target.value)}
-                    placeholder="Enter your username" 
+                    placeholder="Reg No. (e.g. 2026SOBAT-A020) or Username" 
                     className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-brand-light/30 focus:border-brand-light transition-all"
                   />
+                  <p className="text-[10px] text-slate-500 mt-1 font-medium">
+                    * Students log in using official Registration Number (e.g. 2026SOBAT-A020). Staff/Admins use Username.
+                  </p>
                 </div>
                 <div>
                   <label className="block text-slate-700 text-xs font-semibold uppercase tracking-wider mb-1">Password</label>

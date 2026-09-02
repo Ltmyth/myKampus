@@ -11,6 +11,7 @@ export default function TestPortalPage() {
   const [tests, setTests] = useState([]);
   const [courses, setCourses] = useState([]);
   const [courseUnits, setCourseUnits] = useState([]);
+  const [faculties, setFaculties] = useState([]);
   const [attempts, setAttempts] = useState([]);
   const [proctoringSetting, setProctoringSetting] = useState({ is_proctoring_enabled: true });
   const [loading, setLoading] = useState(true);
@@ -19,6 +20,7 @@ export default function TestPortalPage() {
   const [activeTab, setActiveTab] = useState('catalog'); // 'catalog', 'builder', 'analytics', 'history'
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCourseFilter, setSelectedCourseFilter] = useState('');
+  const [selectedFacultyFilter, setSelectedFacultyFilter] = useState('All');
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState('');
 
   // Fee Gate Alert Modal
@@ -64,7 +66,10 @@ export default function TestPortalPage() {
   const [submitting, setSubmitting] = useState(false);
 
   const isAdmin = user?.role === 'admin';
-  const isStaff = ['lecturer', 'admin', 'faculty_admin', 'dean', 'registrar', 'dvc'].includes(user?.role);
+  const isExecutiveReadOnly = ['dvc', 'vc', 'dean'].includes(user?.role);
+  const isStaff = ['lecturer', 'admin', 'faculty_admin', 'dean', 'registrar', 'dvc', 'vc'].includes(user?.role);
+  const isLecturer = user?.role === 'lecturer';
+  const canBuildTest = ['lecturer', 'admin', 'faculty_admin'].includes(user?.role) && !isExecutiveReadOnly;
 
   useEffect(() => {
     loadPortalData();
@@ -73,16 +78,18 @@ export default function TestPortalPage() {
   async function loadPortalData() {
     try {
       setLoading(true);
-      const [testsData, coursesData, unitsData, attemptsData, procData] = await Promise.all([
+      const [testsData, coursesData, unitsData, facsData, attemptsData, procData] = await Promise.all([
         api.get('/tests/').catch(() => []),
         api.get('/courses/').catch(() => []),
         api.get('/course-units/').catch(() => []),
+        api.get('/faculties/').catch(() => []),
         api.get('/test-attempts/').catch(() => []),
         api.get('/proctoring-settings/').catch(() => ({ is_proctoring_enabled: true }))
       ]);
       setTests(testsData || []);
       setCourses(coursesData || []);
       setCourseUnits(unitsData || []);
+      setFaculties(facsData || []);
       setAttempts(attemptsData || []);
       setProctoringSetting(procData || { is_proctoring_enabled: true });
     } catch (err) {
@@ -92,19 +99,28 @@ export default function TestPortalPage() {
     }
   }
 
-  // Filter assigned courses for Lecturers
-  const assignedCourses = user?.role === 'lecturer'
+  // Filter assigned courses and faculties for Lecturers
+  const assignedCourses = isLecturer
     ? courses.filter(c => courseUnits.some(u => u.course_code === c.code && u.lecturer_details?.some(l => l.id === user.id)))
     : courses;
 
-  const handleDeleteTest = async (testId) => {
+  const scopedFaculties = isLecturer
+    ? faculties.filter(f => assignedCourses.some(c => c.faculty === f.id || c.faculty_code === f.code))
+    : faculties;
+
+  const handleDeleteTest = async (testItem) => {
+    if (isExecutiveReadOnly) return;
+    if (isLecturer && testItem.lecturer !== user.id && testItem.lecturer_name !== user.username) {
+      setErrorMsg('Permission Denied: You can only delete tests created by you.');
+      return;
+    }
     if (!confirm('Are you sure you want to delete this test paper?')) return;
     setErrorMsg('');
     setSuccessMsg('');
     try {
-      await api.delete(`/tests/${testId}/`);
+      await api.delete(`/tests/${testItem.id}/`);
       setSuccessMsg('Test paper deleted successfully.');
-      if (selectedTest?.id === testId) setSelectedTest(null);
+      if (selectedTest?.id === testItem.id) setSelectedTest(null);
       loadPortalData();
     } catch (err) {
       setErrorMsg(err.message || 'Failed to delete test paper.');
@@ -112,6 +128,11 @@ export default function TestPortalPage() {
   };
 
   const handleOpenEditTestModal = (testItem) => {
+    if (isExecutiveReadOnly) return;
+    if (isLecturer && testItem.lecturer !== user.id && testItem.lecturer_name !== user.username) {
+      setErrorMsg('Permission Denied: You can only edit tests created by you.');
+      return;
+    }
     setEditingTestModal(testItem);
     setEditTitle(testItem.title);
     setEditDuration(testItem.duration_minutes || 30);
@@ -123,7 +144,7 @@ export default function TestPortalPage() {
 
   const handleSaveEditTest = async (e) => {
     e.preventDefault();
-    if (!editingTestModal) return;
+    if (isExecutiveReadOnly || !editingTestModal) return;
     setErrorMsg('');
     setSuccessMsg('');
     setSubmitting(true);
@@ -151,6 +172,7 @@ export default function TestPortalPage() {
 
   const handleCreateTest = async (e) => {
     e.preventDefault();
+    if (isExecutiveReadOnly) return;
     if (!title || !selectedCourse) {
       setErrorMsg('Please specify a title and select a course.');
       return;
@@ -193,6 +215,7 @@ export default function TestPortalPage() {
   };
 
   const handleTogglePublish = async (testItem) => {
+    if (isExecutiveReadOnly) return;
     setErrorMsg('');
     setSuccessMsg('');
     try {
@@ -205,6 +228,7 @@ export default function TestPortalPage() {
   };
 
   const handleToggleResultsRelease = async (testItem) => {
+    if (isExecutiveReadOnly) return;
     setErrorMsg('');
     setSuccessMsg('');
     try {
@@ -217,6 +241,7 @@ export default function TestPortalPage() {
   };
 
   const handleToggleProctoring = async () => {
+    if (isExecutiveReadOnly) return;
     setErrorMsg('');
     setSuccessMsg('');
     try {
@@ -242,6 +267,7 @@ export default function TestPortalPage() {
 
   const handleAddQuestion = async (e) => {
     e.preventDefault();
+    if (isExecutiveReadOnly) return;
     if (!qText || !correctAnswer) {
       setErrorMsg('Please enter question text and specify correct answer.');
       return;
@@ -281,6 +307,7 @@ export default function TestPortalPage() {
   };
 
   const handleBulkSeedQuestions = async (testId) => {
+    if (isExecutiveReadOnly) return;
     setErrorMsg('');
     setSuccessMsg('');
     try {
@@ -298,11 +325,13 @@ export default function TestPortalPage() {
 
   const startTestAttempt = async (testId) => {
     setErrorMsg('');
-
-    // Tuition Fee Gate Check: Must have at least 50% tuition clearance for tests!
+    
+    // Tuition Fee Gate Check: Must have at least 50% tuition clearance or CIU API clearance!
     const tuitionPaid = user?.tuition_paid_percentage ?? 100.0;
-    if (user?.role === 'student' && tuitionPaid < 50.0) {
-      setFeeGateMessage(`Test Access Barred: Continuous assessment quizzes require at least 50% tuition fee clearance. Your current clearance is ${tuitionPaid}%. Please visit the Bursar / Finance Office to clear your fees.`);
+    const isTestCleared = user?.is_test_cleared ?? (tuitionPaid >= 50.0);
+
+    if (user?.role === 'student' && !isTestCleared) {
+      setFeeGateMessage(`Test Access Barred: Continuous assessment quizzes require at least 50% tuition fee clearance or CIU Cleared Students API verification. Your current clearance is ${tuitionPaid}%. Please visit the Bursar / Finance Office to clear your fees.`);
       setShowFeeGateModal(true);
       return;
     }
@@ -337,14 +366,31 @@ export default function TestPortalPage() {
                           t.course_code.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesCourse = selectedCourseFilter ? t.course === parseInt(selectedCourseFilter) : true;
     const matchesCategory = selectedCategoryFilter ? t.category === selectedCategoryFilter : true;
-    return matchesSearch && matchesCourse && matchesCategory;
+    const fCode = t.faculty_code || (courses.find(c => c.id === t.course)?.faculty_code);
+    const matchesFaculty = selectedFacultyFilter === 'All' ? true : fCode === selectedFacultyFilter;
+    return matchesSearch && matchesCourse && matchesCategory && matchesFaculty;
   });
 
   // Calculate Metrics
   const activeTestsCount = tests.filter(t => t.is_published).length;
   const totalSubmissions = attempts.filter(a => a.completed_at).length;
-  const avgScore = attempts.length > 0 ? (attempts.reduce((acc, curr) => acc + (curr.score || 0), 0) / attempts.length).toFixed(1) : '0';
   const passRate = attempts.length > 0 ? ((attempts.filter(a => a.passed).length / attempts.length) * 100).toFixed(1) : '0';
+
+  // Group Tests under Faculties for Staff
+  const activeFacultiesList = isLecturer ? scopedFaculties : faculties;
+  
+  const testFacultyGroups = activeFacultiesList.map(fac => {
+    const facTests = filteredTests.filter(t => {
+      const fCode = t.faculty_code || (courses.find(c => c.id === t.course)?.faculty_code);
+      return fCode === fac.code;
+    });
+    return { faculty: fac, tests: facTests };
+  });
+
+  const unassignedTests = filteredTests.filter(t => {
+    const fCode = t.faculty_code || (courses.find(c => c.id === t.course)?.faculty_code);
+    return !activeFacultiesList.some(f => f.code === fCode);
+  });
 
   if (loading) {
     return (
@@ -355,7 +401,7 @@ export default function TestPortalPage() {
   }
 
   return (
-    <div className="space-y-8 animate-fade-in">
+    <div className="space-y-8 animate-fade-in max-w-6xl mx-auto">
       
       {/* Header & Metrics */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-200 pb-5">
@@ -366,30 +412,31 @@ export default function TestPortalPage() {
 
         {/* Quick Metrics Bar & Proctoring Badge */}
         <div className="flex flex-wrap items-center gap-3">
+
           <div className={`px-3 py-1.5 rounded-xl border flex items-center space-x-2 ${proctoringSetting.is_proctoring_enabled ? 'bg-red-50 text-red-700 border-red-200 animate-pulse' : 'bg-slate-100 text-slate-600 border-slate-200'}`}>
             <span className="w-2.5 h-2.5 rounded-full bg-red-600"></span>
             <span className="text-xs font-extrabold uppercase">
               {proctoringSetting.is_proctoring_enabled ? 'Proctoring: ACTIVE' : 'Proctoring: OFF'}
             </span>
-            {isAdmin && (
+            {isAdmin && !isExecutiveReadOnly && (
               <button
                 onClick={handleToggleProctoring}
-                className="ml-2 px-2 py-0.5 bg-slate-900 text-white text-[10px] font-bold rounded hover:bg-slate-700"
+                className="ml-2 px-2 py-0.5 bg-brand-dark text-white text-[10px] font-bold rounded hover:bg-brand-medium"
               >
                 Toggle
               </button>
             )}
           </div>
 
-          <div className="bg-white px-3 py-1.5 rounded-xl border border-slate-200 shadow-sm text-center">
+          <div className="green-card px-3.5 py-1.5 rounded-xl text-center">
             <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Active Tests</span>
             <span className="text-sm font-extrabold text-brand-dark">{activeTestsCount}</span>
           </div>
-          <div className="bg-white px-3 py-1.5 rounded-xl border border-slate-200 shadow-sm text-center">
+          <div className="green-card px-3.5 py-1.5 rounded-xl text-center">
             <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Submissions</span>
             <span className="text-sm font-extrabold text-brand-medium">{totalSubmissions}</span>
           </div>
-          <div className="bg-white px-3 py-1.5 rounded-xl border border-slate-200 shadow-sm text-center">
+          <div className="green-card px-3.5 py-1.5 rounded-xl text-center">
             <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Pass Rate</span>
             <span className="text-sm font-extrabold text-emerald-600">{passRate}%</span>
           </div>
@@ -409,8 +456,8 @@ export default function TestPortalPage() {
         </div>
       )}
 
-      {/* Toolbar: Search, Course Filter, Category Filter */}
-      <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-white p-4 rounded-2xl border border-slate-150 shadow-sm">
+      {/* Toolbar: Search, Faculty Filter, Course Filter, Category Filter */}
+      <div className="flex flex-col sm:flex-row items-center justify-between gap-3 green-card p-4 rounded-2xl">
         
         <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
           {/* Search bar */}
@@ -419,8 +466,22 @@ export default function TestPortalPage() {
             placeholder="Search tests or courses..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs w-full sm:w-48 focus:outline-none focus:ring-1 focus:ring-brand-light"
+            className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs w-full sm:w-44 focus:outline-none focus:ring-1 focus:ring-brand-light"
           />
+
+          {/* Staff Faculty Filter */}
+          {isStaff && (
+            <select
+              value={selectedFacultyFilter}
+              onChange={(e) => setSelectedFacultyFilter(e.target.value)}
+              className="px-3 py-1.5 bg-slate-50 border border-slate-200 text-slate-800 text-xs font-bold rounded-lg focus:outline-none focus:ring-1 focus:ring-brand-light"
+            >
+              <option value="All">All Faculties ({activeFacultiesList.length})</option>
+              {activeFacultiesList.map((f) => (
+                <option key={f.id} value={f.code}>[{f.code}] {f.name}</option>
+              ))}
+            </select>
+          )}
 
           {/* Course filter */}
           <select
@@ -428,8 +489,8 @@ export default function TestPortalPage() {
             onChange={(e) => setSelectedCourseFilter(e.target.value)}
             className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs focus:outline-none focus:ring-1 focus:ring-brand-light"
           >
-            <option value="">All Courses</option>
-            {courses.map((c) => (
+            <option value="">All Courses ({assignedCourses.length})</option>
+            {assignedCourses.map((c) => (
               <option key={c.id} value={c.id}>[{c.code}] {c.name}</option>
             ))}
           </select>
@@ -450,7 +511,7 @@ export default function TestPortalPage() {
         </div>
 
         {/* Tab Buttons */}
-        <div className="flex items-center space-x-1 bg-slate-100 p-1 rounded-xl w-full sm:w-auto justify-center">
+        <div className="flex items-center space-x-1 bg-emerald-50/60 border border-emerald-200/60 p-1 rounded-xl w-full sm:w-auto justify-center">
           <button
             onClick={() => setActiveTab('catalog')}
             className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${activeTab === 'catalog' ? 'bg-white text-brand-dark shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
@@ -458,21 +519,22 @@ export default function TestPortalPage() {
             Test Catalog
           </button>
           
+          {canBuildTest && (
+            <button
+              onClick={() => setActiveTab('builder')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${activeTab === 'builder' ? 'bg-white text-brand-dark shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+            >
+              Test Builder
+            </button>
+          )}
+
           {isStaff && (
-            <>
-              <button
-                onClick={() => setActiveTab('builder')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${activeTab === 'builder' ? 'bg-white text-brand-dark shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
-              >
-                Test Builder
-              </button>
-              <button
-                onClick={() => setActiveTab('analytics')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${activeTab === 'analytics' ? 'bg-white text-brand-dark shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
-              >
-                Submissions
-              </button>
-            </>
+            <button
+              onClick={() => setActiveTab('analytics')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${activeTab === 'analytics' ? 'bg-white text-brand-dark shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+            >
+              Submissions
+            </button>
           )}
 
           {!isStaff && (
@@ -487,101 +549,45 @@ export default function TestPortalPage() {
 
       </div>
 
-      {/* TAB 1: CATALOG */}
+      {/* TAB 1: CATALOG (Organized by Faculty for Staff) */}
       {activeTab === 'catalog' && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {filteredTests.length === 0 ? (
-            <div className="col-span-full py-16 bg-white rounded-2xl border border-slate-100 text-center">
-              <p className="text-slate-400 text-xs font-semibold">No tests match your active search or filter rules.</p>
-            </div>
-          ) : (
-            filteredTests.map((testItem) => {
-              const myAttempt = attempts.find(a => a.test === testItem.id);
-              return (
-                <div key={testItem.id} className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm hover:shadow-md transition-all flex flex-col justify-between space-y-4">
-                  
-                  {/* Top card info */}
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider bg-emerald-50 text-emerald-700 border border-emerald-100">
-                        {testItem.category.replace('_', ' ')}
-                      </span>
-                      <div className="flex items-center space-x-1">
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${testItem.is_published ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}>
-                          {testItem.is_published ? 'PUBLISHED' : 'DRAFT'}
+        user.role === 'student' ? (
+          /* Student Card Grid */
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {filteredTests.length === 0 ? (
+              <div className="col-span-full py-16 green-card rounded-2xl text-center">
+                <p className="text-slate-400 text-xs font-semibold">No tests match your active search or filter rules.</p>
+              </div>
+            ) : (
+              filteredTests.map((testItem) => {
+                const myAttempt = attempts.find(a => a.test === testItem.id);
+                return (
+                  <div key={testItem.id} className="green-card rounded-2xl p-5 flex flex-col justify-between space-y-4">
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider bg-emerald-50 text-emerald-700 border border-emerald-100">
+                          {testItem.category.replace('_', ' ')}
                         </span>
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${testItem.is_results_released ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-purple-50 text-purple-700 border-purple-200'}`}>
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${testItem.is_results_released ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-slate-200 text-slate-600 border-slate-300'}`}>
                           {testItem.is_results_released ? 'RESULTS RELEASED' : 'WITHHELD'}
                         </span>
                       </div>
+
+                      <h3 className="font-bold text-slate-850 text-base leading-tight">{testItem.title}</h3>
+                      <p className="text-xs text-slate-500 font-medium">Course: <span className="font-semibold text-slate-800">[{testItem.course_code}] {testItem.course_name}</span></p>
+                      
+                      <div className="pt-2 text-[11px] text-slate-600 space-y-1 bg-slate-50 p-2.5 rounded-xl border border-slate-100 font-medium">
+                        <p>⏱️ Duration: <span className="font-bold text-slate-800">{testItem.duration_minutes} mins</span> | 🎯 Pass Mark: <span className="font-bold text-slate-800">{testItem.pass_percentage}%</span></p>
+                        <p>📅 Scheduled Start: <span className="font-bold text-slate-800">{testItem.scheduled_start ? new Date(testItem.scheduled_start).toLocaleString([], {year:'numeric', month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'}) : 'Open Anytime'}</span></p>
+                        {testItem.due_date && (
+                          <p>⏳ Due Date (Deadline): <span className="font-bold text-amber-700">{new Date(testItem.due_date).toLocaleString([], {year:'numeric', month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'})}</span></p>
+                        )}
+                        <p>❓ Questions: <span className="font-bold text-slate-800">{testItem.questions_count}</span> | 💰 Fee Gate: <span className="font-bold text-emerald-700">50%+ Paid</span></p>
+                      </div>
                     </div>
 
-                    <h3 className="font-bold text-slate-850 text-base leading-tight">{testItem.title}</h3>
-                    <p className="text-xs text-slate-500 font-medium">Course: <span className="font-semibold text-slate-800">[{testItem.course_code}] {testItem.course_name}</span></p>
-                    
-                    <div className="pt-2 text-[11px] text-slate-600 space-y-1 bg-slate-50 p-2.5 rounded-xl border border-slate-100 font-medium">
-                      <p>⏱️ Duration: <span className="font-bold text-slate-800">{testItem.duration_minutes} mins</span> | 🎯 Pass Mark: <span className="font-bold text-slate-800">{testItem.pass_percentage}%</span></p>
-                      <p>📅 Scheduled Start: <span className="font-bold text-slate-800">{testItem.scheduled_start ? new Date(testItem.scheduled_start).toLocaleString([], {year:'numeric', month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'}) : 'Open Anytime'}</span></p>
-                      {testItem.due_date && (
-                        <p>⏳ Due Date (Deadline): <span className="font-bold text-amber-700">{new Date(testItem.due_date).toLocaleString([], {year:'numeric', month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'})}</span></p>
-                      )}
-                      <p>❓ Questions: <span className="font-bold text-slate-800">{testItem.questions_count}</span> | 💰 Fee Gate: <span className="font-bold text-emerald-700">50%+ Paid</span></p>
-                    </div>
-                  </div>
-
-                  {/* Actions */}
-                  <div className="pt-2 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
-                    {isStaff ? (
-                      <>
-                        <button
-                          onClick={() => handleSelectTestForQuestions(testItem)}
-                          className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold rounded-lg transition-all"
-                        >
-                          Questions ({testItem.questions_count})
-                        </button>
-                        
-                        <button
-                          onClick={() => handleTogglePublish(testItem)}
-                          className={`px-2.5 py-1.5 text-xs font-bold rounded-lg transition-all ${testItem.is_published ? 'bg-amber-50 text-amber-700 border border-amber-200' : 'bg-brand-light text-white'}`}
-                        >
-                          {testItem.is_published ? 'Unpublish' : 'Publish'}
-                        </button>
-
-                        <button
-                          onClick={() => handleToggleResultsRelease(testItem)}
-                          className={`px-2.5 py-1.5 text-xs font-bold rounded-lg transition-all ${testItem.is_results_released ? 'bg-purple-100 text-purple-800 border border-purple-200' : 'bg-blue-600 text-white'}`}
-                          title="Toggle student score release"
-                        >
-                          {testItem.is_results_released ? '🔒 Withhold' : '📢 Release'}
-                        </button>
-
-                        <button
-                          onClick={() => handleOpenEditTestModal(testItem)}
-                          className="px-2.5 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-bold rounded-lg transition-all"
-                          title="Edit test paper details"
-                        >
-                          ✏️ Edit
-                        </button>
-
-                        <button
-                          onClick={() => handleDeleteTest(testItem.id)}
-                          className="px-2.5 py-1.5 bg-red-50 hover:bg-red-100 text-red-700 text-xs font-bold rounded-lg transition-all"
-                          title="Delete test paper"
-                        >
-                          🗑️ Delete
-                        </button>
-
-                        <button
-                          onClick={() => downloadResultsCSV(testItem.id)}
-                          className="p-1.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-600 rounded-lg text-xs font-bold"
-                          title="Export Test Results CSV"
-                        >
-                          📊 CSV
-                        </button>
-                      </>
-                    ) : (
-                      /* Student Actions */
-                      myAttempt ? (
+                    <div className="pt-2 border-t border-slate-100">
+                      {myAttempt ? (
                         myAttempt.completed_at ? (
                           <div className="w-full flex items-center justify-between">
                             {testItem.is_results_released ? (
@@ -597,7 +603,7 @@ export default function TestPortalPage() {
                                 </button>
                               </>
                             ) : (
-                              <span className="w-full text-center px-2.5 py-1.5 rounded text-xs font-bold bg-purple-50 text-purple-700 border border-purple-200">
+                              <span className="w-full text-center px-2.5 py-1.5 rounded text-xs font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
                                 🔒 Results Pending Release by Lecturer
                               </span>
                             )}
@@ -618,23 +624,162 @@ export default function TestPortalPage() {
                         >
                           Launch Test
                         </button>
-                      )
-                    )}
+                      )}
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        ) : (
+          /* STAFF FACULTY ORGANIZED TESTS VIEW */
+          <div className="space-y-8">
+            {testFacultyGroups.map(({ faculty, tests: facTests }) => {
+              if (selectedFacultyFilter !== 'All' && faculty.code !== selectedFacultyFilter) return null;
+              return (
+                <div key={faculty.id} className="green-card rounded-2xl p-6 space-y-4">
+                  
+                  {/* Faculty Header */}
+                  <div className="flex items-center justify-between border-b border-emerald-100 pb-3">
+                    <div className="flex items-center space-x-2">
+                      <span className="px-2.5 py-1 bg-brand-light/10 text-brand-dark font-black text-xs rounded-lg border border-brand-light/20 uppercase">
+                        {faculty.code}
+                      </span>
+                      <h3 className="text-base font-bold text-slate-850">{faculty.name}</h3>
+                    </div>
+                    <span className="text-xs font-extrabold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-xl border border-emerald-200">
+                      {facTests.length} Tests Published
+                    </span>
                   </div>
 
+                  {facTests.length === 0 ? (
+                    <p className="text-slate-400 text-xs py-4 text-center italic">No tests created for {faculty.name} yet.</p>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                      {facTests.map((testItem) => {
+                        const canManageThisTest = isAdmin || (isLecturer && (testItem.lecturer === user.id || testItem.lecturer_name === user.username));
+                        return (
+                          <div key={testItem.id} className="bg-gradient-to-br from-white to-emerald-50/30 rounded-2xl border border-emerald-200/80 p-5 shadow-sm hover:border-emerald-300 transition-all flex flex-col justify-between space-y-3">
+                            <div className="space-y-2">
+                              <div className="flex items-center justify-between">
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                  {testItem.category.replace('_', ' ')}
+                                </span>
+                                <div className="flex items-center space-x-1">
+                                  <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${testItem.is_published ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}>
+                                    {testItem.is_published ? 'PUBLISHED' : 'DRAFT'}
+                                  </span>
+                                  <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${testItem.is_results_released ? 'bg-emerald-50 text-emerald-800 border-emerald-200' : 'bg-slate-200 text-slate-600 border-slate-300'}`}>
+                                    {testItem.is_results_released ? 'RELEASED' : 'WITHHELD'}
+                                  </span>
+                                </div>
+                              </div>
+
+                              <h4 className="font-bold text-slate-850 text-base leading-tight">{testItem.title}</h4>
+                              <p className="text-xs text-slate-500 font-medium">Course: <span className="font-semibold text-slate-800">[{testItem.course_code}] {testItem.course_name}</span></p>
+                              <p className="text-xs text-slate-500">Lecturer: <span className="font-semibold text-slate-800">{testItem.lecturer_name}</span></p>
+                              
+                              <div className="pt-2 text-[11px] text-slate-600 space-y-1 bg-white p-2.5 rounded-xl border border-slate-200 font-medium">
+                                <p>⏱️ Duration: <span className="font-bold text-slate-800">{testItem.duration_minutes} mins</span> | 🎯 Pass Mark: <span className="font-bold text-slate-800">{testItem.pass_percentage}%</span></p>
+                                <p>❓ Questions: <span className="font-bold text-slate-800">{testItem.questions_count}</span></p>
+                              </div>
+                            </div>
+
+                            {/* Actions */}
+                            <div className="pt-2 border-t border-slate-200 flex flex-wrap items-center justify-between gap-1">
+                              <button
+                                onClick={() => handleSelectTestForQuestions(testItem)}
+                                className="px-2 py-1 bg-white border border-emerald-200 hover:bg-emerald-50 text-slate-800 text-xs font-bold rounded-lg transition-all"
+                              >
+                                Questions ({testItem.questions_count})
+                              </button>
+                              
+                              {!isExecutiveReadOnly && (
+                                <>
+                                  {canManageThisTest && (
+                                    <>
+                                      <button
+                                        onClick={() => handleTogglePublish(testItem)}
+                                        className={`px-2 py-1 text-xs font-bold rounded-lg transition-all ${testItem.is_published ? 'bg-amber-50 text-amber-700 border border-amber-200' : 'bg-brand-light text-white'}`}
+                                      >
+                                        {testItem.is_published ? 'Unpublish' : 'Publish'}
+                                      </button>
+
+                                      <button
+                                        onClick={() => handleToggleResultsRelease(testItem)}
+                                        className={`px-2 py-1 text-xs font-bold rounded-lg transition-all ${testItem.is_results_released ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' : 'bg-emerald-600 text-white'}`}
+                                        title="Toggle student score release"
+                                      >
+                                        {testItem.is_results_released ? '🔒 Withhold' : '📢 Release'}
+                                      </button>
+
+                                      <button
+                                        onClick={() => handleOpenEditTestModal(testItem)}
+                                        className="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-bold rounded-lg transition-all border border-emerald-200"
+                                        title="Edit test paper details"
+                                      >
+                                        ✏️ Edit
+                                      </button>
+
+                                      <button
+                                        onClick={() => handleDeleteTest(testItem)}
+                                        className="px-2 py-1 bg-red-50 hover:bg-red-100 text-red-700 text-xs font-bold rounded-lg transition-all border border-red-200"
+                                        title="Delete test paper"
+                                      >
+                                        🗑️ Delete
+                                      </button>
+                                    </>
+                                  )}
+                                </>
+                              )}
+
+                              <button
+                                onClick={() => downloadResultsCSV(testItem.id)}
+                                className="p-1 bg-white hover:bg-slate-100 border border-slate-200 text-slate-600 rounded-lg text-xs font-bold"
+                                title="Export Test Results CSV"
+                              >
+                                📊 CSV
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               );
-            })
-          )}
-        </div>
+            })}
+
+            {/* Unassigned Tests */}
+            {unassignedTests.length > 0 && (
+              <div className="green-card rounded-2xl p-6 space-y-4">
+                <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">General / Unassigned Faculty Tests</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {unassignedTests.map((testItem) => (
+                    <div key={testItem.id} className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
+                      <h4 className="font-bold text-slate-850 text-sm">{testItem.title}</h4>
+                      <p className="text-xs text-slate-500">Course: {testItem.course_code} · Lecturer: {testItem.lecturer_name}</p>
+                      <button
+                        onClick={() => handleSelectTestForQuestions(testItem)}
+                        className="px-3 py-1 bg-white border border-slate-200 text-slate-800 text-xs font-bold rounded-lg"
+                      >
+                        Questions ({testItem.questions_count})
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )
       )}
 
       {/* TAB 2: TEST BUILDER & QUESTION EDITOR (Staff) */}
-      {isStaff && activeTab === 'builder' && (
+      {canBuildTest && activeTab === 'builder' && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           
           {/* Create Test Form */}
-          <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-4">
+          <div className="green-card rounded-2xl p-6 space-y-4">
             <h3 className="text-sm font-bold text-slate-850 uppercase tracking-wider">Create New Test</h3>
 
             <form onSubmit={handleCreateTest} className="space-y-3">
@@ -714,7 +859,7 @@ export default function TestPortalPage() {
 
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Scheduled Start Date/Time</label>
+                  <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Scheduled Start</label>
                   <input
                     type="datetime-local"
                     value={scheduledStart}
@@ -723,7 +868,7 @@ export default function TestPortalPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Due Date/Time (Deadline)</label>
+                  <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Due Date</label>
                   <input
                     type="datetime-local"
                     value={dueDate}
@@ -755,24 +900,26 @@ export default function TestPortalPage() {
           </div>
 
           {/* Question Builder */}
-          <div className="lg:col-span-2 bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-4">
+          <div className="lg:col-span-2 green-card rounded-2xl p-6 space-y-4">
             {selectedTest ? (
               <div className="space-y-4">
                 
                 {/* Header & Preset Seeder */}
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-emerald-100 pb-3">
                   <div>
                     <h3 className="text-sm font-bold text-slate-850">Managing Question Bank</h3>
                     <p className="text-xs text-brand-medium font-semibold">Test: {selectedTest.title} ({selectedTest.course_code})</p>
                   </div>
 
                   <div className="flex items-center space-x-2">
-                    <button
-                      onClick={() => handleBulkSeedQuestions(selectedTest.id)}
-                      className="px-3 py-1.5 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 text-xs font-bold rounded-lg transition-all"
-                    >
-                      ⚡ Seed Sample Package
-                    </button>
+                    {!isExecutiveReadOnly && (
+                      <button
+                        onClick={() => handleBulkSeedQuestions(selectedTest.id)}
+                        className="px-3 py-1.5 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 text-xs font-bold rounded-lg transition-all"
+                      >
+                        ⚡ Seed Sample Package
+                      </button>
+                    )}
                     <button
                       onClick={() => setSelectedTest(null)}
                       className="px-2.5 py-1.5 text-xs text-slate-400 hover:text-slate-600 font-semibold"
@@ -798,86 +945,65 @@ export default function TestPortalPage() {
                           <p className="text-slate-500 font-medium">A: {q.option_a} | B: {q.option_b} | C: {q.option_c} | D: {q.option_d}</p>
                         )}
                         <p className="text-emerald-700 font-bold">Answer Key: {q.correct_answer}</p>
-                        {q.explanation && <p className="text-slate-400 italic text-[11px]">Note: {q.explanation}</p>}
                       </div>
                     ))
                   )}
                 </div>
 
                 {/* Add Question Form */}
-                <form onSubmit={handleAddQuestion} className="space-y-3 pt-3 border-t border-slate-100">
-                  <div className="grid grid-cols-3 gap-2">
-                    <div className="col-span-2">
-                      <label className="block text-[10px] font-bold uppercase text-slate-700 mb-0.5">Question Text</label>
-                      <input
-                        type="text"
+                {!isExecutiveReadOnly && (
+                  <form onSubmit={handleAddQuestion} className="space-y-3 pt-3 border-t border-slate-100 text-xs">
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Question Prompt</label>
+                      <textarea
+                        rows={2}
                         value={qText}
                         onChange={(e) => setQText(e.target.value)}
-                        placeholder="Type question text..."
-                        className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs"
+                        placeholder="Type question prompt..."
+                        className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs"
+                        required
                       />
                     </div>
-                    <div>
-                      <label className="block text-[10px] font-bold uppercase text-slate-700 mb-0.5">Type</label>
-                      <select
-                        value={qType}
-                        onChange={(e) => setQType(e.target.value)}
-                        className="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs"
-                      >
-                        <option value="mcq">Multiple Choice</option>
-                        <option value="tf">True / False</option>
-                        <option value="short">Short Answer</option>
-                      </select>
-                    </div>
-                  </div>
 
-                  {qType === 'mcq' && (
                     <div className="grid grid-cols-2 gap-2">
-                      <input type="text" placeholder="Option A" value={optA} onChange={(e) => setOptA(e.target.value)} className="px-2 py-1 bg-slate-50 border border-slate-200 rounded text-xs" />
-                      <input type="text" placeholder="Option B" value={optB} onChange={(e) => setOptB(e.target.value)} className="px-2 py-1 bg-slate-50 border border-slate-200 rounded text-xs" />
-                      <input type="text" placeholder="Option C" value={optC} onChange={(e) => setOptC(e.target.value)} className="px-2 py-1 bg-slate-50 border border-slate-200 rounded text-xs" />
-                      <input type="text" placeholder="Option D" value={optD} onChange={(e) => setOptD(e.target.value)} className="px-2 py-1 bg-slate-50 border border-slate-200 rounded text-xs" />
-                    </div>
-                  )}
-
-                  <div className="grid grid-cols-3 gap-2">
-                    <div>
-                      <label className="block text-[10px] font-bold uppercase text-slate-700 mb-0.5">Correct Answer</label>
-                      {qType === 'mcq' ? (
-                        <select value={correctAnswer} onChange={(e) => setCorrectAnswer(e.target.value)} className="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs">
-                          <option value="A">A</option><option value="B">B</option><option value="C">C</option><option value="D">D</option>
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Question Type</label>
+                        <select value={qType} onChange={(e) => setQType(e.target.value)} className="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs">
+                          <option value="mcq">Multiple Choice</option>
+                          <option value="tf">True / False</option>
+                          <option value="short">Short Answer</option>
                         </select>
-                      ) : qType === 'tf' ? (
-                        <select value={correctAnswer} onChange={(e) => setCorrectAnswer(e.target.value)} className="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs">
-                          <option value="True">True</option><option value="False">False</option>
-                        </select>
-                      ) : (
-                        <input type="text" placeholder="Target word key..." value={correctAnswer} onChange={(e) => setCorrectAnswer(e.target.value)} className="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs" />
-                      )}
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Points</label>
+                        <input type="number" step="0.5" value={points} onChange={(e) => setPoints(e.target.value)} className="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs" />
+                      </div>
                     </div>
-                    <div>
-                      <label className="block text-[10px] font-bold uppercase text-slate-700 mb-0.5">Points</label>
-                      <input type="number" step="0.5" value={points} onChange={(e) => setPoints(e.target.value)} className="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs" />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-bold uppercase text-slate-700 mb-0.5">Explanatory Note</label>
-                      <input type="text" placeholder="Why this is correct..." value={explanation} onChange={(e) => setExplanation(e.target.value)} className="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs" />
-                    </div>
-                  </div>
 
-                  <button
-                    type="submit"
-                    disabled={submitting}
-                    className="w-full py-2 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-lg transition-all"
-                  >
-                    {submitting ? 'Appending...' : 'Append Question'}
-                  </button>
-                </form>
+                    {qType === 'mcq' && (
+                      <div className="grid grid-cols-2 gap-2">
+                        <input type="text" placeholder="Option A" value={optA} onChange={(e) => setOptA(e.target.value)} className="px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs" required />
+                        <input type="text" placeholder="Option B" value={optB} onChange={(e) => setOptB(e.target.value)} className="px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs" required />
+                        <input type="text" placeholder="Option C" value={optC} onChange={(e) => setOptC(e.target.value)} className="px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs" required />
+                        <input type="text" placeholder="Option D" value={optD} onChange={(e) => setOptD(e.target.value)} className="px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs" required />
+                      </div>
+                    )}
+
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Correct Answer / Key</label>
+                      <input type="text" placeholder="A, B, C, D, True, False, or short answer text" value={correctAnswer} onChange={(e) => setCorrectAnswer(e.target.value)} className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs" required />
+                    </div>
+
+                    <button type="submit" disabled={submitting} className="w-full py-2 bg-brand-light text-white text-xs font-bold rounded-lg shadow-sm">
+                      Add Question to Test
+                    </button>
+                  </form>
+                )}
 
               </div>
             ) : (
-              <div className="py-24 text-center text-slate-400 text-xs font-semibold">
-                👈 Select a test from the Test Catalog or create a new test to edit its question paper.
+              <div className="py-16 text-center text-slate-400 text-xs font-semibold">
+                Select a test from the Test Catalog or create one using the builder form on the left.
               </div>
             )}
           </div>
@@ -887,13 +1013,11 @@ export default function TestPortalPage() {
 
       {/* TAB 3: SUBMISSIONS ANALYTICS (Staff) */}
       {isStaff && activeTab === 'analytics' && (
-        <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-4">
-          <div className="flex items-center justify-between">
-            <h3 className="text-sm font-bold text-slate-850 uppercase tracking-wider">Student Test Submissions & Score Log</h3>
-          </div>
-
+        <div className="green-card rounded-2xl p-6 space-y-4">
+          <h3 className="text-sm font-bold text-slate-850 uppercase tracking-wider">Student Assessment Attempt Records</h3>
+          
           {attempts.length === 0 ? (
-            <p className="text-slate-400 text-xs py-8 text-center">No student test attempts logged yet.</p>
+            <p className="text-slate-400 text-xs py-8 text-center">No student test attempts recorded yet.</p>
           ) : (
             <div className="overflow-x-auto custom-scrollbar border border-slate-200 rounded-xl">
               <table className="w-full text-left text-xs border-collapse">
@@ -901,31 +1025,25 @@ export default function TestPortalPage() {
                   <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 uppercase font-semibold">
                     <th className="px-4 py-3">Student</th>
                     <th className="px-4 py-3">Test Title</th>
-                    <th className="px-4 py-3">Course Code</th>
-                    <th className="px-4 py-3">Attempt #</th>
-                    <th className="px-4 py-3 text-center">Score %</th>
+                    <th className="px-4 py-3">Category</th>
+                    <th className="px-4 py-3 text-center">Score (%)</th>
                     <th className="px-4 py-3 text-center">Status</th>
                     <th className="px-4 py-3">Submitted At</th>
-                    <th className="px-4 py-3 text-center">Tab Switches</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 text-slate-700">
                   {attempts.map((att) => (
                     <tr key={att.id} className="hover:bg-slate-50 transition-all">
-                      <td className="px-4 py-3 font-bold text-slate-800">{att.student_name}</td>
-                      <td className="px-4 py-3 font-medium">{att.test_title}</td>
-                      <td className="px-4 py-3">{att.test_course_code}</td>
-                      <td className="px-4 py-3 font-semibold text-center">#{att.attempt_number}</td>
-                      <td className="px-4 py-3 text-center font-bold text-slate-900">{att.score}%</td>
+                      <td className="px-4 py-3 font-bold text-slate-850">{att.student_name}</td>
+                      <td className="px-4 py-3 font-medium text-slate-800">{att.test_title}</td>
+                      <td className="px-4 py-3 capitalize">{att.test_category}</td>
+                      <td className="px-4 py-3 text-center font-bold text-brand-dark">{att.score}%</td>
                       <td className="px-4 py-3 text-center">
-                        <span className={`px-2.5 py-0.5 rounded text-[10px] font-extrabold border ${att.passed ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-red-50 text-red-700 border-red-200'}`}>
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${att.passed ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-red-50 text-red-700 border-red-200'}`}>
                           {att.passed ? 'PASSED' : 'FAILED'}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-slate-500">
-                        {att.completed_at ? new Date(att.completed_at).toLocaleString() : 'In Progress'}
-                      </td>
-                      <td className="px-4 py-3 text-center font-bold text-amber-700">{att.tab_switches_count}</td>
+                      <td className="px-4 py-3 text-slate-500 text-[11px]">{att.completed_at ? new Date(att.completed_at).toLocaleString() : 'In Progress'}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -935,110 +1053,35 @@ export default function TestPortalPage() {
         </div>
       )}
 
-      {/* TAB 4: MY PERFORMANCE (Student) */}
-      {!isStaff && activeTab === 'history' && (
-        <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-4">
-          <h3 className="text-sm font-bold text-slate-850 uppercase tracking-wider">My Test Performance Log</h3>
-          
-          {attempts.length === 0 ? (
-            <p className="text-slate-400 text-xs py-8 text-center">You have not completed any tests yet.</p>
-          ) : (
-            <div className="space-y-3">
-              {attempts.map((att) => (
-                <div key={att.id} className="p-4 bg-slate-50 rounded-xl border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div>
-                    <h4 className="font-bold text-sm text-slate-800">{att.test_title}</h4>
-                    <p className="text-xs text-slate-500">Course: {att.test_course_code} · Attempt #{att.attempt_number} · Submitted: {att.completed_at ? new Date(att.completed_at).toLocaleString() : 'In Progress'}</p>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    {att.is_results_released ? (
-                      <>
-                        <span className={`px-3 py-1 rounded text-xs font-bold border ${att.passed ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-red-50 text-red-700 border-red-200'}`}>
-                          {att.score}% ({att.passed ? 'PASSED' : 'FAILED'})
-                        </span>
-                        <button
-                          onClick={() => router.push(`/dashboard/tests/${att.test}/results?attemptId=${att.id}`)}
-                          className="px-3 py-1.5 bg-brand-light text-white text-xs font-bold rounded-lg hover:bg-brand-medium"
-                        >
-                          View Review Scorecard
-                        </button>
-                      </>
-                    ) : (
-                      <span className="px-3 py-1 rounded text-xs font-bold bg-purple-50 text-purple-700 border border-purple-200">
-                        🔒 Results Withheld by Lecturer
-                      </span>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* FEE GATE MODAL */}
-      {showFeeGateModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fade-in">
-          <div className="bg-white rounded-3xl p-6 md:p-8 max-w-md w-full shadow-2xl border border-red-100 space-y-5 text-center relative animate-scale-up">
-            <div className="w-14 h-14 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto text-2xl font-bold">
-              ⛔
-            </div>
-
-            <div>
-              <h3 className="text-lg font-bold text-slate-900">Tuition Fee Clearance Required</h3>
-              <p className="text-xs text-slate-500 font-medium mt-1">Continuous Assessment Access Gate Policy</p>
-            </div>
-
-            <div className="p-4 bg-red-50 border border-red-200 rounded-2xl text-xs text-red-800 space-y-2 text-left">
-              <p className="font-semibold">{feeGateMessage}</p>
-              <div className="pt-2 border-t border-red-200/60 text-[11px] text-red-700 space-y-1 font-mono">
-                <p>• Test Minimum Threshold: <strong>50% Paid</strong></p>
-                <p>• Exam Minimum Threshold: <strong>100% Full Clearance</strong></p>
-                <p>• Your Current Clearance: <strong>{user?.tuition_paid_percentage ?? 0}%</strong></p>
-              </div>
-            </div>
-
-            <div className="flex space-x-3 pt-2">
-              <button
-                onClick={() => setShowFeeGateModal(false)}
-                className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-xl transition-all"
-              >
-                Close & Contact Bursar Office
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* EDIT TEST MODAL (STAFF / LECTURER) */}
-      {editingTestModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fade-in">
-          <div className="bg-white rounded-3xl p-6 max-w-lg w-full shadow-2xl border border-slate-100 space-y-5 relative">
-            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
-              <h3 className="text-base font-bold text-slate-850">Edit Test Paper Details</h3>
+      {/* MODAL: EDIT TEST (Staff) */}
+      {editingTestModal && !isExecutiveReadOnly && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4 animate-fade-in">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 space-y-4 shadow-2xl border border-emerald-200">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-2">
+              <h3 className="text-sm font-bold text-slate-850">Edit Test Paper Details</h3>
               <button onClick={() => setEditingTestModal(null)} className="text-slate-400 hover:text-slate-600 font-bold">✕</button>
             </div>
 
-            <form onSubmit={handleSaveEditTest} className="space-y-4 text-xs">
+            <form onSubmit={handleSaveEditTest} className="space-y-3 text-xs">
               <div>
                 <label className="block text-slate-700 font-bold uppercase mb-1">Test Title</label>
                 <input
                   type="text"
                   value={editTitle}
                   onChange={(e) => setEditTitle(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold"
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
                   required
                 />
               </div>
 
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="block text-slate-700 font-bold uppercase mb-1">Duration (Mins)</label>
                   <input
                     type="number"
                     value={editDuration}
                     onChange={(e) => setEditDuration(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold"
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
                     required
                   />
                 </div>
@@ -1048,60 +1091,63 @@ export default function TestPortalPage() {
                     type="number"
                     value={editPassPercentage}
                     onChange={(e) => setEditPassPercentage(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold"
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="block text-slate-700 font-bold uppercase mb-1">Max Attempts</label>
-                  <input
-                    type="number"
-                    value={editAllowedAttempts}
-                    onChange={(e) => setEditAllowedAttempts(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold"
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
                     required
                   />
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="block text-slate-700 font-bold uppercase mb-1">Scheduled Start Date/Time</label>
+                  <label className="block text-slate-700 font-bold uppercase mb-1">Scheduled Start</label>
                   <input
                     type="datetime-local"
                     value={editScheduledStart}
                     onChange={(e) => setEditScheduledStart(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-semibold text-slate-800"
+                    className="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs font-semibold text-slate-800"
                   />
                 </div>
                 <div>
-                  <label className="block text-slate-700 font-bold uppercase mb-1">Due Date/Time (Deadline)</label>
+                  <label className="block text-slate-700 font-bold uppercase mb-1">Due Date</label>
                   <input
                     type="datetime-local"
                     value={editDueDate}
                     onChange={(e) => setEditDueDate(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-semibold text-slate-800"
+                    className="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs font-semibold text-slate-800"
                   />
                 </div>
               </div>
 
-              <div className="flex space-x-3 pt-3 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setEditingTestModal(null)}
-                  className="flex-1 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl"
-                >
-                  Cancel
+              <div className="flex space-x-2 pt-2">
+                <button type="submit" disabled={submitting} className="flex-1 py-2 bg-brand-light text-white text-xs font-bold rounded-lg">
+                  Save Changes
                 </button>
-                <button
-                  type="submit"
-                  disabled={submitting}
-                  className="flex-1 py-2 bg-brand-light hover:bg-brand-medium text-white font-bold rounded-xl shadow-md"
-                >
-                  {submitting ? 'Saving...' : 'Save Test Changes'}
+                <button type="button" onClick={() => setEditingTestModal(null)} className="px-4 py-2 bg-slate-100 text-slate-600 text-xs font-bold rounded-lg">
+                  Cancel
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: FEE GATE ALERT */}
+      {showFeeGateModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fade-in">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 space-y-5 shadow-2xl border border-amber-200 text-center">
+            <div className="w-14 h-14 bg-amber-50 text-amber-600 border border-amber-200 rounded-full flex items-center justify-center mx-auto text-2xl">
+              ⚠️
+            </div>
+            <div>
+              <h3 className="text-base font-extrabold text-slate-850 uppercase">Tuition Fee Gate Access Notice</h3>
+              <p className="text-xs text-slate-600 mt-2 leading-relaxed">{feeGateMessage}</p>
+            </div>
+            <button
+              onClick={() => setShowFeeGateModal(false)}
+              className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-xl shadow-md"
+            >
+              Understand & Acknowledge
+            </button>
           </div>
         </div>
       )}

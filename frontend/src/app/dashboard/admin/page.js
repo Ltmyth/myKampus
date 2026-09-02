@@ -15,12 +15,17 @@ export default function AdminPage() {
   const [proctoringSetting, setProctoringSetting] = useState({ is_proctoring_enabled: true });
   const [loading, setLoading] = useState(true);
 
-  // Tabs: 'users', 'faculties', 'logs', 'invites'
+  // Tabs: 'users', 'ciu_cleared', 'api_explorer', 'faculties', 'invites', 'logs'
   const [activeTab, setActiveTab] = useState('users');
 
   // Logs filters
   const [logLevelFilter, setLogLevelFilter] = useState('ALL');
   const [logSearch, setLogSearch] = useState('');
+
+  // API Explorer filters
+  const [apiSearch, setApiSearch] = useState('');
+  const [apiFacultyFilter, setApiFacultyFilter] = useState('ALL');
+  const [apiStatusFilter, setApiStatusFilter] = useState('ALL');
 
   // Form states (Create Invite)
   const [inviteEmail, setInviteEmail] = useState('');
@@ -40,6 +45,15 @@ export default function AdminPage() {
   const [editPhone, setEditPhone] = useState('');
   const [editRole, setEditRole] = useState('student');
   const [editTuitionPaid, setEditTuitionPaid] = useState(100.0);
+  const [editRegNumber, setEditRegNumber] = useState('');
+
+  // Form state (Reset Password)
+  const [resetUserObj, setResetUserObj] = useState(null);
+  const [newPasswordInput, setNewPasswordInput] = useState('');
+
+  // Cleared Faculty Data
+  const [clearedFacultyData, setClearedFacultyData] = useState(null);
+  const [loadingCleared, setLoadingCleared] = useState(false);
 
   // Form State (Create/Edit Faculty)
   const [showFacultyModal, setShowFacultyModal] = useState(false);
@@ -83,6 +97,24 @@ export default function AdminPage() {
     }
   }
 
+  const fetchClearedFacultyData = async () => {
+    setLoadingCleared(true);
+    try {
+      const res = await api.get('/admin/users/ciu_cleared_students/');
+      setClearedFacultyData(res);
+    } catch (err) {
+      setErrorMsg('Failed to load CIU Cleared Students data.');
+    } finally {
+      setLoadingCleared(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'ciu_cleared' || activeTab === 'api_explorer') {
+      fetchClearedFacultyData();
+    }
+  }, [activeTab]);
+
   const handleToggleProctoring = async () => {
     setErrorMsg('');
     setSuccessMsg('');
@@ -92,6 +124,55 @@ export default function AdminPage() {
       loadAdminData();
     } catch (err) {
       setErrorMsg(err.message || 'Failed to toggle proctoring.');
+    }
+  };
+
+  const handleSyncCIUClearance = async () => {
+    setErrorMsg('');
+    setSuccessMsg('');
+    setSubmitting(true);
+    try {
+      const res = await api.post('/admin/users/sync_clearance/');
+      setSuccessMsg(res.detail || 'Successfully synced CIU Cleared Students API!');
+      loadAdminData();
+      if (activeTab === 'ciu_cleared' || activeTab === 'api_explorer') fetchClearedFacultyData();
+    } catch (err) {
+      setErrorMsg(err.message || 'Failed to sync CIU Cleared Students API.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleResetPasswordSubmit = async (e) => {
+    e.preventDefault();
+    if (!newPasswordInput) return;
+    setErrorMsg('');
+    setSuccessMsg('');
+    setSubmitting(true);
+    try {
+      const res = await api.post(`/admin/users/${resetUserObj.id}/reset_password/`, {
+        new_password: newPasswordInput
+      });
+      setSuccessMsg(res.detail || `Password reset successfully for ${resetUserObj.username}`);
+      setResetUserObj(null);
+      setNewPasswordInput('');
+    } catch (err) {
+      setErrorMsg(err.message || 'Failed to reset user password.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleDeleteInvite = async (id) => {
+    if (!confirm('Are you sure you want to delete this invitation token?')) return;
+    setErrorMsg('');
+    setSuccessMsg('');
+    try {
+      await api.delete(`/invitations/${id}/`);
+      setSuccessMsg('Invitation token deleted successfully.');
+      loadAdminData();
+    } catch (err) {
+      setErrorMsg(err.message || 'Failed to delete invitation token.');
     }
   };
 
@@ -143,59 +224,50 @@ export default function AdminPage() {
     setSubmitting(true);
 
     try {
-      const payload = {
-        name: facultyFormData.name,
-        code: facultyFormData.code,
-        description: facultyFormData.description,
-        dean: facultyFormData.dean ? parseInt(facultyFormData.dean) : null,
-        secretary: facultyFormData.secretary ? parseInt(facultyFormData.secretary) : null
-      };
-
       if (editingFaculty) {
-        await api.patch(`/faculties/${editingFaculty.id}/`, payload);
-        setSuccessMsg(`Faculty ${facultyFormData.code} updated successfully!`);
+        await api.put(`/faculties/${editingFaculty.id}/`, facultyFormData);
+        setSuccessMsg(`Faculty ${facultyFormData.code} updated successfully.`);
       } else {
-        await api.post('/faculties/', payload);
-        setSuccessMsg(`Faculty ${facultyFormData.code} created successfully!`);
+        await api.post('/faculties/', facultyFormData);
+        setSuccessMsg(`Faculty ${facultyFormData.code} created successfully.`);
       }
       setShowFacultyModal(false);
       loadAdminData();
     } catch (err) {
-      setErrorMsg(err.message || 'Failed to save faculty details.');
+      setErrorMsg(err.message || 'Failed to save faculty.');
     } finally {
       setSubmitting(false);
     }
   };
 
-  const handleDeleteFaculty = async (facultyId, facultyCode) => {
-    if (!confirm(`Are you sure you want to delete Faculty ${facultyCode}?`)) return;
+  const handleDeleteFaculty = async (id, code) => {
+    if (!confirm(`Are you sure you want to delete Faculty ${code}?`)) return;
     setErrorMsg('');
     setSuccessMsg('');
-
     try {
-      await api.delete(`/faculties/${facultyId}/`);
-      setSuccessMsg(`Faculty ${facultyCode} deleted successfully.`);
+      await api.delete(`/faculties/${id}/`);
+      setSuccessMsg(`Faculty ${code} deleted.`);
       loadAdminData();
     } catch (err) {
       setErrorMsg(err.message || 'Failed to delete faculty.');
     }
   };
 
-  const handleAssignDeanAction = async (facultyId, deanId) => {
+  const handleAssignDean = async (facultyId, deanId) => {
     setErrorMsg('');
     setSuccessMsg('');
     try {
       const res = await api.post(`/faculties/${facultyId}/assign_dean/`, {
         dean_id: deanId ? parseInt(deanId) : null
       });
-      setSuccessMsg(res.detail || 'Dean assignment updated.');
+      setSuccessMsg(res.detail || 'Faculty Dean assignment updated.');
       loadAdminData();
     } catch (err) {
       setErrorMsg(err.message || 'Failed to update Dean assignment.');
     }
   };
 
-  const handleAssignSecretaryAction = async (facultyId, secretaryId) => {
+  const handleAssignSecretary = async (facultyId, secretaryId) => {
     setErrorMsg('');
     setSuccessMsg('');
     try {
@@ -224,7 +296,7 @@ export default function AdminPage() {
         email: inviteEmail,
         role: inviteRole
       });
-      setSuccessMsg(`Created invitation successfully! Code: ${newInvite.id}`);
+      setSuccessMsg(`Invitation code generated and automated email dispatched to ${inviteEmail}! Code: ${newInvite.id}`);
       setInviteEmail('');
       setInviteRole('student');
       loadAdminData();
@@ -244,6 +316,7 @@ export default function AdminPage() {
     setEditPhone(u.phone || '');
     setEditRole(u.role);
     setEditTuitionPaid(u.tuition_paid_percentage ?? 100.0);
+    setEditRegNumber(u.reg_number || u.registration_number || '');
     setErrorMsg('');
     setSuccessMsg('');
   };
@@ -266,9 +339,10 @@ export default function AdminPage() {
         last_name: editLastName,
         phone: editPhone,
         role: editRole,
-        tuition_paid_percentage: parseFloat(editTuitionPaid)
+        tuition_paid_percentage: parseFloat(editTuitionPaid),
+        reg_number: editRegNumber
       });
-      setSuccessMsg('User details updated successfully!');
+      setSuccessMsg('User details & tuition clearance updated successfully!');
       setEditingUser(null);
       loadAdminData();
     } catch (err) {
@@ -278,43 +352,19 @@ export default function AdminPage() {
     }
   };
 
-  const handleDeleteUser = async (userId) => {
-    if (userId === user.id) {
-      setErrorMsg('Cannot delete your own administrator account.');
-      return;
-    }
+  const handleDeleteUser = async (id) => {
     if (!confirm('Are you sure you want to delete this user?')) return;
     setErrorMsg('');
     setSuccessMsg('');
 
     try {
-      await api.delete(`/admin/users/${userId}/`);
-      setSuccessMsg('User successfully deleted from database.');
+      await api.delete(`/admin/users/${id}/`);
+      setSuccessMsg('User deleted successfully.');
       loadAdminData();
     } catch (err) {
-      setErrorMsg(err.message || 'User deletion failed.');
+      setErrorMsg('Failed to delete user.');
     }
   };
-
-  const filteredLogs = systemLogs.filter(log => {
-    if (logLevelFilter !== 'ALL' && log.level !== logLevelFilter) return false;
-    if (logSearch) {
-      const q = logSearch.toLowerCase();
-      const matchAction = log.action.toLowerCase().includes(q);
-      const matchUser = log.username ? log.username.toLowerCase().includes(q) : false;
-      const matchDetails = log.details ? log.details.toLowerCase().includes(q) : false;
-      return matchAction || matchUser || matchDetails;
-    }
-    return true;
-  });
-
-  if (user?.role !== 'admin') {
-    return (
-      <div className="p-6 bg-red-50 border border-red-200 text-red-700 text-sm font-semibold rounded-xl">
-        Access Denied. Only System Administrators can access this dashboard panel.
-      </div>
-    );
-  }
 
   if (loading) {
     return (
@@ -324,72 +374,113 @@ export default function AdminPage() {
     );
   }
 
-  const getLogLevelBadge = (level) => {
-    switch (level) {
-      case 'AUDIT': return 'bg-purple-100 text-purple-800 border-purple-200';
-      case 'WARNING': return 'bg-amber-100 text-amber-800 border-amber-200';
-      case 'ERROR': return 'bg-red-100 text-red-800 border-red-200';
-      default: return 'bg-blue-100 text-blue-800 border-blue-200';
+  // Filtered logs
+  const filteredLogs = systemLogs.filter((log) => {
+    const matchesLevel = logLevelFilter === 'ALL' || log.level === logLevelFilter;
+    const matchesSearch = log.action.toLowerCase().includes(logSearch.toLowerCase()) ||
+                          (log.username && log.username.toLowerCase().includes(logSearch.toLowerCase()));
+    return matchesLevel && matchesSearch;
+  });
+
+  // Extract all API payload records and filter
+  const payloadRecords = clearedFacultyData?.all_payload_records || [];
+  
+  const filteredPayloadRecords = payloadRecords.filter(rec => {
+    const searchLower = apiSearch.toLowerCase();
+    const matchesSearch = apiSearch === '' || 
+      rec.student_name.toLowerCase().includes(searchLower) ||
+      rec.reg_number.toLowerCase().includes(searchLower) ||
+      rec.program.toLowerCase().includes(searchLower) ||
+      (rec.db_student && (
+        rec.db_student.username.toLowerCase().includes(searchLower) ||
+        rec.db_student.email.toLowerCase().includes(searchLower) ||
+        rec.db_student.full_name.toLowerCase().includes(searchLower)
+      ));
+
+    const matchesFaculty = apiFacultyFilter === 'ALL' || 
+      rec.program.toUpperCase().includes(apiFacultyFilter.toUpperCase()) ||
+      (rec.db_student && rec.db_student.faculty_code === apiFacultyFilter);
+
+    let matchesStatus = true;
+    if (apiStatusFilter === 'EXAM_CLEARED') {
+      matchesStatus = rec.db_student ? rec.db_student.is_exam_cleared : (rec.status.toUpperCase() === 'CLEARED');
+    } else if (apiStatusFilter === 'TEST_CLEARED') {
+      matchesStatus = rec.db_student ? rec.db_student.is_test_cleared : (rec.status.toUpperCase() === 'CLEARED');
+    } else if (apiStatusFilter === 'API_MATCHED') {
+      matchesStatus = rec.is_db_matched;
+    } else if (apiStatusFilter === 'UNMATCHED') {
+      matchesStatus = !rec.is_db_matched;
     }
-  };
+
+    return matchesSearch && matchesFaculty && matchesStatus;
+  });
+
+  const matchedCount = payloadRecords.filter(r => r.is_db_matched).length;
 
   return (
-    <div className="space-y-8 animate-fade-in">
+    <div className="space-y-8 animate-fade-in max-w-6xl mx-auto">
+      {/* Header Bar */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200 pb-5">
         <div>
-          <h2 className="text-xl font-bold text-slate-800">System Admin Control Center</h2>
-          <p className="text-slate-500 text-xs font-medium">User management, Proctoring controls, System Audit Logs, and Tuition Gates.</p>
+          <h2 className="text-xl font-bold text-slate-850">System Administration & Audit Portal</h2>
+          <p className="text-slate-500 text-xs font-medium">Manage accounts, invitations, faculties, cleared students, and audit logs.</p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3">
-          {/* Global Proctoring Switch Card */}
-          <div className={`px-3 py-1.5 rounded-xl border flex items-center space-x-2 ${proctoringSetting.is_proctoring_enabled ? 'bg-red-50 text-red-800 border-red-200 animate-pulse' : 'bg-slate-100 text-slate-600 border-slate-200'}`}>
+        <div className="flex items-center space-x-3">
+          <button
+            onClick={handleSyncCIUClearance}
+            disabled={submitting}
+            className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-sm transition-all"
+          >
+            ⚡ Sync CIU Cleared API
+          </button>
+
+          <div className={`px-3 py-1.5 rounded-xl border flex items-center space-x-2 ${proctoringSetting.is_proctoring_enabled ? 'bg-red-50 text-red-700 border-red-200 animate-pulse' : 'bg-slate-100 text-slate-600 border-slate-200'}`}>
             <span className="w-2.5 h-2.5 rounded-full bg-red-600"></span>
             <span className="text-xs font-extrabold uppercase">
-              {proctoringSetting.is_proctoring_enabled ? 'Live Proctoring: ACTIVE' : 'Live Proctoring: OFF'}
+              {proctoringSetting.is_proctoring_enabled ? 'Proctoring: ACTIVE' : 'Proctoring: OFF'}
             </span>
             <button
               onClick={handleToggleProctoring}
-              className="ml-2 px-2.5 py-1 bg-slate-900 text-white text-[10px] font-bold rounded-lg hover:bg-slate-800 transition-all"
+              className="ml-2 px-2 py-0.5 bg-brand-dark text-white text-[10px] font-bold rounded hover:bg-brand-medium"
             >
-              Toggle Switch
+              Toggle
             </button>
           </div>
-
-          <button
-            onClick={() => handleOpenFacultyModal(null)}
-            className="px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold rounded-xl shadow-sm transition-all"
-          >
-            + New Faculty
-          </button>
-          <button
-            onClick={loadAdminData}
-            className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl border border-slate-200 transition-all"
-          >
-            🔄 Refresh
-          </button>
         </div>
       </div>
 
       {errorMsg && (
-        <div className="p-3 bg-red-50 border-l-4 border-red-500 rounded text-red-700 text-xs font-semibold">
+        <div className="p-3 bg-red-50 border-l-4 border-red-500 rounded text-red-700 text-xs font-semibold animate-slide-up">
           {errorMsg}
         </div>
       )}
 
       {successMsg && (
-        <div className="p-3 bg-emerald-50 border-l-4 border-brand-emerald rounded text-brand-medium text-xs font-semibold">
+        <div className="p-3 bg-emerald-50 border-l-4 border-brand-emerald rounded text-brand-medium text-xs font-semibold animate-slide-up">
           {successMsg}
         </div>
       )}
 
-      {/* Navigation Tabs */}
-      <div className="flex border-b border-slate-200 space-x-4">
+      {/* Tabs */}
+      <div className="flex space-x-4 border-b border-slate-200 pb-3 flex-wrap gap-y-2">
         <button
           onClick={() => setActiveTab('users')}
           className={`pb-3 text-xs font-bold border-b-2 transition-all ${activeTab === 'users' ? 'border-brand-light text-brand-dark' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
         >
-          👥 User Database ({users.length})
+          👥 User Directory ({users.length})
+        </button>
+        <button
+          onClick={() => setActiveTab('ciu_cleared')}
+          className={`pb-3 text-xs font-bold border-b-2 transition-all ${activeTab === 'ciu_cleared' ? 'border-brand-light text-brand-dark' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
+        >
+          🎓 Cleared Students by Faculty
+        </button>
+        <button
+          onClick={() => setActiveTab('api_explorer')}
+          className={`pb-3 text-xs font-bold border-b-2 transition-all ${activeTab === 'api_explorer' ? 'border-brand-light text-brand-dark' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
+        >
+          ⚡ Live CIU API Payload Explorer ({payloadRecords.length})
         </button>
         <button
           onClick={() => setActiveTab('faculties')}
@@ -398,66 +489,83 @@ export default function AdminPage() {
           🏛️ Faculties & Leadership ({faculties.length})
         </button>
         <button
-          onClick={() => setActiveTab('logs')}
-          className={`pb-3 text-xs font-bold border-b-2 transition-all ${activeTab === 'logs' ? 'border-brand-light text-brand-dark' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
-        >
-          🛡️ System Audit Logs ({systemLogs.length})
-        </button>
-        <button
           onClick={() => setActiveTab('invites')}
           className={`pb-3 text-xs font-bold border-b-2 transition-all ${activeTab === 'invites' ? 'border-brand-light text-brand-dark' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
         >
-          🔑 Invitations ({invitations.length})
+          ✉️ Invitations ({invitations.length})
+        </button>
+        <button
+          onClick={() => setActiveTab('logs')}
+          className={`pb-3 text-xs font-bold border-b-2 transition-all ${activeTab === 'logs' ? 'border-brand-light text-brand-dark' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
+        >
+          🛡️ Audit Logs ({systemLogs.length})
         </button>
       </div>
 
-      {/* TAB 1: USERS DATABASE */}
+      {/* TAB 1: USERS MANAGEMENT & FEE CLEARANCE */}
       {activeTab === 'users' && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           <div className="lg:col-span-2 space-y-6">
-            <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 space-y-4">
-              <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">Registered System Accounts ({users.length})</h3>
-              
-              <div className="overflow-x-auto custom-scrollbar border border-slate-100 rounded-xl">
+            <div className="green-card rounded-2xl p-6 space-y-4">
+              <div className="flex justify-between items-center border-b border-emerald-100 pb-3">
+                <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">Registered System Users</h3>
+                <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-xl border border-emerald-200">
+                  Total: {users.length}
+                </span>
+              </div>
+
+              <div className="overflow-x-auto border border-slate-200 rounded-xl">
                 <table className="w-full text-left text-xs border-collapse">
                   <thead>
-                    <tr className="bg-slate-50 border-b border-slate-100 text-slate-400 uppercase font-semibold">
-                      <th className="px-4 py-3">Username</th>
-                      <th className="px-4 py-3">Full Name</th>
+                    <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 uppercase font-semibold">
+                      <th className="px-4 py-3">User & Reg No.</th>
                       <th className="px-4 py-3">Role</th>
-                      <th className="px-4 py-3 text-center">Tuition Clearance</th>
-                      <th className="px-4 py-3 text-center">Action</th>
+                      <th className="px-4 py-3 text-center">Clearance %</th>
+                      <th className="px-4 py-3 text-center">Actions</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-100 text-slate-650">
+                  <tbody className="divide-y divide-slate-100 text-slate-700">
                     {users.map((u) => (
-                      <tr key={u.id} className="hover:bg-slate-50">
-                        <td className="px-4 py-3.5 font-bold text-slate-800">{u.username}</td>
-                        <td className="px-4 py-3.5">{u.first_name} {u.last_name}</td>
-                        <td className="px-4 py-3.5 capitalize">
-                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${u.role === 'admin' ? 'bg-purple-50 text-purple-700 border-purple-100' : u.role === 'student' ? 'bg-slate-50 text-slate-700 border-slate-100' : 'bg-emerald-50 text-emerald-700 border-emerald-100'}`}>
+                      <tr key={u.id} className="hover:bg-slate-50 transition-all">
+                        <td className="px-4 py-3 font-semibold text-slate-850">
+                          <div className="font-bold text-slate-900">{u.first_name || u.username} {u.last_name}</div>
+                          <div className="text-[11px] text-slate-500">{u.email}</div>
+                          {u.role === 'student' && (
+                            <div className="text-[10px] text-brand-medium font-bold bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200 inline-block mt-0.5">
+                              Reg: {u.reg_number || u.registration_number}
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">
+                          <span className="px-2 py-0.5 rounded text-[10px] font-extrabold uppercase bg-brand-light/10 text-brand-dark border border-brand-light/20">
                             {u.role.replace('_', ' ')}
                           </span>
                         </td>
-                        <td className="px-4 py-3.5 text-center font-bold">
+                        <td className="px-4 py-3 text-center">
                           {u.role === 'student' ? (
-                            <span className={`px-2 py-0.5 rounded text-[10px] ${u.tuition_paid_percentage >= 100 ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : u.tuition_paid_percentage >= 50 ? 'bg-amber-50 text-amber-700 border border-amber-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
-                              {u.tuition_paid_percentage}% Paid
+                            <span className={`px-2 py-0.5 rounded text-[11px] font-bold border ${u.tuition_paid_percentage >= 100 ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : u.tuition_paid_percentage >= 50 ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-red-50 text-red-700 border-red-200'}`}>
+                              {u.tuition_paid_percentage}%
                             </span>
                           ) : (
-                            <span className="text-slate-400 font-normal">N/A</span>
+                            <span className="text-[10px] text-slate-400 font-bold">N/A</span>
                           )}
                         </td>
-                        <td className="px-4 py-3.5 text-center flex justify-center items-center space-x-3">
+                        <td className="px-4 py-3 text-center space-x-1">
                           <button
                             onClick={() => handleStartEdit(u)}
-                            className="text-brand-light hover:text-brand-medium font-bold transition-all"
+                            className="px-2 py-1 bg-white border border-emerald-200 hover:bg-emerald-50 text-slate-800 text-[11px] font-bold rounded transition-all"
                           >
                             Edit
                           </button>
                           <button
+                            onClick={() => { setResetUserObj(u); setNewPasswordInput(''); }}
+                            className="px-2 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 text-[11px] font-bold rounded border border-amber-200 transition-all"
+                          >
+                            Reset Password
+                          </button>
+                          <button
                             onClick={() => handleDeleteUser(u.id)}
-                            className="text-red-500 hover:text-red-700 font-bold transition-all"
+                            className="px-2 py-1 bg-red-50 hover:bg-red-100 text-red-700 text-[11px] font-bold rounded transition-all"
                           >
                             Delete
                           </button>
@@ -471,27 +579,27 @@ export default function AdminPage() {
           </div>
 
           <div className="space-y-6">
-            <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 space-y-4">
-              <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">Quick Invitation Generator</h3>
-              <form onSubmit={handleCreateInvite} className="space-y-4">
+            <div className="green-card rounded-2xl p-6 space-y-4">
+              <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">Generate & Email User Invitation</h3>
+              <form onSubmit={handleCreateInvite} className="space-y-3 text-xs">
                 <div>
-                  <label className="block text-slate-700 text-xs font-semibold uppercase tracking-wider mb-1">Invitee Email</label>
+                  <label className="block text-slate-700 font-bold uppercase mb-1">Invitee Email Address</label>
                   <input
                     type="email"
                     value={inviteEmail}
                     onChange={(e) => setInviteEmail(e.target.value)}
-                    placeholder="recipient@mykampus.edu"
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-850 text-xs focus:outline-none focus:ring-2 focus:ring-brand-light/30 focus:border-brand-light transition-all"
+                    placeholder="student@ciu.ac.ug"
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
                     required
                   />
                 </div>
 
                 <div>
-                  <label className="block text-slate-700 text-xs font-semibold uppercase tracking-wider mb-1">Designated Role</label>
+                  <label className="block text-slate-700 font-bold uppercase mb-1">Designated Role</label>
                   <select
                     value={inviteRole}
                     onChange={(e) => setInviteRole(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-850 text-xs focus:outline-none focus:ring-2 focus:ring-brand-light/30 focus:border-brand-light transition-all"
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold"
                   >
                     <option value="student">Student</option>
                     <option value="lecturer">Lecturer</option>
@@ -507,11 +615,245 @@ export default function AdminPage() {
                 <button
                   type="submit"
                   disabled={submitting}
-                  className="w-full py-2 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-lg transition-all"
+                  className="w-full py-2 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-lg shadow-sm transition-all"
                 >
-                  {submitting ? 'Generating...' : 'Generate Token'}
+                  {submitting ? 'Sending Email...' : 'Generate & Email Invite Code'}
                 </button>
               </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB: CLEARED STUDENTS ORGANIZED BY FACULTIES */}
+      {activeTab === 'ciu_cleared' && (
+        <div className="space-y-6">
+          <div className="green-card p-5 rounded-2xl flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+            <div>
+              <h3 className="font-bold text-slate-850 text-base">Faculty Cleared Students Directory</h3>
+              <p className="text-slate-500 text-xs">Students organized by Faculties with live CIU Cleared API validation status.</p>
+            </div>
+            <div className="flex items-center space-x-2">
+              <span className="px-3 py-1 bg-emerald-50 text-emerald-700 text-xs font-bold rounded-xl border border-emerald-200">
+                CIU API External Records: {clearedFacultyData?.external_api_count ?? 0}
+              </span>
+              <button
+                onClick={fetchClearedFacultyData}
+                disabled={loadingCleared}
+                className="px-3 py-1 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-xl shadow-sm transition-all"
+              >
+                {loadingCleared ? 'Refreshing...' : 'Refresh Live Feed'}
+              </button>
+            </div>
+          </div>
+
+          {loadingCleared ? (
+            <div className="flex items-center justify-center py-12">
+              <div className="w-8 h-8 border-4 border-emerald-200 border-t-emerald-600 rounded-full animate-spin"></div>
+            </div>
+          ) : clearedFacultyData?.faculties && Object.keys(clearedFacultyData.faculties).length > 0 ? (
+            Object.entries(clearedFacultyData.faculties).map(([facName, facData]) => (
+              <div key={facName} className="green-card rounded-2xl p-6 space-y-4">
+                <div className="flex justify-between items-center border-b border-emerald-100 pb-3">
+                  <div className="flex items-center space-x-2">
+                    <span className="px-2.5 py-1 bg-brand-light/10 text-brand-dark border border-brand-light/20 text-xs font-black rounded uppercase">
+                      {facData.code}
+                    </span>
+                    <h4 className="font-bold text-slate-850 text-sm">{facName}</h4>
+                  </div>
+                  <span className="text-xs font-bold text-slate-500">
+                    Students: {facData.students.length}
+                  </span>
+                </div>
+
+                <div className="overflow-x-auto border border-slate-200 rounded-xl">
+                  <table className="w-full text-left text-xs border-collapse">
+                    <thead>
+                      <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 uppercase font-semibold">
+                        <th className="px-4 py-3">Student Name</th>
+                        <th className="px-4 py-3">Registration Number</th>
+                        <th className="px-4 py-3 text-center">Exam Gate (100%)</th>
+                        <th className="px-4 py-3 text-center">Test Gate (50%)</th>
+                        <th className="px-4 py-3 text-center">CIU API Verification</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 text-slate-700">
+                      {facData.students.map((st) => (
+                        <tr key={st.id} className="hover:bg-slate-50 transition-all">
+                          <td className="px-4 py-3 font-bold text-slate-850">{st.full_name} ({st.username})</td>
+                          <td className="px-4 py-3 font-mono font-bold text-brand-medium">{st.reg_number}</td>
+                          <td className="px-4 py-3 text-center">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${st.is_exam_cleared ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-red-50 text-red-700 border-red-200'}`}>
+                              {st.is_exam_cleared ? 'CLEARED' : 'BARRED'}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-center">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${st.is_test_cleared ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-red-50 text-red-700 border-red-200'}`}>
+                              {st.is_test_cleared ? 'CLEARED' : 'BARRED'}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-center">
+                            <span className={`px-2.5 py-0.5 rounded text-[10px] font-extrabold uppercase border ${st.is_api_cleared ? 'bg-cyan-50 text-cyan-800 border-cyan-200' : 'bg-slate-100 text-slate-500 border-slate-200'}`}>
+                              {st.is_api_cleared ? '✓ CIU API Matched' : 'DB Percentage'}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ))
+          ) : (
+            <div className="p-8 text-center bg-white rounded-2xl border border-slate-200 text-slate-500 text-xs font-semibold">
+              No faculty cleared student records found.
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* TAB: LIVE CIU API RECORDS EXPLORER */}
+      {activeTab === 'api_explorer' && (
+        <div className="space-y-6">
+          <div className="green-card p-6 rounded-2xl space-y-4">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-emerald-100 pb-3">
+              <div>
+                <h3 className="font-bold text-slate-850 text-base">⚡ Live CIU Cleared Students API Payload Explorer</h3>
+                <p className="text-slate-500 text-xs">Viewing all raw payload records from https://eadmin.ciu.ac.ug/API/ClearedStudentsAPI.aspx cross-referenced with internal system student data.</p>
+              </div>
+              
+              <div className="flex items-center space-x-2">
+                <span className="px-3 py-1 bg-cyan-50 text-cyan-800 text-xs font-bold rounded-xl border border-cyan-200">
+                  Total Payload Records: {payloadRecords.length}
+                </span>
+                <span className="px-3 py-1 bg-emerald-50 text-emerald-800 text-xs font-bold rounded-xl border border-emerald-200">
+                  Matched System Accounts: {matchedCount}
+                </span>
+              </div>
+            </div>
+
+            {/* Filter controls */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-1">
+              <div>
+                <label className="block text-[10px] text-slate-500 font-bold uppercase mb-1">Search Payload or Student</label>
+                <input
+                  type="text"
+                  placeholder="Search by Reg No, Name, or Email..."
+                  value={apiSearch}
+                  onChange={(e) => setApiSearch(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] text-slate-500 font-bold uppercase mb-1">Filter by Faculty / Program</label>
+                <select
+                  value={apiFacultyFilter}
+                  onChange={(e) => setApiFacultyFilter(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold"
+                >
+                  <option value="ALL">All Programs & Faculties</option>
+                  {faculties.map(f => (
+                    <option key={f.id} value={f.code}>{f.code} - {f.name}</option>
+                  ))}
+                  <option value="SOBAT">SOBAT</option>
+                  <option value="FHS">FHS</option>
+                  <option value="SONM">SONM</option>
+                  <option value="FoST">FoST</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-[10px] text-slate-500 font-bold uppercase mb-1">Filter by Match & Clearance Status</label>
+                <select
+                  value={apiStatusFilter}
+                  onChange={(e) => setApiStatusFilter(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold"
+                >
+                  <option value="ALL">All Records</option>
+                  <option value="API_MATCHED">Matched Internal Accounts</option>
+                  <option value="UNMATCHED">Unmatched API Records</option>
+                  <option value="EXAM_CLEARED">100% Exam Cleared</option>
+                  <option value="TEST_CLEARED">50% Test Cleared</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto border border-slate-200 rounded-xl pt-2">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 uppercase font-semibold">
+                    <th className="px-4 py-3">External API Student Name & Reg No.</th>
+                    <th className="px-4 py-3">Program / Session</th>
+                    <th className="px-4 py-3 text-center">API Clearance</th>
+                    <th className="px-4 py-3">Matched System Account</th>
+                    <th className="px-4 py-3 text-center">System Fee Clearance</th>
+                    <th className="px-4 py-3 text-center">Integration Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-slate-700">
+                  {filteredPayloadRecords.map((rec) => (
+                    <tr key={rec.id} className="hover:bg-slate-50 transition-all">
+                      <td className="px-4 py-3">
+                        <div className="font-bold text-slate-900">{rec.student_name}</div>
+                        <div className="font-mono text-[11px] font-bold text-brand-medium">Reg: {rec.reg_number}</div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="font-bold text-slate-800 uppercase">{rec.program}</div>
+                        <div className="text-[10px] text-slate-500">Year: {rec.acad_year} | Sem {rec.semester}</div>
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <span className="px-2 py-0.5 rounded text-[10px] font-extrabold uppercase bg-emerald-50 text-emerald-800 border border-emerald-200">
+                          {rec.status}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">
+                        {rec.db_student ? (
+                          <div>
+                            <div className="font-bold text-slate-900">{rec.db_student.full_name}</div>
+                            <div className="text-[11px] text-slate-500">{rec.db_student.email} ({rec.db_student.username})</div>
+                            <div className="text-[10px] text-brand-dark font-bold">Faculty: {rec.db_student.faculty_code}</div>
+                          </div>
+                        ) : (
+                          <span className="text-[11px] text-slate-400 italic">No Registered System Account</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        {rec.db_student ? (
+                          <div className="space-y-1">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold border block ${rec.db_student.is_exam_cleared ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-red-50 text-red-700 border-red-200'}`}>
+                              Exam (100%): {rec.db_student.is_exam_cleared ? 'CLEARED' : 'BARRED'}
+                            </span>
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold border block ${rec.db_student.is_test_cleared ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-red-50 text-red-700 border-red-200'}`}>
+                              Test (50%): {rec.db_student.is_test_cleared ? 'CLEARED' : 'BARRED'}
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="text-[10px] text-slate-400 font-bold">API Verified</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        {rec.is_db_matched ? (
+                          <span className="px-2.5 py-0.5 rounded text-[10px] font-extrabold uppercase bg-emerald-50 text-emerald-800 border border-emerald-200 inline-block">
+                            ✓ System Matched
+                          </span>
+                        ) : (
+                          <span className="px-2.5 py-0.5 rounded text-[10px] font-extrabold uppercase bg-amber-50 text-amber-800 border border-amber-200 inline-block">
+                            External Payload Only
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                  {filteredPayloadRecords.length === 0 && (
+                    <tr>
+                      <td colSpan={6} className="px-4 py-8 text-center text-slate-500 italic">
+                        No payload records match the selected search or filter criteria.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
             </div>
           </div>
         </div>
@@ -520,14 +862,14 @@ export default function AdminPage() {
       {/* TAB 2: FACULTIES & LEADERSHIP MANAGEMENT */}
       {activeTab === 'faculties' && (
         <div className="space-y-6">
-          <div className="flex justify-between items-center bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
+          <div className="green-card p-4 rounded-2xl flex justify-between items-center">
             <div>
               <h3 className="font-bold text-slate-850 text-sm">Faculty & Leadership Directory</h3>
               <p className="text-slate-500 text-xs">Create, modify, or remove faculties and assign/unassign Faculty Deans & Secretaries.</p>
             </div>
             <button
               onClick={() => handleOpenFacultyModal(null)}
-              className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold rounded-xl shadow-sm transition-all"
+              className="px-4 py-2 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-xl shadow-sm transition-all"
             >
               + Create New Faculty
             </button>
@@ -535,7 +877,7 @@ export default function AdminPage() {
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {faculties.map((fac) => (
-              <div key={fac.id} className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-4 flex flex-col justify-between hover:shadow-md transition-all">
+              <div key={fac.id} className="green-card rounded-2xl p-6 space-y-4 flex flex-col justify-between">
                 <div className="space-y-3">
                   <div className="flex justify-between items-start">
                     <span className="px-2.5 py-0.5 rounded text-[10px] font-extrabold uppercase bg-brand-light/10 text-brand-dark border border-brand-light/20">
@@ -557,57 +899,40 @@ export default function AdminPage() {
                     </div>
                   </div>
 
-                  <h3 className="font-bold text-base text-slate-850 leading-tight">{fac.name}</h3>
-                  <p className="text-xs text-slate-500 line-clamp-2">{fac.description || 'No description provided.'}</p>
-                  
-                  {/* Leadership Card */}
-                  <div className="pt-2 text-xs space-y-2 bg-slate-50 p-3 rounded-xl border border-slate-100">
-                    <div>
-                      <span className="text-[10px] uppercase font-bold text-slate-400 block">Faculty Dean</span>
-                      <div className="flex items-center justify-between mt-0.5">
-                        <span className="font-bold text-slate-800">{fac.dean_name || 'Unassigned'}</span>
-                      </div>
-                    </div>
-
-                    <div className="pt-1 border-t border-slate-200/60">
-                      <span className="text-[10px] uppercase font-bold text-slate-400 block">Faculty Secretary</span>
-                      <div className="flex items-center justify-between mt-0.5">
-                        <span className="font-bold text-slate-800">{fac.secretary_name || 'Unassigned'}</span>
-                      </div>
-                    </div>
+                  <div>
+                    <h4 className="font-bold text-slate-850 text-base">{fac.name}</h4>
+                    <p className="text-slate-500 text-xs mt-1 line-clamp-2">{fac.description || 'No description provided.'}</p>
                   </div>
 
-                  {/* Dropdowns for Assign / Change Leadership */}
-                  <div className="pt-3 border-t border-slate-100 space-y-2 text-xs">
+                  <div className="space-y-2 pt-2 border-t border-slate-100 text-xs">
                     <div>
-                      <label className="block text-[10px] font-bold uppercase text-slate-600 mb-1">Assign / Change Dean</label>
+                      <label className="block text-[10px] text-slate-400 font-bold uppercase mb-1">Faculty Dean</label>
                       <select
                         value={fac.dean || ''}
-                        onChange={(e) => handleAssignDeanAction(fac.id, e.target.value)}
-                        className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs"
+                        onChange={(e) => handleAssignDean(fac.id, e.target.value)}
+                        className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold"
                       >
                         <option value="">-- Unassigned --</option>
                         {deans.map(d => (
-                          <option key={d.id} value={d.id}>{d.first_name || d.username} {d.last_name} ({d.email})</option>
+                          <option key={d.id} value={d.id}>{d.first_name || d.username} {d.last_name}</option>
                         ))}
                       </select>
                     </div>
 
                     <div>
-                      <label className="block text-[10px] font-bold uppercase text-slate-600 mb-1">Assign / Change Secretary</label>
+                      <label className="block text-[10px] text-slate-400 font-bold uppercase mb-1">Faculty Secretary</label>
                       <select
                         value={fac.secretary || ''}
-                        onChange={(e) => handleAssignSecretaryAction(fac.id, e.target.value)}
-                        className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs"
+                        onChange={(e) => handleAssignSecretary(fac.id, e.target.value)}
+                        className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold"
                       >
                         <option value="">-- Unassigned --</option>
                         {secretaries.map(s => (
-                          <option key={s.id} value={s.id}>{s.first_name || s.username} {s.last_name} ({s.email})</option>
+                          <option key={s.id} value={s.id}>{s.first_name || s.username} {s.last_name}</option>
                         ))}
                       </select>
                     </div>
                   </div>
-
                 </div>
               </div>
             ))}
@@ -615,186 +940,152 @@ export default function AdminPage() {
         </div>
       )}
 
-      {/* TAB 3: SYSTEM AUDIT LOGS */}
-      {activeTab === 'logs' && (
-        <div className="space-y-6">
-          
-          {/* Logs Controls Bar */}
-          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col sm:flex-row items-center justify-between gap-4">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-xs font-bold text-slate-500 uppercase">Log Level:</span>
-              {['ALL', 'INFO', 'WARNING', 'ERROR', 'AUDIT'].map((level) => (
-                <button
-                  key={level}
-                  onClick={() => setLogLevelFilter(level)}
-                  className={`px-3 py-1 text-xs font-bold rounded-lg transition-all ${logLevelFilter === level ? 'bg-brand-dark text-white shadow-sm' : 'bg-slate-50 text-slate-600 hover:bg-slate-100'}`}
-                >
-                  {level}
-                </button>
-              ))}
-            </div>
+      {/* TAB 3: INVITATIONS */}
+      {activeTab === 'invites' && (
+        <div className="green-card rounded-2xl p-6 space-y-4">
+          <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">Active Invitation Tokens</h3>
+          <div className="overflow-x-auto border border-slate-200 rounded-xl">
+            <table className="w-full text-left text-xs border-collapse">
+              <thead>
+                <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 uppercase font-semibold">
+                  <th className="px-4 py-3">Invitee Email</th>
+                  <th className="px-4 py-3">Role</th>
+                  <th className="px-4 py-3">Invitation Code</th>
+                  <th className="px-4 py-3 text-center">Status</th>
+                  <th className="px-4 py-3">Created At</th>
+                  <th className="px-4 py-3 text-center">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 text-slate-700">
+                {invitations.map((inv) => (
+                  <tr key={inv.id} className="hover:bg-slate-50 transition-all">
+                    <td className="px-4 py-3 font-bold text-slate-850">{inv.email}</td>
+                    <td className="px-4 py-3 font-semibold capitalize">{inv.role.replace('_', ' ')}</td>
+                    <td className="px-4 py-3 font-mono text-[11px] font-bold text-slate-700">{inv.id}</td>
+                    <td className="px-4 py-3 text-center">
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${inv.is_used ? 'bg-slate-100 text-slate-500 border-slate-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}>
+                        {inv.is_used ? 'REDEEMED' : 'ACTIVE'}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-slate-500 text-[11px]">{new Date(inv.created_at).toLocaleString()}</td>
+                    <td className="px-4 py-3 text-center">
+                      <button
+                        onClick={() => handleDeleteInvite(inv.id)}
+                        className="px-2 py-1 bg-red-50 hover:bg-red-100 text-red-600 font-bold rounded text-[11px] transition-all"
+                      >
+                        Delete
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
-            <div className="flex items-center space-x-2">
+      {/* TAB 4: AUDIT LOGS */}
+      {activeTab === 'logs' && (
+        <div className="green-card rounded-2xl p-6 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-emerald-100 pb-3">
+            <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">System Audit Trail</h3>
+            
+            <div className="flex flex-wrap items-center gap-2">
               <input
                 type="text"
-                placeholder="Search logs by action or user..."
+                placeholder="Search audit logs..."
                 value={logSearch}
                 onChange={(e) => setLogSearch(e.target.value)}
-                className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs w-full sm:w-64"
+                className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs"
               />
+              <select
+                value={logLevelFilter}
+                onChange={(e) => setLogLevelFilter(e.target.value)}
+                className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold"
+              >
+                <option value="ALL">All Levels</option>
+                <option value="INFO">INFO</option>
+                <option value="WARNING">WARNING</option>
+                <option value="ERROR">ERROR</option>
+              </select>
               <button
                 onClick={downloadAuditLogsCSV}
-                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg shadow-sm transition-all"
-                title="Export System Audit Logs to CSV"
+                className="px-3 py-1.5 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 text-xs font-bold rounded-lg"
               >
-                📥 Export CSV
+                📊 Export Logs CSV
               </button>
             </div>
           </div>
 
-          {/* Logs Table */}
-          <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-4">
-            <div className="flex justify-between items-center">
-              <h3 className="text-sm font-bold text-slate-850 uppercase tracking-wider">System Activity Audit Trail</h3>
-              <span className="text-xs text-slate-400 font-medium">Showing <strong className="text-slate-800">{filteredLogs.length}</strong> log events</span>
-            </div>
-
-            {filteredLogs.length === 0 ? (
-              <p className="text-slate-400 text-xs py-12 text-center">No system log entries recorded matching filter criteria.</p>
-            ) : (
-              <div className="overflow-x-auto custom-scrollbar border border-slate-200 rounded-xl">
-                <table className="w-full text-left text-xs border-collapse">
-                  <thead>
-                    <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 uppercase font-semibold">
-                      <th className="px-4 py-3">Timestamp</th>
-                      <th className="px-4 py-3">Level</th>
-                      <th className="px-4 py-3">User & Role</th>
-                      <th className="px-4 py-3">Action Event</th>
-                      <th className="px-4 py-3">Audit Details</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 text-slate-700">
-                    {filteredLogs.map((log) => (
-                      <tr key={log.id} className="hover:bg-slate-50 transition-all font-sans">
-                        <td className="px-4 py-3 text-slate-500 text-[11px] whitespace-nowrap">
-                          {new Date(log.timestamp).toLocaleString()}
-                        </td>
-                        <td className="px-4 py-3">
-                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${getLogLevelBadge(log.level)}`}>
-                            {log.level}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3">
-                          {log.username ? (
-                            <div>
-                              <span className="font-bold text-slate-800">{log.username}</span>
-                              <span className="text-[10px] text-slate-400 capitalize block">{log.user_role}</span>
-                            </div>
-                          ) : (
-                            <span className="text-slate-400 italic text-[11px]">System</span>
-                          )}
-                        </td>
-                        <td className="px-4 py-3 font-bold text-slate-850">{log.action}</td>
-                        <td className="px-4 py-3 text-slate-600 text-xs max-w-xs truncate" title={log.details}>
-                          {log.details || 'N/A'}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+          <div className="overflow-x-auto border border-slate-200 rounded-xl">
+            <table className="w-full text-left text-xs border-collapse">
+              <thead>
+                <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 uppercase font-semibold">
+                  <th className="px-4 py-3">Timestamp</th>
+                  <th className="px-4 py-3">User</th>
+                  <th className="px-4 py-3">Level</th>
+                  <th className="px-4 py-3">Action Details</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 text-slate-700">
+                {filteredLogs.map((log) => (
+                  <tr key={log.id} className="hover:bg-slate-50 transition-all">
+                    <td className="px-4 py-3 text-slate-500 text-[11px]">{new Date(log.timestamp).toLocaleString()}</td>
+                    <td className="px-4 py-3 font-bold text-slate-800">{log.username || 'System'}</td>
+                    <td className="px-4 py-3">
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${log.level === 'ERROR' ? 'bg-red-50 text-red-700 border-red-200' : log.level === 'WARNING' ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}>
+                        {log.level}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 font-medium text-slate-850">{log.action}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
-
         </div>
       )}
 
-      {/* TAB 4: INVITATIONS */}
-      {activeTab === 'invites' && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          <div className="lg:col-span-2 bg-white rounded-2xl p-6 shadow-sm border border-slate-100 space-y-4">
-            <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">Active & Historical Registration Invitations</h3>
-            
-            {invitations.length === 0 ? (
-              <p className="text-slate-400 text-xs py-8 text-center">No tokens generated.</p>
-            ) : (
-              <div className="space-y-3">
-                {invitations.map((inv) => (
-                  <div key={inv.id} className="p-4 bg-slate-50 rounded-xl border border-slate-150 space-y-2 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                    <div>
-                      <div className="flex items-center space-x-2">
-                        <span className="font-bold text-slate-800 text-sm">{inv.email}</span>
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold border capitalize ${inv.is_used ? 'bg-slate-200 text-slate-500 border-slate-300' : 'bg-emerald-50 text-emerald-700 border-emerald-100'}`}>
-                          {inv.is_used ? 'Used' : 'Active'}
-                        </span>
-                      </div>
-                      <p className="text-slate-500 text-xs mt-1">Role Token: <strong className="capitalize text-slate-700">{inv.role.replace('_', ' ')}</strong> · Issued: {new Date(inv.created_at).toLocaleString()}</p>
-                    </div>
+      {/* MODAL: RESET PASSWORD (ADMIN) */}
+      {resetUserObj && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fade-in">
+          <div className="bg-white rounded-3xl p-6 max-w-md w-full shadow-2xl border border-emerald-200 space-y-4">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <h3 className="text-base font-bold text-slate-850">
+                Reset Password: {resetUserObj.username}
+              </h3>
+              <button onClick={() => setResetUserObj(null)} className="text-slate-400 hover:text-slate-600 font-bold">✕</button>
+            </div>
 
-                    {!inv.is_used && (
-                      <div className="flex items-center space-x-2">
-                        <input
-                          type="text"
-                          readOnly
-                          value={inv.id}
-                          className="bg-white border border-slate-200 px-3 py-1 rounded text-xs text-slate-600 font-mono"
-                        />
-                        <button
-                          onClick={() => {
-                            navigator.clipboard.writeText(inv.id);
-                            alert('Invitation Token copied to clipboard!');
-                          }}
-                          className="px-3 py-1 bg-brand-light text-white text-xs font-bold rounded hover:bg-brand-medium"
-                        >
-                          Copy
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 space-y-4">
-            <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">Generate Role Token</h3>
-            <form onSubmit={handleCreateInvite} className="space-y-4">
+            <form onSubmit={handleResetPasswordSubmit} className="space-y-4 text-xs">
               <div>
-                <label className="block text-slate-700 text-xs font-semibold uppercase tracking-wider mb-1">Invitee Email</label>
+                <label className="block text-slate-700 font-bold uppercase mb-1">New Password</label>
                 <input
-                  type="email"
-                  value={inviteEmail}
-                  onChange={(e) => setInviteEmail(e.target.value)}
-                  placeholder="recipient@mykampus.edu"
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-850 text-xs"
+                  type="password"
+                  value={newPasswordInput}
+                  onChange={(e) => setNewPasswordInput(e.target.value)}
+                  placeholder="Enter new password (e.g. student123)"
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold"
                   required
                 />
               </div>
 
-              <div>
-                <label className="block text-slate-700 text-xs font-semibold uppercase tracking-wider mb-1">Role Choice</label>
-                <select
-                  value={inviteRole}
-                  onChange={(e) => setInviteRole(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-850 text-xs"
+              <div className="flex justify-end space-x-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setResetUserObj(null)}
+                  className="px-4 py-2 bg-slate-100 text-slate-600 font-bold rounded-xl hover:bg-slate-200"
                 >
-                  <option value="student">Student</option>
-                  <option value="lecturer">Lecturer</option>
-                  <option value="faculty_admin">Faculty Secretary</option>
-                  <option value="registrar">Academic Registrar</option>
-                  <option value="dean">School Dean</option>
-                  <option value="dvc">Chancellor (DVC)</option>
-                  <option value="admin">System Admin</option>
-                </select>
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={submitting || !newPasswordInput}
+                  className="px-5 py-2 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-xl shadow-md transition-all"
+                >
+                  {submitting ? 'Resetting...' : 'Set New Password'}
+                </button>
               </div>
-
-              <button
-                type="submit"
-                disabled={submitting}
-                className="w-full py-2 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-lg transition-all"
-              >
-                {submitting ? 'Generating...' : 'Generate Token'}
-              </button>
             </form>
           </div>
         </div>
@@ -803,7 +1094,7 @@ export default function AdminPage() {
       {/* MODAL: CREATE / EDIT FACULTY (ADMIN) */}
       {showFacultyModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4 animate-fade-in">
-          <div className="bg-white rounded-3xl max-w-lg w-full p-6 space-y-5 shadow-2xl border border-slate-100">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-6 space-y-5 shadow-2xl border border-emerald-200">
             <div className="flex justify-between items-center border-b border-slate-100 pb-3">
               <h3 className="text-base font-bold text-slate-850">
                 {editingFaculty ? `Edit Faculty: ${editingFaculty.code}` : 'Create New Faculty'}
@@ -891,7 +1182,7 @@ export default function AdminPage() {
                 <button
                   type="submit"
                   disabled={submitting}
-                  className="px-5 py-2 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-xl shadow-md"
+                  className="px-5 py-2 bg-brand-light hover:bg-brand-medium text-white font-bold rounded-xl shadow-md"
                 >
                   {submitting ? 'Saving...' : editingFaculty ? 'Save Changes' : 'Create Faculty'}
                 </button>
@@ -902,82 +1193,97 @@ export default function AdminPage() {
         </div>
       )}
 
-      {/* Edit User Modal */}
+      {/* MODAL: EDIT USER & FEE CLEARANCE */}
       {editingUser && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fade-in">
-          <div className="bg-white rounded-3xl p-6 md:p-8 max-w-lg w-full shadow-2xl border border-slate-100 space-y-6 relative animate-scale-up">
+          <div className="bg-white rounded-3xl p-6 md:p-8 max-w-lg w-full shadow-2xl border border-emerald-200 space-y-6 relative animate-scale-up">
             <button
               onClick={() => setEditingUser(null)}
-              className="absolute top-4 right-4 p-2 text-slate-400 hover:text-slate-605 rounded-lg"
+              className="absolute top-4 right-4 p-2 text-slate-400 hover:text-slate-600 rounded-lg font-bold"
             >
               ✕
             </button>
 
             <div>
-              <h3 className="text-lg font-bold text-slate-800">Edit User Details</h3>
-              <p className="text-xs text-slate-500 font-medium">Modify credentials, contact information, role, and tuition clearances.</p>
+              <h3 className="text-lg font-bold text-slate-800">Edit User & Fee Clearance</h3>
+              <p className="text-xs text-slate-500 font-medium">Modify registration number, contact info, role, and tuition clearances.</p>
             </div>
 
-            <form onSubmit={handleSaveUser} className="space-y-4">
+            <form onSubmit={handleSaveUser} className="space-y-4 text-xs">
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-slate-700 text-xs font-semibold uppercase tracking-wider mb-1">First Name</label>
+                  <label className="block text-slate-700 font-bold uppercase mb-1">First Name</label>
                   <input
                     type="text"
                     value={editFirstName}
                     onChange={(e) => setEditFirstName(e.target.value)}
                     placeholder="First Name"
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-850 text-xs focus:outline-none focus:ring-2 focus:ring-brand-light/30 focus:border-brand-light transition-all"
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
                   />
                 </div>
                 <div>
-                  <label className="block text-slate-700 text-xs font-semibold uppercase tracking-wider mb-1">Last Name</label>
+                  <label className="block text-slate-700 font-bold uppercase mb-1">Last Name</label>
                   <input
                     type="text"
                     value={editLastName}
                     onChange={(e) => setEditLastName(e.target.value)}
                     placeholder="Last Name"
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-850 text-xs focus:outline-none focus:ring-2 focus:ring-brand-light/30 focus:border-brand-light transition-all"
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-slate-700 text-xs font-semibold uppercase tracking-wider mb-1">Username</label>
+                <label className="block text-slate-700 font-bold uppercase mb-1">Username</label>
                 <input
                   type="text"
                   value={editUsername}
                   onChange={(e) => setEditUsername(e.target.value)}
                   placeholder="Username"
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-850 text-xs focus:outline-none focus:ring-2 focus:ring-brand-light/30 focus:border-brand-light transition-all"
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold"
+                  required
                 />
               </div>
 
+              {editRole === 'student' && (
+                <div>
+                  <label className="block text-slate-700 font-bold uppercase mb-1">Official Registration Number</label>
+                  <input
+                    type="text"
+                    value={editRegNumber}
+                    onChange={(e) => setEditRegNumber(e.target.value)}
+                    placeholder="e.g. 2026SOBAT-A001"
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-brand-medium"
+                  />
+                </div>
+              )}
+
               <div>
-                <label className="block text-slate-700 text-xs font-semibold uppercase tracking-wider mb-1">Email</label>
+                <label className="block text-slate-700 font-bold uppercase mb-1">Email</label>
                 <input
                   type="email"
                   value={editEmail}
                   onChange={(e) => setEditEmail(e.target.value)}
                   placeholder="Email Address"
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-850 text-xs focus:outline-none focus:ring-2 focus:ring-brand-light/30 focus:border-brand-light transition-all"
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
+                  required
                 />
               </div>
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-slate-700 text-xs font-semibold uppercase tracking-wider mb-1">Phone</label>
+                  <label className="block text-slate-700 font-bold uppercase mb-1">Phone</label>
                   <input
                     type="text"
                     value={editPhone}
                     onChange={(e) => setEditPhone(e.target.value)}
                     placeholder="Phone Number"
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-850 text-xs focus:outline-none focus:ring-2 focus:ring-brand-light/30 focus:border-brand-light transition-all"
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-slate-700 text-xs font-semibold uppercase tracking-wider mb-1">Tuition Paid %</label>
+                  <label className="block text-slate-700 font-bold uppercase mb-1">Tuition Paid % (Clearance)</label>
                   {editRole === 'student' ? (
                     <input
                       type="number"
@@ -987,7 +1293,7 @@ export default function AdminPage() {
                       value={editTuitionPaid}
                       onChange={(e) => setEditTuitionPaid(e.target.value)}
                       placeholder="100"
-                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-850 text-xs focus:outline-none focus:ring-2 focus:ring-brand-light/30 focus:border-brand-light transition-all font-bold"
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-black text-brand-dark"
                     />
                   ) : (
                     <div className="w-full px-3 py-2 bg-slate-100 border border-slate-200 rounded-lg text-slate-400 text-xs italic font-medium">
@@ -998,11 +1304,11 @@ export default function AdminPage() {
               </div>
 
               <div>
-                <label className="block text-slate-700 text-xs font-semibold uppercase tracking-wider mb-1">System Role</label>
+                <label className="block text-slate-700 font-bold uppercase mb-1">System Role</label>
                 <select
                   value={editRole}
                   onChange={(e) => setEditRole(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-850 text-xs focus:outline-none focus:ring-2 focus:ring-brand-light/30 focus:border-brand-light transition-all"
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold"
                 >
                   <option value="student">Student</option>
                   <option value="lecturer">Lecturer</option>
@@ -1028,7 +1334,7 @@ export default function AdminPage() {
                   disabled={submitting}
                   className="flex-1 py-2 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-lg transition-all"
                 >
-                  {submitting ? 'Saving...' : 'Save Changes'}
+                  {submitting ? 'Saving...' : 'Save User & Clearance'}
                 </button>
               </div>
             </form>

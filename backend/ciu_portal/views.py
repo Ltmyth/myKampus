@@ -22,7 +22,8 @@ from .serializers import (
     ClassContentSerializer, AttendanceSessionSerializer, AttendanceRecordSerializer,
     ClassTimetableSerializer, ExamTimetableSerializer, SystemLogSerializer, ProctoringSettingSerializer
 )
-from .permissions import IsAdmin, IsDVC, IsDean, IsFacultyAdmin, IsRegistrar, IsLecturer, IsStudent, IsStaffUser
+from .permissions import IsAdmin, IsDVC, IsDean, IsFacultyAdmin, IsRegistrar, IsLecturer, IsStudent, IsStaffUser, IsExecutiveReadOnly
+from .clearance import fetch_external_cleared_students, check_student_clearance
 
 def authenticate_token_param(request):
     if not request.user or not request.user.is_authenticated:
@@ -40,7 +41,34 @@ def authenticate_token_param(request):
 # 1. Custom JWT Token Auth to return role & profile info directly on login
 class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
     def validate(self, attrs):
+        username_input = attrs.get(self.username_field, '').strip()
+        password = attrs.get('password')
+
+        # Match user by reg_number, username, or email
+        user_obj = User.objects.filter(
+            models.Q(reg_number__iexact=username_input) |
+            models.Q(username__iexact=username_input) |
+            models.Q(email__iexact=username_input)
+        ).first()
+
+        if not user_obj:
+            for s in User.objects.filter(role='student'):
+                if s.registration_number and s.registration_number.upper() == username_input.upper():
+                    user_obj = s
+                    break
+
+        if user_obj:
+            if user_obj.role == 'student':
+                student_reg = (user_obj.reg_number or user_obj.registration_number or '').upper()
+                if username_input.upper() != student_reg:
+                    raise generics.serializers.ValidationError({
+                        "detail": f"Students must log in using their official Registration Number (e.g. {student_reg or '2026/CIU/FST/001'}). Username login is not permitted for students."
+                    })
+            attrs[self.username_field] = user_obj.username
+
         data = super().validate(attrs)
+        clearance_info = check_student_clearance(self.user)
+
         data['user'] = {
             'id': self.user.id,
             'username': self.user.username,
@@ -48,9 +76,14 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
             'role': self.user.role,
             'first_name': self.user.first_name,
             'last_name': self.user.last_name,
-            'tuition_paid_percentage': getattr(self.user, 'tuition_paid_percentage', 100.0)
+            'reg_number': self.user.reg_number or self.user.registration_number,
+            'registration_number': self.user.registration_number,
+            'tuition_paid_percentage': clearance_info['tuition_paid_percentage'],
+            'is_exam_cleared': clearance_info['is_exam_cleared'],
+            'is_test_cleared': clearance_info['is_test_cleared'],
+            'clearance_source': clearance_info['source']
         }
-        log_system_event(self.user, "User Login Success", level="INFO")
+        log_system_event(self.user, f"User Login Success ({self.user.role})", level="INFO")
         return data
 
 class MyTokenObtainPairView(TokenObtainPairView):
@@ -98,6 +131,139 @@ class AdminUserViewSet(viewsets.ModelViewSet):
             ).distinct().order_by('-date_joined')
         return qs
 
+    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsAdmin])
+    def sync_clearance(self, request):
+        cleared_list = fetch_external_cleared_students()
+        if cleared_list is None:
+            return Response({'detail': 'Failed to connect to CIU Cleared Students API endpoint.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+        updated_count = 0
+        students = User.objects.filter(role='student')
+        for student in students:
+            clearance = check_student_clearance(student)
+            if clearance['is_api_cleared'] and student.tuition_paid_percentage < 100.0:
+                student.tuition_paid_percentage = 100.0
+                student.save()
+                updated_count += 1
+        log_system_event(request.user, f"Synced CIU Cleared Students API: {updated_count} students updated to 100% clearance.", level="INFO")
+        return Response({'detail': f'Successfully synced CIU Cleared Students API. {updated_count} students updated to 100% clearance.', 'updated_count': updated_count})
+
+    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsAdmin])
+    def reset_password(self, request, pk=None):
+        user_obj = self.get_object()
+        new_password = request.data.get('new_password')
+        if not new_password:
+            return Response({'detail': 'New password parameter is required.'}, status=status.HTTP_400_BAD_REQUEST)
+        user_obj.set_password(new_password)
+        user_obj.save()
+        log_system_event(request.user, f"Admin Password Reset for user: {user_obj.username} ({user_obj.role})", level="INFO")
+        return Response({'detail': f"Password for {user_obj.username} has been reset successfully."})
+
+    @action(detail=False, methods=['get'], permission_classes=[permissions.IsAuthenticated, IsAdmin])
+    def ciu_cleared_students(self, request):
+        cleared_api_records = fetch_external_cleared_students() or []
+        students = User.objects.filter(role='student').select_related('faculty')
+        
+        students_by_key = {}
+        for s in students:
+            reg = (s.reg_number or s.registration_number or '').strip().upper()
+            if reg:
+                students_by_key[reg] = s
+            if s.username:
+                students_by_key[s.username.strip().upper()] = s
+            if s.email:
+                students_by_key[s.email.strip().lower()] = s
+
+        all_payload_records = []
+
+        if isinstance(cleared_api_records, list):
+            for idx, item in enumerate(cleared_api_records):
+                if isinstance(item, dict):
+                    reg_no = str(item.get('RegNo') or item.get('reg_no') or item.get('RegistrationNo') or item.get('StudentNo') or item.get('username') or '').strip()
+                    name = str(item.get('StudentName') or item.get('name') or item.get('Fullname') or item.get('Student_Name') or 'CIU Student').strip()
+                    program = str(item.get('Program') or item.get('Faculty') or item.get('Course') or item.get('Department') or 'SOBAT').strip()
+                    acad = str(item.get('AcademicYear') or item.get('AcadYear') or '2026/2027').strip()
+                    sem = str(item.get('Semester') or item.get('Sem') or '1').strip()
+                    status_txt = str(item.get('Status') or item.get('ClearanceStatus') or 'CLEARED').strip()
+
+                    matched_user = None
+                    if reg_no:
+                        matched_user = students_by_key.get(reg_no.upper())
+                    if not matched_user and name:
+                        for s in students:
+                            if name.lower() in (s.get_full_name() or s.username).lower():
+                                matched_user = s
+                                break
+
+                    rec_entry = {
+                        'id': f"api_{idx+1}",
+                        'raw_payload': item,
+                        'reg_number': reg_no or 'N/A',
+                        'student_name': name,
+                        'program': program,
+                        'acad_year': acad,
+                        'semester': sem,
+                        'status': status_txt,
+                        'is_db_matched': bool(matched_user),
+                    }
+
+                    if matched_user:
+                        clearance = check_student_clearance(matched_user)
+                        rec_entry['db_student'] = {
+                            'id': matched_user.id,
+                            'username': matched_user.username,
+                            'full_name': matched_user.get_full_name() or matched_user.username,
+                            'email': matched_user.email,
+                            'faculty': matched_user.faculty.name if matched_user.faculty else 'General / Unassigned',
+                            'faculty_code': matched_user.faculty.code if matched_user.faculty else 'SOBAT',
+                            'tuition_paid_percentage': clearance['tuition_paid_percentage'],
+                            'is_exam_cleared': clearance['is_exam_cleared'],
+                            'is_test_cleared': clearance['is_test_cleared'],
+                            'clearance_source': clearance['source']
+                        }
+
+                    all_payload_records.append(rec_entry)
+                elif isinstance(item, str):
+                    all_payload_records.append({
+                        'id': f"api_{idx+1}",
+                        'raw_payload': item,
+                        'reg_number': 'N/A',
+                        'student_name': item,
+                        'program': 'N/A',
+                        'acad_year': '2026/2027',
+                        'semester': '1',
+                        'status': 'CLEARED',
+                        'is_db_matched': False
+                    })
+
+        faculties_map = {}
+        for student in students:
+            f_name = student.faculty.name if student.faculty else 'General / Unassigned'
+            f_code = student.faculty.code if student.faculty else 'SOBAT'
+            if f_name not in faculties_map:
+                faculties_map[f_name] = {'code': f_code, 'students': []}
+            
+            clearance = check_student_clearance(student)
+            faculties_map[f_name]['students'].append({
+                'id': student.id,
+                'username': student.username,
+                'full_name': student.get_full_name() or student.username,
+                'email': student.email,
+                'reg_number': student.reg_number or student.registration_number,
+                'tuition_paid_percentage': clearance['tuition_paid_percentage'],
+                'is_exam_cleared': clearance['is_exam_cleared'],
+                'is_test_cleared': clearance['is_test_cleared'],
+                'is_api_cleared': clearance['is_api_cleared'],
+                'clearance_source': clearance['source']
+            })
+        
+        return Response({
+            'faculties': faculties_map,
+            'external_api_raw_records': cleared_api_records or [],
+            'all_payload_records': all_payload_records,
+            'external_api_count': len(cleared_api_records) if isinstance(cleared_api_records, list) else 0
+        })
+
 # 4b. Invitation Management ViewSet
 class InvitationViewSet(viewsets.ModelViewSet):
     serializer_class = InvitationSerializer
@@ -107,7 +273,29 @@ class InvitationViewSet(viewsets.ModelViewSet):
         return Invitation.objects.all().order_by('-created_at')
 
     def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user)
+        invitation = serializer.save(created_by=self.request.user)
+        try:
+            from django.core.mail import send_mail
+            from django.conf import settings
+            subject = "Official Invitation to CIU MyKampus Academic Portal"
+            register_url = f"http://localhost:3000/login?invite={invitation.id}"
+            message = (
+                f"Dear Invitee,\n\n"
+                f"You have been invited to join the Clarke International University (CIU) Academic Portal as a {invitation.get_role_display()}.\n\n"
+                f"Your Unique Invitation Code: {invitation.id}\n\n"
+                f"Please click the link below to complete your registration:\n{register_url}\n\n"
+                f"Best regards,\nCIU Academic Administration"
+            )
+            send_mail(
+                subject=subject,
+                message=message,
+                from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'CIU Portal Admin <noreply@ciu.ac.ug>'),
+                recipient_list=[invitation.email],
+                fail_silently=False
+            )
+            log_system_event(self.request.user, f"Invitation Email Sent to {invitation.email} (Code: {invitation.id})", level="INFO")
+        except Exception as e:
+            log_system_event(self.request.user, f"Failed to send invitation email to {invitation.email}: {str(e)}", level="WARNING")
 
     @action(detail=False, methods=['get'], permission_classes=[permissions.AllowAny])
     def validate_code(self, request):
@@ -122,13 +310,19 @@ class InvitationViewSet(viewsets.ModelViewSet):
 
 # 5. Faculty & Course Management ViewSets
 class FacultyViewSet(viewsets.ModelViewSet):
-    queryset = Faculty.objects.all().order_by('code')
     serializer_class = FacultySerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = Faculty.objects.all().order_by('code')
+        if user and user.is_authenticated and user.role == 'lecturer':
+            return Faculty.objects.filter(courses__units__lecturers=user).distinct().order_by('code')
+        return qs
 
     def get_permissions(self):
         if self.action in ['list', 'retrieve']:
             return [permissions.IsAuthenticated()]
-        return [permissions.IsAuthenticated(), (IsAdmin | IsDVC | IsDean | IsFacultyAdmin)()]
+        return [permissions.IsAuthenticated(), (IsAdmin | IsFacultyAdmin)()]
 
     def perform_create(self, serializer):
         faculty = serializer.save()
@@ -222,13 +416,19 @@ class FacultyViewSet(viewsets.ModelViewSet):
             return Response({'detail': 'Student not found in this faculty.'}, status=status.HTTP_404_NOT_FOUND)
 
 class CourseViewSet(viewsets.ModelViewSet):
-    queryset = Course.objects.all().order_by('code')
     serializer_class = CourseSerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = Course.objects.all().order_by('code')
+        if user and user.is_authenticated and user.role == 'lecturer':
+            return Course.objects.filter(units__lecturers=user).distinct().order_by('code')
+        return qs
 
     def get_permissions(self):
         if self.action in ['list', 'retrieve']:
             return [permissions.IsAuthenticated()]
-        return [permissions.IsAuthenticated(), (IsAdmin | IsDVC | IsDean | IsFacultyAdmin)()]
+        return [permissions.IsAuthenticated(), (IsAdmin | IsFacultyAdmin)()]
 
 class CourseUnitViewSet(viewsets.ModelViewSet):
     serializer_class = CourseUnitSerializer
@@ -238,7 +438,7 @@ class CourseUnitViewSet(viewsets.ModelViewSet):
             return [permissions.IsAuthenticated()]
         if self.action == 'assign_lecturer':
             return [permissions.IsAuthenticated(), (IsAdmin | IsFacultyAdmin)()]
-        return [permissions.IsAuthenticated(), (IsAdmin | IsDVC | IsDean | IsFacultyAdmin)()]
+        return [permissions.IsAuthenticated(), (IsAdmin | IsFacultyAdmin)()]
 
     def get_queryset(self):
         user = self.request.user
@@ -280,7 +480,7 @@ class CourseUnitViewSet(viewsets.ModelViewSet):
         except (ValueError, TypeError):
             return Response({'detail': 'Invalid lecturer_id format.'}, status=status.HTTP_400_BAD_REQUEST)
 
-    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsAdmin | IsFacultyAdmin | IsDean])
+    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsAdmin | IsFacultyAdmin])
     def upload_csv(self, request):
         csv_file = request.FILES.get('file') or request.FILES.get('csv_file')
         csv_text = request.data.get('csv_text')
@@ -353,12 +553,14 @@ class ApplicationViewSet(viewsets.ModelViewSet):
         user = self.request.user
         if user.role in ['admin', 'dvc', 'dean', 'faculty_admin', 'registrar']:
             return Application.objects.all().order_by('-applied_at')
+        elif user.role == 'lecturer':
+            return Application.objects.filter(course__units__lecturers=user).distinct().order_by('-applied_at')
         return Application.objects.filter(student=user).order_by('-applied_at')
 
     def perform_create(self, serializer):
         serializer.save(student=self.request.user, status='pending')
 
-    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsDean | IsDVC | IsAdmin])
+    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsAdmin | IsFacultyAdmin])
     def review(self, request, pk=None):
         application = self.get_object()
         serializer = ApplicationReviewSerializer(application, data=request.data, context={'request': request})
@@ -380,11 +582,17 @@ class ExamViewSet(viewsets.ModelViewSet):
             ).distinct()
             return Exam.objects.filter(is_active=True, course__in=student_courses).order_by('-created_at')
         elif user.role == 'lecturer':
-            return Exam.objects.filter(lecturer=user).order_by('-created_at')
+            return Exam.objects.filter(
+                models.Q(lecturer=user) |
+                models.Q(course__units__lecturers=user) |
+                models.Q(course_unit__lecturers=user)
+            ).distinct().order_by('-created_at')
         return Exam.objects.all().order_by('-created_at')
 
     def perform_create(self, serializer):
         user = self.request.user
+        if user.role in ['dvc', 'vc', 'dean']:
+            raise generics.serializers.ValidationError({"detail": "Permission Denied: DVC, VC, and Deans have read-only access and cannot create, update, or delete data."})
         if user.role == 'lecturer':
             course_unit = serializer.validated_data.get('course_unit')
             course = serializer.validated_data.get('course')
@@ -400,19 +608,27 @@ class ExamViewSet(viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         user = self.request.user
+        if user.role in ['dvc', 'vc', 'dean']:
+            raise generics.serializers.ValidationError({"detail": "Permission Denied: DVC, VC, and Deans have read-only access and cannot create, update, or delete data."})
         if user.role == 'lecturer':
             if serializer.instance.lecturer != user:
                 raise generics.serializers.ValidationError({"detail": "Permission Denied: You can only update your own created exams."})
+            if serializer.instance.is_approved_by_dean:
+                raise generics.serializers.ValidationError({"detail": "Permission Denied: Approved exams cannot be modified by the lecturer."})
         serializer.save()
 
     def perform_destroy(self, instance):
         user = self.request.user
+        if user.role in ['dvc', 'vc', 'dean']:
+            raise generics.serializers.ValidationError({"detail": "Permission Denied: DVC, VC, and Deans have read-only access and cannot create, update, or delete data."})
         if user.role == 'lecturer':
             if instance.lecturer != user:
                 raise generics.serializers.ValidationError({"detail": "Permission Denied: You can only delete your own created exams."})
+            if instance.is_approved_by_dean:
+                raise generics.serializers.ValidationError({"detail": "Permission Denied: Approved exams cannot be deleted by the lecturer."})
         instance.delete()
 
-    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsDean | IsAdmin])
+    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsAdmin | IsFacultyAdmin])
     def approve_exam(self, request, pk=None):
         exam = self.get_object()
         exam.is_approved_by_dean = not exam.is_approved_by_dean
@@ -448,6 +664,11 @@ class ExamViewSet(viewsets.ModelViewSet):
         elif request.method == 'POST':
             if user.role not in ['lecturer', 'admin', 'faculty_admin']:
                 return Response({'detail': 'Only lecturers or staff can add questions.'}, status=status.HTTP_403_FORBIDDEN)
+            if user.role == 'lecturer':
+                if exam.lecturer != user:
+                    return Response({'detail': 'Permission Denied: You can only add questions to your own created exams.'}, status=status.HTTP_403_FORBIDDEN)
+                if exam.is_approved_by_dean:
+                    return Response({'detail': 'Permission Denied: Approved exams cannot be modified by the lecturer.'}, status=status.HTTP_403_FORBIDDEN)
             
             data = request.data.copy()
             data['exam'] = exam.id
@@ -461,10 +682,11 @@ class ExamViewSet(viewsets.ModelViewSet):
         exam = self.get_object()
         student = request.user
 
-        # Fee Gate: Exam requires 100% full tuition clearance!
-        if getattr(student, 'tuition_paid_percentage', 100.0) < 100.0:
+        # Fee Gate: Exam requires 100% full tuition clearance or CIU Cleared Students API verification!
+        clearance = check_student_clearance(student, examtype="EXAMS")
+        if not clearance['is_exam_cleared']:
             return Response({
-                'detail': f'Exam Access Denied: 100% full tuition clearance required to sit for final examinations. Your current clearance is {student.tuition_paid_percentage}%. Please clear your outstanding balance with the Bursar.'
+                'detail': f"Exam Access Denied: 100% tuition clearance or CIU Cleared Students API verification is required to sit for final examinations. Current clearance: {clearance['tuition_paid_percentage']}% ({clearance['source']})."
             }, status=status.HTTP_403_FORBIDDEN)
 
         # Dean Approval check (PDF Requirement: available upon respective dean approval)
@@ -548,12 +770,19 @@ class ExamAttemptViewSet(viewsets.ReadOnlyModelViewSet):
         unit_id = self.request.query_params.get('course_unit')
         lecturer_id = self.request.query_params.get('lecturer')
         exam_id = self.request.query_params.get('exam')
+        course_param = self.request.query_params.get('course')
+        faculty_param = self.request.query_params.get('faculty')
+
         if unit_id:
             qs = qs.filter(exam__course_unit_id=unit_id)
         if lecturer_id:
             qs = qs.filter(exam__lecturer_id=lecturer_id)
         if exam_id:
             qs = qs.filter(exam_id=exam_id)
+        if course_param:
+            qs = qs.filter(models.Q(exam__course_id=course_param) | models.Q(exam__course__code__iexact=course_param))
+        if faculty_param:
+            qs = qs.filter(models.Q(exam__course__faculty_id=faculty_param) | models.Q(student__faculty_id=faculty_param) | models.Q(exam__course__faculty__code__iexact=faculty_param))
         return qs
 
     @action(detail=True, methods=['post'], url_path='submit', permission_classes=[permissions.IsAuthenticated, IsStudent])
@@ -628,11 +857,17 @@ class TestViewSet(viewsets.ModelViewSet):
             ).distinct()
             return Test.objects.filter(is_published=True, course__in=student_courses).order_by('-created_at')
         elif user.role == 'lecturer':
-            return Test.objects.filter(lecturer=user).order_by('-created_at')
+            return Test.objects.filter(
+                models.Q(lecturer=user) |
+                models.Q(course__units__lecturers=user) |
+                models.Q(course_unit__lecturers=user)
+            ).distinct().order_by('-created_at')
         return Test.objects.all().order_by('-created_at')
 
     def perform_create(self, serializer):
         user = self.request.user
+        if user.role in ['dvc', 'vc', 'dean']:
+            raise generics.serializers.ValidationError({"detail": "Permission Denied: DVC, VC, and Deans have read-only access and cannot create, update, or delete data."})
         if user.role == 'lecturer':
             course_unit = serializer.validated_data.get('course_unit')
             course = serializer.validated_data.get('course')
@@ -648,6 +883,8 @@ class TestViewSet(viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         user = self.request.user
+        if user.role in ['dvc', 'vc', 'dean']:
+            raise generics.serializers.ValidationError({"detail": "Permission Denied: DVC, VC, and Deans have read-only access and cannot create, update, or delete data."})
         if user.role == 'lecturer':
             if serializer.instance.lecturer != user:
                 raise generics.serializers.ValidationError({"detail": "Permission Denied: You can only update your own created tests."})
@@ -655,6 +892,8 @@ class TestViewSet(viewsets.ModelViewSet):
 
     def perform_destroy(self, instance):
         user = self.request.user
+        if user.role in ['dvc', 'vc', 'dean']:
+            raise generics.serializers.ValidationError({"detail": "Permission Denied: DVC, VC, and Deans have read-only access and cannot create, update, or delete data."})
         if user.role == 'lecturer':
             if instance.lecturer != user:
                 raise generics.serializers.ValidationError({"detail": "Permission Denied: You can only delete your own created tests."})
@@ -765,10 +1004,11 @@ class TestViewSet(viewsets.ModelViewSet):
         test_obj = self.get_object()
         student = request.user
 
-        # Fee Gate: Test requires at least 50% tuition clearance!
-        if getattr(student, 'tuition_paid_percentage', 100.0) < 50.0:
+        # Fee Gate: Test requires at least 50% tuition clearance or CIU Cleared Students API verification!
+        clearance = check_student_clearance(student, examtype="TESTS")
+        if not clearance['is_test_cleared']:
             return Response({
-                'detail': f'Test Access Denied: At least 50% tuition clearance required to access quizzes and tests. Your current clearance is {student.tuition_paid_percentage}%. Please clear your fees with the Bursar.'
+                'detail': f"Test Access Denied: At least 50% tuition fee clearance or CIU Cleared Students API verification is required to access quizzes and tests. Current clearance: {clearance['tuition_paid_percentage']}% ({clearance['source']})."
             }, status=status.HTTP_403_FORBIDDEN)
 
         if not test_obj.is_published:
@@ -860,12 +1100,19 @@ class TestAttemptViewSet(viewsets.ReadOnlyModelViewSet):
         unit_id = self.request.query_params.get('course_unit')
         lecturer_id = self.request.query_params.get('lecturer')
         test_id = self.request.query_params.get('test')
+        course_param = self.request.query_params.get('course')
+        faculty_param = self.request.query_params.get('faculty')
+
         if unit_id:
             qs = qs.filter(test__course_unit_id=unit_id)
         if lecturer_id:
             qs = qs.filter(test__lecturer_id=lecturer_id)
         if test_id:
             qs = qs.filter(test_id=test_id)
+        if course_param:
+            qs = qs.filter(models.Q(test__course_id=course_param) | models.Q(test__course__code__iexact=course_param))
+        if faculty_param:
+            qs = qs.filter(models.Q(test__course__faculty_id=faculty_param) | models.Q(student__faculty_id=faculty_param) | models.Q(test__course__faculty__code__iexact=faculty_param))
         return qs
 
     @action(detail=True, methods=['post'], url_path='submit', permission_classes=[permissions.IsAuthenticated, IsStudent])
@@ -1015,8 +1262,19 @@ class ReportsViewSet(viewsets.ViewSet):
         total_class_timetables = ClassTimetable.objects.count()
         total_exam_timetables = ExamTimetable.objects.count()
 
+        faculty_param = request.query_params.get('faculty')
+        course_param = request.query_params.get('course')
+
         exam_attempts = ExamAttempt.objects.filter(completed_at__isnull=False)
         test_attempts = TestAttempt.objects.filter(completed_at__isnull=False)
+
+        if faculty_param:
+            exam_attempts = exam_attempts.filter(models.Q(exam__course__faculty_id=faculty_param) | models.Q(student__faculty_id=faculty_param) | models.Q(exam__course__faculty__code__iexact=faculty_param))
+            test_attempts = test_attempts.filter(models.Q(test__course__faculty_id=faculty_param) | models.Q(student__faculty_id=faculty_param) | models.Q(test__course__faculty__code__iexact=faculty_param))
+
+        if course_param:
+            exam_attempts = exam_attempts.filter(models.Q(exam__course_id=course_param) | models.Q(exam__course__code__iexact=course_param))
+            test_attempts = test_attempts.filter(models.Q(test__course_id=course_param) | models.Q(test__course__code__iexact=course_param))
 
         avg_exam_score = round(sum(a.score for a in exam_attempts) / exam_attempts.count(), 1) if exam_attempts.exists() else 0.0
         avg_test_score = round(sum(a.score for a in test_attempts) / test_attempts.count(), 1) if test_attempts.exists() else 0.0
@@ -1050,12 +1308,50 @@ class ReportsViewSet(viewsets.ViewSet):
             'total_test_submissions': test_attempts.count(),
             'total_exam_attempts': exam_attempts.count(),
             'total_test_attempts': test_attempts.count(),
-            'students_100_tuition': User.objects.filter(role='student', tuition_paid_percentage__gte=100.0).count(),
-            'students_50_tuition': User.objects.filter(role='student', tuition_paid_percentage__gte=50.0, tuition_paid_percentage__lt=100.0).count(),
-            'students_below_50_tuition': User.objects.filter(role='student', tuition_paid_percentage__lt=50.0).count(),
+            # Financial Clearance stats consuming CIU Cleared Students API
+            'students_100_tuition': sum(1 for s in User.objects.filter(role='student') if check_student_clearance(s)['is_exam_cleared']),
+            'students_50_tuition': sum(1 for s in User.objects.filter(role='student') if check_student_clearance(s)['is_test_cleared'] and not check_student_clearance(s)['is_exam_cleared']),
+            'students_below_50_tuition': sum(1 for s in User.objects.filter(role='student') if not check_student_clearance(s)['is_test_cleared']),
+            'total_api_cleared_students': sum(1 for s in User.objects.filter(role='student') if check_student_clearance(s)['is_api_cleared']),
+            'external_api_total_records': len(fetch_external_cleared_students()) if isinstance(fetch_external_cleared_students(), list) else 0,
         }
 
         # Role-specific additions
+        if user.role in ['dvc', 'vc', 'dean', 'admin', 'registrar', 'faculty_admin']:
+            faculty_submissions = []
+            faculties = Faculty.objects.all()
+
+            for fac in faculties:
+                fac_students = User.objects.filter(role='student', faculty=fac)
+                fac_exam_attempts = ExamAttempt.objects.filter(
+                    models.Q(exam__course__faculty=fac) | models.Q(student__faculty=fac),
+                    completed_at__isnull=False
+                ).distinct()
+                fac_test_attempts = TestAttempt.objects.filter(
+                    models.Q(test__course__faculty=fac) | models.Q(student__faculty=fac),
+                    completed_at__isnull=False
+                ).distinct()
+
+                exam_pass_c = sum(1 for a in fac_exam_attempts if a.score >= 50.0)
+                test_pass_c = sum(1 for a in fac_test_attempts if a.passed)
+
+                fac_exam_pass_rate = round((exam_pass_c / fac_exam_attempts.count()) * 100, 1) if fac_exam_attempts.exists() else 0.0
+                fac_test_pass_rate = round((test_pass_c / fac_test_attempts.count()) * 100, 1) if fac_test_attempts.exists() else 0.0
+
+                faculty_submissions.append({
+                    'faculty_id': fac.id,
+                    'faculty_name': fac.name,
+                    'faculty_code': fac.code,
+                    'total_students': fac_students.count(),
+                    'total_exam_submissions': fac_exam_attempts.count(),
+                    'total_test_submissions': fac_test_attempts.count(),
+                    'total_submissions': fac_exam_attempts.count() + fac_test_attempts.count(),
+                    'exam_pass_rate': fac_exam_pass_rate,
+                    'test_pass_rate': fac_test_pass_rate,
+                })
+
+            res_data['faculty_submissions'] = faculty_submissions
+
         if user.role == 'student':
             student_exam_attempts = ExamAttempt.objects.filter(student=user, completed_at__isnull=False)
             student_test_attempts = TestAttempt.objects.filter(student=user, completed_at__isnull=False)

@@ -34,7 +34,7 @@ class UserCreateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ('username', 'email', 'password', 'first_name', 'last_name', 'role', 'phone', 'faculty', 'assigned_courses', 'invitation_code')
+        fields = ('username', 'email', 'password', 'first_name', 'last_name', 'role', 'phone', 'faculty', 'assigned_courses', 'invitation_code', 'reg_number')
 
     def validate(self, attrs):
         invitation_code = attrs.get('invitation_code')
@@ -61,12 +61,17 @@ class UserCreateSerializer(serializers.ModelSerializer):
         
         user = User.objects.create(**validated_data)
         user.set_password(password)
+        if user.role == 'student' and not user.reg_number:
+            user.reg_number = user.registration_number
         user.save()
 
         if invitation_code:
-            invite = Invitation.objects.get(id=invitation_code)
-            invite.is_used = True
-            invite.save()
+            try:
+                invite = Invitation.objects.get(id=invitation_code)
+                invite.is_used = True
+                invite.save()
+            except Invitation.DoesNotExist:
+                pass
 
         return user
 
@@ -139,7 +144,10 @@ class QuestionStudentSerializer(serializers.ModelSerializer):
 class ExamSerializer(serializers.ModelSerializer):
     course_name = serializers.CharField(source='course.name', read_only=True)
     course_code = serializers.CharField(source='course.code', read_only=True)
-    course_unit_name = serializers.CharField(source='course_unit.name', read_only=True)
+    faculty_id = serializers.IntegerField(source='course.faculty.id', read_only=True, allow_null=True)
+    faculty_name = serializers.CharField(source='course.faculty.name', read_only=True, allow_null=True)
+    faculty_code = serializers.CharField(source='course.faculty.code', read_only=True, allow_null=True)
+    course_unit_name = serializers.CharField(source='course_unit.name', read_only=True, allow_null=True)
     lecturer_name = serializers.CharField(source='lecturer.get_full_name', read_only=True)
     questions_count = serializers.IntegerField(source='questions.count', read_only=True)
 
@@ -189,7 +197,10 @@ class TestQuestionStudentSerializer(serializers.ModelSerializer):
 class TestSerializer(serializers.ModelSerializer):
     course_name = serializers.CharField(source='course.name', read_only=True)
     course_code = serializers.CharField(source='course.code', read_only=True)
-    course_unit_name = serializers.CharField(source='course_unit.name', read_only=True)
+    faculty_id = serializers.IntegerField(source='course.faculty.id', read_only=True, allow_null=True)
+    faculty_name = serializers.CharField(source='course.faculty.name', read_only=True, allow_null=True)
+    faculty_code = serializers.CharField(source='course.faculty.code', read_only=True, allow_null=True)
+    course_unit_name = serializers.CharField(source='course_unit.name', read_only=True, allow_null=True)
     lecturer_name = serializers.CharField(source='lecturer.get_full_name', read_only=True)
     questions_count = serializers.IntegerField(source='questions.count', read_only=True)
     attempts_count = serializers.IntegerField(source='attempts.count', read_only=True)

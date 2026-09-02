@@ -94,8 +94,10 @@ export default function DashboardPage() {
     );
   }
 
+  const isExecutive = ['dvc', 'vc', 'dean'].includes(user.role);
+
   return (
-    <div className="space-y-8 animate-fade-in">
+    <div className="space-y-8 animate-fade-in max-w-6xl mx-auto">
       {/* Welcome Banner */}
       <div className="bg-gradient-to-r from-brand-dark via-brand-medium to-brand-light rounded-3xl p-6 md:p-8 text-white shadow-xl flex flex-col md:flex-row md:items-center justify-between border border-white/10 relative overflow-hidden">
         <div className="absolute right-0 top-0 w-80 h-80 bg-white/5 rounded-full -mr-20 -mt-20 pointer-events-none"></div>
@@ -143,7 +145,7 @@ export default function DashboardPage() {
               Manage Users & Audit Logs
             </button>
           )}
-          {['dean', 'dvc'].includes(user.role) && (
+          {isExecutive && (
             <button onClick={() => router.push('/dashboard/reports')} className="px-5 py-2.5 bg-brand-emerald hover:bg-brand-emerald/90 text-brand-dark rounded-xl font-bold text-sm shadow-md transition-all active:scale-[0.98]">
               View Academic Analytics
             </button>
@@ -155,7 +157,7 @@ export default function DashboardPage() {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
         
         {/* Card 1: Courses */}
-        <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 flex items-center space-x-4">
+        <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200 flex items-center space-x-4">
           <div className="p-3 bg-emerald-50 rounded-xl text-brand-light">
             <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
@@ -168,8 +170,8 @@ export default function DashboardPage() {
         </div>
 
         {/* Card 2: Class Timetables */}
-        <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 flex items-center space-x-4">
-          <div className="p-3 bg-indigo-50 rounded-xl text-indigo-600">
+        <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200 flex items-center space-x-4">
+          <div className="p-3 bg-emerald-50 rounded-xl text-brand-medium">
             <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
             </svg>
@@ -181,8 +183,8 @@ export default function DashboardPage() {
         </div>
 
         {/* Card 3: Exams & Tests */}
-        <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 flex items-center space-x-4">
-          <div className="p-3 bg-purple-50 rounded-xl text-purple-600">
+        <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200 flex items-center space-x-4">
+          <div className="p-3 bg-emerald-50 rounded-xl text-emerald-700">
             <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
             </svg>
@@ -194,8 +196,8 @@ export default function DashboardPage() {
         </div>
 
         {/* Card 4: Exam Schedules / Attendance */}
-        <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 flex items-center space-x-4">
-          <div className="p-3 bg-amber-50 rounded-xl text-amber-600">
+        <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200 flex items-center space-x-4">
+          <div className="p-3 bg-amber-50 rounded-xl text-amber-700">
             <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
             </svg>
@@ -219,7 +221,7 @@ export default function DashboardPage() {
         <div className="lg:col-span-2 space-y-8">
           
           {/* Exams Panel */}
-          <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 space-y-4">
+          <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200 space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-base font-bold text-slate-800">Active Mid-Terms & Finals</h3>
               <button onClick={() => router.push('/dashboard/exams')} className="text-xs font-semibold text-brand-light hover:underline">
@@ -237,14 +239,14 @@ export default function DashboardPage() {
                   <div key={ex.id} className="py-3 flex items-center justify-between first:pt-0 last:pb-0">
                     <div>
                       <h4 className="text-sm font-semibold text-slate-850">{ex.title}</h4>
-                      <p className="text-xs text-slate-450">{ex.course_code} · {ex.duration_minutes} mins · By {ex.lecturer_name}</p>
+                      <p className="text-xs text-slate-500">{ex.course_code} · {ex.duration_minutes} mins · By {ex.lecturer_name}</p>
                     </div>
                     {user.role === 'student' ? (
                       <button onClick={() => router.push(`/dashboard/exams`)} className="px-3 py-1.5 bg-brand-light text-white text-xs font-semibold rounded-lg hover:bg-brand-medium transition-all">
                         Launch Exam
                       </button>
                     ) : (
-                      <span className={`px-2.5 py-1 rounded text-xs font-medium border ${ex.is_active ? 'bg-emerald-50 text-emerald-700 border-emerald-100' : 'bg-slate-50 text-slate-500 border-slate-100'}`}>
+                      <span className={`px-2.5 py-1 rounded text-xs font-medium border ${ex.is_active ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-slate-50 text-slate-500 border-slate-200'}`}>
                         {ex.is_active ? 'Active' : 'Draft'}
                       </span>
                     )}
@@ -255,7 +257,7 @@ export default function DashboardPage() {
           </div>
 
           {/* Class Timetables Quick Preview */}
-          <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 space-y-4">
+          <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200 space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-base font-bold text-slate-800">Faculty Class Schedules</h3>
               <button onClick={() => router.push('/dashboard/faculty')} className="text-xs font-semibold text-brand-light hover:underline">
@@ -273,9 +275,9 @@ export default function DashboardPage() {
                   <div key={tt.id} className="py-3 flex items-center justify-between first:pt-0 last:pb-0">
                     <div>
                       <h4 className="text-sm font-semibold text-slate-850">{tt.course_code}: {tt.course_name}</h4>
-                      <p className="text-xs text-slate-450">{tt.day_of_week} · {tt.start_time} - {tt.end_time} · Room: {tt.room}</p>
+                      <p className="text-xs text-slate-500">{tt.day_of_week} · {tt.start_time} - {tt.end_time} · Room: {tt.room}</p>
                     </div>
-                    <span className="px-2.5 py-1 rounded text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-100 capitalize">
+                    <span className="px-2.5 py-1 rounded text-xs font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200 capitalize">
                       {tt.class_type}
                     </span>
                   </div>
@@ -290,47 +292,52 @@ export default function DashboardPage() {
         <div className="space-y-8">
           
           {/* Quick Actions Panel */}
-          <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 space-y-4">
+          <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200 space-y-4">
             <h3 className="text-base font-bold text-slate-800">Role Quick Actions</h3>
             
             <div className="flex flex-col space-y-2">
+              {isExecutive && (
+                <button onClick={() => router.push('/dashboard/reports')} className="w-full text-left px-4 py-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 transition-all">
+                  📊 Executive Academic Analytics & Reports
+                </button>
+              )}
               {user.role === 'admin' && (
                 <>
-                  <button onClick={() => router.push('/dashboard/admin')} className="w-full text-left px-4 py-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-150 rounded-xl text-xs font-semibold text-slate-700 transition-all">
+                  <button onClick={() => router.push('/dashboard/admin')} className="w-full text-left px-4 py-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 transition-all">
                     + Generate User Invite Link
                   </button>
-                  <button onClick={() => router.push('/dashboard/admin')} className="w-full text-left px-4 py-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-150 rounded-xl text-xs font-semibold text-slate-700 transition-all">
+                  <button onClick={() => router.push('/dashboard/admin')} className="w-full text-left px-4 py-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 transition-all">
                     🛡️ View System Audit Logs
                   </button>
                 </>
               )}
               {user.role === 'student' && (
                 <>
-                  <button onClick={() => router.push('/dashboard/faculty')} className="w-full text-left px-4 py-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-150 rounded-xl text-xs font-semibold text-slate-700 transition-all">
+                  <button onClick={() => router.push('/dashboard/faculty')} className="w-full text-left px-4 py-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 transition-all">
                     📅 Check Weekly Class Timetable
                   </button>
-                  <button onClick={() => router.push('/dashboard/exams')} className="w-full text-left px-4 py-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-150 rounded-xl text-xs font-semibold text-slate-700 transition-all">
+                  <button onClick={() => router.push('/dashboard/exams')} className="w-full text-left px-4 py-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 transition-all">
                     🎓 Check Exam Schedules
                   </button>
                 </>
               )}
               {user.role === 'lecturer' && (
                 <>
-                  <button onClick={() => router.push('/dashboard/classes')} className="w-full text-left px-4 py-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-150 rounded-xl text-xs font-semibold text-slate-700 transition-all">
+                  <button onClick={() => router.push('/dashboard/classes')} className="w-full text-left px-4 py-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 transition-all">
                     🕒 Open Class Attendance Window
                   </button>
-                  <button onClick={() => router.push('/dashboard/exams')} className="w-full text-left px-4 py-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-150 rounded-xl text-xs font-semibold text-slate-700 transition-all">
+                  <button onClick={() => router.push('/dashboard/exams')} className="w-full text-left px-4 py-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 transition-all">
                     ✏️ Set Exam / Test Questions
                   </button>
                 </>
               )}
               {user.role === 'faculty_admin' && (
-                <button onClick={() => router.push('/dashboard/faculty')} className="w-full text-left px-4 py-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-150 rounded-xl text-xs font-semibold text-slate-700 transition-all">
+                <button onClick={() => router.push('/dashboard/faculty')} className="w-full text-left px-4 py-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 transition-all">
                   📅 Create / Edit Faculty Timetables
                 </button>
               )}
               {user.role === 'registrar' && (
-                <button onClick={() => router.push('/dashboard/exams')} className="w-full text-left px-4 py-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-150 rounded-xl text-xs font-semibold text-slate-700 transition-all">
+                <button onClick={() => router.push('/dashboard/exams')} className="w-full text-left px-4 py-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 transition-all">
                   📝 Create / Manage Exam Timetables
                 </button>
               )}

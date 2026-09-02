@@ -55,6 +55,9 @@ export default function ClassesPage() {
     }
   }
 
+  const isExecutiveReadOnly = ['dvc', 'vc', 'dean'].includes(user?.role);
+  const isLecturer = ['lecturer', 'admin'].includes(user?.role) && !isExecutiveReadOnly;
+
   // Filter assigned courses for Lecturers
   const assignedCourses = user?.role === 'lecturer'
     ? courses.filter(c => courseUnits.some(u => u.course_code === c.code && u.lecturer_details?.some(l => l.id === user.id)))
@@ -62,6 +65,7 @@ export default function ClassesPage() {
 
   const handleUploadContent = async (e) => {
     e.preventDefault();
+    if (isExecutiveReadOnly) return;
     if (!contentTitle || !selectedCourse) {
       setErrorMsg('Please specify a title and select a course.');
       return;
@@ -92,6 +96,7 @@ export default function ClassesPage() {
 
   const handleStartAttendance = async (e) => {
     e.preventDefault();
+    if (isExecutiveReadOnly) return;
     if (!attendanceCourse) {
       setErrorMsg('Please select a course to log attendance.');
       return;
@@ -117,6 +122,7 @@ export default function ClassesPage() {
 
   const handleStudentCheckIn = async (e) => {
     e.preventDefault();
+    if (isExecutiveReadOnly) return;
     if (!checkInSession || !checkInCode) {
       setErrorMsg('Please select a class session and enter the verification code.');
       return;
@@ -149,13 +155,15 @@ export default function ClassesPage() {
     );
   }
 
-  const isLecturer = ['lecturer', 'admin'].includes(user.role);
-
   return (
-    <div className="space-y-8 animate-fade-in">
-      <div>
-        <h2 className="text-xl font-bold text-slate-800">Classroom Content & Attendance</h2>
-        <p className="text-slate-500 text-xs font-medium">Access lecture materials and verify daily attendance for your assigned courses.</p>
+    <div className="space-y-8 animate-fade-in max-w-6xl mx-auto">
+      
+      {/* Header Bar */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200 pb-5">
+        <div>
+          <h2 className="text-xl font-bold text-slate-800">Classroom Content & Attendance</h2>
+          <p className="text-slate-500 text-xs font-medium">Access lecture materials and verify daily attendance for your assigned courses.</p>
+        </div>
       </div>
 
       {errorMsg && (
@@ -177,7 +185,7 @@ export default function ClassesPage() {
         <div className="lg:col-span-2 space-y-8">
           
           {/* Class Materials List */}
-          <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 space-y-4">
+          <div className="green-card rounded-2xl p-6 space-y-4">
             <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">Lecture Resources & Files</h3>
             
             {contents.length === 0 ? (
@@ -185,7 +193,7 @@ export default function ClassesPage() {
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {contents.map((item) => (
-                  <div key={item.id} className="p-4 bg-slate-50 rounded-xl border border-slate-150 flex flex-col justify-between space-y-3">
+                  <div key={item.id} className="p-4 bg-gradient-to-br from-white to-emerald-50/20 rounded-xl border border-emerald-200/80 flex flex-col justify-between space-y-3 hover:border-emerald-300 transition-all">
                     <div>
                       <div className="flex justify-between items-start">
                         <span className="text-[10px] bg-brand-light/10 text-brand-medium font-bold px-2 py-0.5 rounded border border-brand-light/20">
@@ -201,7 +209,7 @@ export default function ClassesPage() {
                         href={item.attachment_url}
                         target="_blank"
                         rel="noreferrer"
-                        className="w-full text-center py-2 bg-white hover:bg-slate-100 text-brand-light hover:text-brand-medium text-xs font-bold rounded-lg border border-slate-200 transition-all block"
+                        className="w-full text-center py-2 bg-white hover:bg-emerald-50 text-brand-light hover:text-brand-medium text-xs font-bold rounded-lg border border-emerald-200 transition-all block shadow-sm"
                       >
                         Open Resource Link
                       </a>
@@ -212,8 +220,8 @@ export default function ClassesPage() {
             )}
           </div>
 
-          {/* Active Attendance Sessions (Lecturers/Staff list) */}
-          <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 space-y-4">
+          {/* Active Attendance Sessions */}
+          <div className="green-card rounded-2xl p-6 space-y-4">
             <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">Attendance Register Sessions</h3>
             
             {sessions.length === 0 ? (
@@ -221,20 +229,20 @@ export default function ClassesPage() {
             ) : (
               <div className="space-y-3">
                 {sessions.map((sess) => (
-                  <div key={sess.id} className="p-3 bg-slate-50 border border-slate-150 rounded-xl flex items-center justify-between text-xs">
+                  <div key={sess.id} className="p-3 bg-gradient-to-r from-white to-emerald-50/20 border border-emerald-200/80 rounded-xl flex items-center justify-between text-xs">
                     <div>
                       <h5 className="font-bold text-slate-850">Class Session - {sess.course_code}</h5>
-                      <p className="text-slate-450 text-[10px] mt-0.5">Lecturer: {sess.lecturer_name} · Date: {new Date(sess.created_at).toLocaleString()}</p>
+                      <p className="text-slate-500 text-[10px] mt-0.5">Lecturer: {sess.lecturer_name} · Date: {new Date(sess.created_at).toLocaleString()}</p>
                     </div>
                     <div className="flex items-center space-x-3">
                       {isLecturer && (
                         <div className="text-right">
                           <span className="text-[10px] text-slate-400 block">Attendance Code</span>
-                          <strong className="text-sm font-mono text-brand-medium bg-white px-2 py-0.5 rounded border border-slate-200">{sess.code}</strong>
+                          <strong className="text-sm font-mono text-brand-medium bg-white px-2 py-0.5 rounded border border-emerald-200">{sess.code}</strong>
                         </div>
                       )}
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${sess.is_active ? 'bg-emerald-50 text-emerald-700 border-emerald-100 animate-pulse-slow' : 'bg-slate-200 text-slate-500 border-slate-350'}`}>
-                        {sess.is_active ? 'Active' : 'Closed'}
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${sess.is_active ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-slate-100 text-slate-500 border-slate-200'}`}>
+                        {sess.is_active ? 'ACTIVE WINDOW' : 'CLOSED'}
                       </span>
                     </div>
                   </div>
@@ -245,66 +253,22 @@ export default function ClassesPage() {
 
         </div>
 
-        {/* Right Side Control Panel */}
-        <div className="space-y-6">
+        {/* Right Side: Upload File & Attendance Actions */}
+        <div className="space-y-8">
           
-          {isLecturer ? (
-            /* Lecturer Forms: Share Content & Open Attendance */
+          {isLecturer && !isExecutiveReadOnly && (
             <>
-              {/* Start Attendance Card */}
-              <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 space-y-4">
-                <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">Open Attendance Code</h3>
+              {/* Upload Content Panel */}
+              <div className="green-card rounded-2xl p-6 space-y-4">
+                <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">Upload Course Resource</h3>
                 
-                {user.role === 'lecturer' && assignedCourses.length === 0 && (
-                  <div className="p-3 bg-amber-50 border-l-4 border-amber-500 rounded text-amber-800 text-xs font-semibold">
-                    Notice: You are not assigned to any course units. Contact your Faculty Secretary for assignment.
-                  </div>
-                )}
-
-                <form onSubmit={handleStartAttendance} className="space-y-4">
-                  <div>
-                    <label className="block text-slate-700 text-xs font-semibold uppercase tracking-wider mb-1">Select Course Program</label>
-                    <select
-                      value={attendanceCourse}
-                      onChange={(e) => setAttendanceCourse(e.target.value)}
-                      className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-slate-800 text-xs focus:outline-none focus:ring-2 focus:ring-brand-light/30 focus:border-brand-light transition-all"
-                      required
-                    >
-                      <option value="">Select Course...</option>
-                      {assignedCourses.map((c) => (
-                        <option key={c.id} value={c.id}>[{c.code}] {c.name}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <button
-                    type="submit"
-                    disabled={submitting}
-                    className="w-full py-2 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-lg transition-all"
-                  >
-                    {submitting ? 'Creating...' : 'Open Session'}
-                  </button>
-                </form>
-
-                {openedCode && (
-                  <div className="p-4 bg-brand-light/5 border border-brand-light/20 rounded-xl text-center space-y-1">
-                    <span className="text-[10px] text-brand-medium font-semibold uppercase tracking-wider">Class Verification Code</span>
-                    <h4 className="text-3xl font-extrabold font-mono text-brand-dark tracking-widest">{openedCode}</h4>
-                    <p className="text-[9px] text-slate-450">Display this code to students present in the classroom lecture.</p>
-                  </div>
-                )}
-              </div>
-
-              {/* Upload Content Card */}
-              <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 space-y-4">
-                <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">Share Lecture Resources</h3>
                 <form onSubmit={handleUploadContent} className="space-y-3">
                   <div>
-                    <label className="block text-slate-700 text-xs font-semibold uppercase tracking-wider mb-1">Course Program</label>
+                    <label className="block text-slate-700 text-xs font-bold uppercase mb-1">Target Course</label>
                     <select
                       value={selectedCourse}
                       onChange={(e) => setSelectedCourse(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-800 text-xs focus:outline-none focus:ring-2 focus:ring-brand-light/30 focus:border-brand-light transition-all"
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
                       required
                     >
                       <option value="">Select Course...</option>
@@ -315,92 +279,135 @@ export default function ClassesPage() {
                   </div>
 
                   <div>
-                    <label className="block text-slate-700 text-xs font-semibold uppercase tracking-wider mb-1">Material Title</label>
+                    <label className="block text-slate-700 text-xs font-bold uppercase mb-1">Resource Title</label>
                     <input
                       type="text"
+                      placeholder="e.g. Week 4 Lecture Notes: Data Structures"
                       value={contentTitle}
                       onChange={(e) => setContentTitle(e.target.value)}
-                      placeholder="e.g. Lecture Notes 1 - Intro"
-                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-850 text-xs focus:outline-none focus:ring-2 focus:ring-brand-light/30 focus:border-brand-light transition-all"
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
                       required
                     />
                   </div>
 
                   <div>
-                    <label className="block text-slate-700 text-xs font-semibold uppercase tracking-wider mb-1">Resource Link / PDF URL</label>
+                    <label className="block text-slate-700 text-xs font-bold uppercase mb-1">Attachment URL / Link</label>
                     <input
                       type="url"
+                      placeholder="https://drive.google.com/... or https://..."
                       value={contentLink}
                       onChange={(e) => setContentLink(e.target.value)}
-                      placeholder="https://..."
-                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-850 text-xs focus:outline-none focus:ring-2 focus:ring-brand-light/30 focus:border-brand-light transition-all"
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-slate-700 text-xs font-semibold uppercase tracking-wider mb-1">Notes / Description</label>
+                    <label className="block text-slate-700 text-xs font-bold uppercase mb-1">Description</label>
                     <textarea
                       rows={3}
+                      placeholder="Brief notes for students..."
                       value={contentDesc}
                       onChange={(e) => setContentDesc(e.target.value)}
-                      placeholder="Optional details..."
-                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-805 text-xs focus:outline-none focus:ring-2 focus:ring-brand-light/30 focus:border-brand-light transition-all resize-none"
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
                     />
                   </div>
 
                   <button
                     type="submit"
                     disabled={submitting}
-                    className="w-full py-2 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-lg transition-all"
+                    className="w-full py-2 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-lg shadow-sm transition-all"
                   >
-                    Upload File
+                    {submitting ? 'Uploading...' : 'Publish Resource'}
+                  </button>
+                </form>
+              </div>
+
+              {/* Start Attendance Panel */}
+              <div className="green-card rounded-2xl p-6 space-y-4">
+                <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">Start Class Attendance</h3>
+                
+                <form onSubmit={handleStartAttendance} className="space-y-3">
+                  <div>
+                    <label className="block text-slate-700 text-xs font-bold uppercase mb-1">Select Course</label>
+                    <select
+                      value={attendanceCourse}
+                      onChange={(e) => setAttendanceCourse(e.target.value)}
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
+                      required
+                    >
+                      <option value="">Select Course...</option>
+                      {assignedCourses.map((c) => (
+                        <option key={c.id} value={c.id}>[{c.code}] {c.name}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {openedCode && (
+                    <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-center">
+                      <span className="text-[10px] text-emerald-800 font-bold uppercase block">Active Check-in Code</span>
+                      <span className="text-2xl font-mono font-black text-brand-dark tracking-widest">{openedCode}</span>
+                    </div>
+                  )}
+
+                  <button
+                    type="submit"
+                    disabled={submitting}
+                    className="w-full py-2 bg-brand-medium hover:bg-brand-dark text-white text-xs font-bold rounded-lg shadow-sm transition-all"
+                  >
+                    Open Attendance Code Window
                   </button>
                 </form>
               </div>
             </>
-          ) : (
-            /* Student Form: Verify Attendance */
-            <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 space-y-4">
-              <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">Log Lecture Attendance</h3>
-              <form onSubmit={handleStudentCheckIn} className="space-y-4">
+          )}
+
+          {/* Student Check-in Panel */}
+          {user?.role === 'student' && (
+            <div className="green-card rounded-2xl p-6 space-y-4">
+              <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">Student Attendance Verification</h3>
+              
+              <form onSubmit={handleStudentCheckIn} className="space-y-3">
                 <div>
-                  <label className="block text-slate-700 text-xs font-semibold uppercase tracking-wider mb-1">Active Lecture Session</label>
+                  <label className="block text-slate-700 text-xs font-bold uppercase mb-1">Active Class Session</label>
                   <select
                     value={checkInSession}
                     onChange={(e) => setCheckInSession(e.target.value)}
-                    className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-slate-800 text-xs focus:outline-none focus:ring-2 focus:ring-brand-light/30 focus:border-brand-light transition-all"
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
+                    required
                   >
-                    <option value="">Select current lecture...</option>
-                    {sessions.filter(s => s.is_active).map((s) => (
+                    <option value="">Select Session...</option>
+                    {sessions.map((s) => (
                       <option key={s.id} value={s.id}>
-                        Class session for {s.course_code}
+                        {s.course_code} - {new Date(s.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
                       </option>
                     ))}
                   </select>
                 </div>
 
                 <div>
-                  <label className="block text-slate-700 text-xs font-semibold uppercase tracking-wider mb-1">Verification Code</label>
+                  <label className="block text-slate-700 text-xs font-bold uppercase mb-1">4-Digit Check-in Code</label>
                   <input
                     type="text"
-                    maxLength={6}
+                    maxLength={4}
+                    placeholder="e.g. 4819"
                     value={checkInCode}
                     onChange={(e) => setCheckInCode(e.target.value)}
-                    placeholder="4-digit code"
-                    className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-slate-850 text-center font-bold text-lg font-mono focus:outline-none focus:ring-2 focus:ring-brand-light/30 focus:border-brand-light transition-all tracking-widest"
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono font-bold text-center tracking-widest text-slate-800"
+                    required
                   />
                 </div>
 
                 <button
                   type="submit"
                   disabled={submitting}
-                  className="w-full py-2.5 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-lg shadow-sm transition-all"
+                  className="w-full py-2 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-lg shadow-sm transition-all"
                 >
-                  Verify check-in
+                  Verify Attendance Check-in
                 </button>
               </form>
             </div>
           )}
+
         </div>
 
       </div>
