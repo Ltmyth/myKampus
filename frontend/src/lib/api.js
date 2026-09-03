@@ -51,7 +51,17 @@ export async function apiRequest(endpoint, options = {}) {
         localStorage.removeItem('ciu_user');
       }
     }
-    const errorMessage = data?.detail || data?.message || (typeof data === 'object' ? JSON.stringify(data) : 'Request failed');
+    let errorMessage = 'Request failed';
+    if (data?.detail) {
+      errorMessage = Array.isArray(data.detail) ? data.detail.join(' ') : data.detail;
+    } else if (data?.message) {
+      errorMessage = Array.isArray(data.message) ? data.message.join(' ') : data.message;
+    } else if (data?.non_field_errors) {
+      errorMessage = Array.isArray(data.non_field_errors) ? data.non_field_errors.join(' ') : data.non_field_errors;
+    } else if (typeof data === 'object' && data !== null) {
+      const values = Object.values(data).flat();
+      errorMessage = values.length ? values.join(' ') : JSON.stringify(data);
+    }
     throw new Error(errorMessage);
   }
 

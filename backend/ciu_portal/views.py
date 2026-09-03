@@ -3,7 +3,7 @@ import random
 from django.db import models
 from django.utils import timezone
 from django.http import HttpResponse
-from rest_framework import viewsets, status, permissions, generics
+from rest_framework import viewsets, status, permissions, generics, serializers
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
@@ -61,7 +61,7 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
             if user_obj.role == 'student':
                 student_reg = (user_obj.reg_number or user_obj.registration_number or '').upper()
                 if username_input.upper() != student_reg:
-                    raise generics.serializers.ValidationError({
+                    raise serializers.ValidationError({
                         "detail": f"Students must log in using their official Registration Number (e.g. {student_reg or '2026/CIU/FST/001'}). Username login is not permitted for students."
                     })
             attrs[self.username_field] = user_obj.username
@@ -592,7 +592,7 @@ class ExamViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         user = self.request.user
         if user.role in ['dvc', 'vc', 'dean']:
-            raise generics.serializers.ValidationError({"detail": "Permission Denied: DVC, VC, and Deans have read-only access and cannot create, update, or delete data."})
+            raise serializers.ValidationError({"detail": "Permission Denied: DVC, VC, and Deans have read-only access and cannot create, update, or delete data."})
         if user.role == 'lecturer':
             course_unit = serializer.validated_data.get('course_unit')
             course = serializer.validated_data.get('course')
@@ -602,30 +602,30 @@ class ExamViewSet(viewsets.ModelViewSet):
             elif course and course.units.filter(lecturers=user).exists():
                 is_assigned = True
             if not is_assigned:
-                raise generics.serializers.ValidationError({"detail": "Permission Denied: You can only set exams for your assigned courses or course units."})
+                raise serializers.ValidationError({"detail": "Permission Denied: You can only set exams for your assigned courses or course units."})
         exam = serializer.save(lecturer=user)
         log_system_event(user, f"Exam Created: {exam.title} ({exam.course.code})", level="INFO")
 
     def perform_update(self, serializer):
         user = self.request.user
         if user.role in ['dvc', 'vc', 'dean']:
-            raise generics.serializers.ValidationError({"detail": "Permission Denied: DVC, VC, and Deans have read-only access and cannot create, update, or delete data."})
+            raise serializers.ValidationError({"detail": "Permission Denied: DVC, VC, and Deans have read-only access and cannot create, update, or delete data."})
         if user.role == 'lecturer':
             if serializer.instance.lecturer != user:
-                raise generics.serializers.ValidationError({"detail": "Permission Denied: You can only update your own created exams."})
+                raise serializers.ValidationError({"detail": "Permission Denied: You can only update your own created exams."})
             if serializer.instance.is_approved_by_dean:
-                raise generics.serializers.ValidationError({"detail": "Permission Denied: Approved exams cannot be modified by the lecturer."})
+                raise serializers.ValidationError({"detail": "Permission Denied: Approved exams cannot be modified by the lecturer."})
         serializer.save()
 
     def perform_destroy(self, instance):
         user = self.request.user
         if user.role in ['dvc', 'vc', 'dean']:
-            raise generics.serializers.ValidationError({"detail": "Permission Denied: DVC, VC, and Deans have read-only access and cannot create, update, or delete data."})
+            raise serializers.ValidationError({"detail": "Permission Denied: DVC, VC, and Deans have read-only access and cannot create, update, or delete data."})
         if user.role == 'lecturer':
             if instance.lecturer != user:
-                raise generics.serializers.ValidationError({"detail": "Permission Denied: You can only delete your own created exams."})
+                raise serializers.ValidationError({"detail": "Permission Denied: You can only delete your own created exams."})
             if instance.is_approved_by_dean:
-                raise generics.serializers.ValidationError({"detail": "Permission Denied: Approved exams cannot be deleted by the lecturer."})
+                raise serializers.ValidationError({"detail": "Permission Denied: Approved exams cannot be deleted by the lecturer."})
         instance.delete()
 
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsAdmin | IsFacultyAdmin])
@@ -867,7 +867,7 @@ class TestViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         user = self.request.user
         if user.role in ['dvc', 'vc', 'dean']:
-            raise generics.serializers.ValidationError({"detail": "Permission Denied: DVC, VC, and Deans have read-only access and cannot create, update, or delete data."})
+            raise serializers.ValidationError({"detail": "Permission Denied: DVC, VC, and Deans have read-only access and cannot create, update, or delete data."})
         if user.role == 'lecturer':
             course_unit = serializer.validated_data.get('course_unit')
             course = serializer.validated_data.get('course')
@@ -877,26 +877,26 @@ class TestViewSet(viewsets.ModelViewSet):
             elif course and course.units.filter(lecturers=user).exists():
                 is_assigned = True
             if not is_assigned:
-                raise generics.serializers.ValidationError({"detail": "Permission Denied: You can only set tests for your assigned courses or course units."})
+                raise serializers.ValidationError({"detail": "Permission Denied: You can only set tests for your assigned courses or course units."})
         test = serializer.save(lecturer=user)
         log_system_event(user, f"Test Created: {test.title} ({test.course.code})", level="INFO")
 
     def perform_update(self, serializer):
         user = self.request.user
         if user.role in ['dvc', 'vc', 'dean']:
-            raise generics.serializers.ValidationError({"detail": "Permission Denied: DVC, VC, and Deans have read-only access and cannot create, update, or delete data."})
+            raise serializers.ValidationError({"detail": "Permission Denied: DVC, VC, and Deans have read-only access and cannot create, update, or delete data."})
         if user.role == 'lecturer':
             if serializer.instance.lecturer != user:
-                raise generics.serializers.ValidationError({"detail": "Permission Denied: You can only update your own created tests."})
+                raise serializers.ValidationError({"detail": "Permission Denied: You can only update your own created tests."})
         serializer.save()
 
     def perform_destroy(self, instance):
         user = self.request.user
         if user.role in ['dvc', 'vc', 'dean']:
-            raise generics.serializers.ValidationError({"detail": "Permission Denied: DVC, VC, and Deans have read-only access and cannot create, update, or delete data."})
+            raise serializers.ValidationError({"detail": "Permission Denied: DVC, VC, and Deans have read-only access and cannot create, update, or delete data."})
         if user.role == 'lecturer':
             if instance.lecturer != user:
-                raise generics.serializers.ValidationError({"detail": "Permission Denied: You can only delete your own created tests."})
+                raise serializers.ValidationError({"detail": "Permission Denied: You can only delete your own created tests."})
         instance.delete()
 
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsLecturer | IsAdmin])
@@ -1196,7 +1196,7 @@ class ClassContentViewSet(viewsets.ModelViewSet):
         if user.role == 'lecturer':
             course = serializer.validated_data.get('course')
             if course and not course.units.filter(lecturers=user).exists():
-                raise generics.serializers.ValidationError({"detail": "Permission Denied: You can only upload resources for your assigned courses."})
+                raise serializers.ValidationError({"detail": "Permission Denied: You can only upload resources for your assigned courses."})
         content = serializer.save(lecturer=user)
         log_system_event(user, f"Class Content Uploaded: {content.title} ({content.course.code})", level="INFO")
 
@@ -1217,7 +1217,7 @@ class AttendanceSessionViewSet(viewsets.ModelViewSet):
         if user.role == 'lecturer':
             course = serializer.validated_data.get('course')
             if course and not course.units.filter(lecturers=user).exists():
-                raise generics.serializers.ValidationError({"detail": "Permission Denied: You can only open attendance for your assigned courses."})
+                raise serializers.ValidationError({"detail": "Permission Denied: You can only open attendance for your assigned courses."})
         code = str(random.randint(1000, 9999))
         session = serializer.save(lecturer=user, code=code, is_active=True)
         log_system_event(user, f"Attendance Session Opened: {session.course.code} (Code: {code})", level="INFO")
