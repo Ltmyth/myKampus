@@ -169,8 +169,12 @@ class ExamSerializer(serializers.ModelSerializer):
 
 class ExamAttemptSerializer(serializers.ModelSerializer):
     student_name = serializers.CharField(source='student.get_full_name', read_only=True)
+    student_username = serializers.CharField(source='student.username', read_only=True)
+    student_reg_number = serializers.CharField(source='student.reg_number', read_only=True, allow_null=True)
     exam_title = serializers.CharField(source='exam.title', read_only=True)
     exam_course_code = serializers.CharField(source='exam.course.code', read_only=True)
+    exam_course_name = serializers.CharField(source='exam.course.name', read_only=True)
+    exam_course_id = serializers.IntegerField(source='exam.course.id', read_only=True)
     duration_minutes = serializers.IntegerField(source='exam.duration_minutes', read_only=True)
     is_results_released = serializers.BooleanField(source='exam.is_results_released', read_only=True)
 
@@ -225,8 +229,12 @@ class TestSerializer(serializers.ModelSerializer):
 
 class TestAttemptSerializer(serializers.ModelSerializer):
     student_name = serializers.CharField(source='student.get_full_name', read_only=True)
+    student_username = serializers.CharField(source='student.username', read_only=True)
+    student_reg_number = serializers.CharField(source='student.reg_number', read_only=True, allow_null=True)
     test_title = serializers.CharField(source='test.title', read_only=True)
     test_course_code = serializers.CharField(source='test.course.code', read_only=True)
+    test_course_name = serializers.CharField(source='test.course.name', read_only=True)
+    test_course_id = serializers.IntegerField(source='test.course.id', read_only=True)
     test_category = serializers.CharField(source='test.category', read_only=True)
     duration_minutes = serializers.IntegerField(source='test.duration_minutes', read_only=True)
     pass_percentage = serializers.FloatField(source='test.pass_percentage', read_only=True)

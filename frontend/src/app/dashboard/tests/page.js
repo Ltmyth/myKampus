@@ -23,6 +23,12 @@ export default function TestPortalPage() {
   const [selectedFacultyFilter, setSelectedFacultyFilter] = useState('All');
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState('');
 
+  // Submissions Tab Filter States
+  const [selectedTestFilter, setSelectedTestFilter] = useState('All');
+  const [selectedCourseSubFilter, setSelectedCourseSubFilter] = useState('All');
+  const [selectedStatusFilter, setSelectedStatusFilter] = useState('All');
+  const [submissionSearch, setSubmissionSearch] = useState('');
+
   // Fee Gate Alert Modal
   const [showFeeGateModal, setShowFeeGateModal] = useState(false);
   const [feeGateMessage, setFeeGateMessage] = useState('');
@@ -115,6 +121,28 @@ export default function TestPortalPage() {
   const scopedFaculties = isLecturer
     ? faculties.filter(f => (assignedCourses || []).some(c => c.faculty === f.id || c.faculty_code === f.code))
     : faculties;
+
+  // Filtered Submissions Logic
+  const filteredSubmissions = attempts.filter((att) => {
+    if (selectedTestFilter !== 'All' && String(att.test) !== String(selectedTestFilter)) return false;
+    if (selectedCourseSubFilter !== 'All' && String(att.test_course_id || att.course) !== String(selectedCourseSubFilter) && att.test_course_code !== selectedCourseSubFilter) return false;
+    if (selectedStatusFilter === 'passed' && !att.passed) return false;
+    if (selectedStatusFilter === 'failed' && att.passed) return false;
+    if (submissionSearch) {
+      const q = submissionSearch.toLowerCase();
+      const sName = (att.student_name || '').toLowerCase();
+      const sUser = (att.student_username || '').toLowerCase();
+      const sReg = (att.student_reg_number || '').toLowerCase();
+      const tTitle = (att.test_title || '').toLowerCase();
+      if (!sName.includes(q) && !sUser.includes(q) && !sReg.includes(q) && !tTitle.includes(q)) return false;
+    }
+    return true;
+  });
+
+  const subTotalCount = filteredSubmissions.length;
+  const subPassedCount = filteredSubmissions.filter(a => a.passed).length;
+  const subPassRate = subTotalCount > 0 ? ((subPassedCount / subTotalCount) * 100).toFixed(1) : '0.0';
+  const subAvgScore = subTotalCount > 0 ? (filteredSubmissions.reduce((acc, a) => acc + (a.score || 0), 0) / subTotalCount).toFixed(1) : '0.0';
 
   const handleSelectCourseUnit = (unitId) => {
     setSelectedCourseUnit(unitId);
@@ -722,6 +750,17 @@ export default function TestPortalPage() {
                               >
                                 Questions ({testItem.questions_count})
                               </button>
+
+                              <button
+                                onClick={() => {
+                                  setSelectedTestFilter(String(testItem.id));
+                                  setActiveTab('analytics');
+                                }}
+                                className="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-bold rounded-lg transition-all"
+                                title="Filter student submissions and view scorecards for this test"
+                              >
+                                📊 Submissions ({attempts.filter(a => a.test === testItem.id).length})
+                              </button>
                               
                               {!isExecutiveReadOnly && (
                                 <>
@@ -1129,43 +1168,184 @@ export default function TestPortalPage() {
 
       {/* TAB 3: SUBMISSIONS ANALYTICS (Staff) */}
       {isStaff && activeTab === 'analytics' && (
-        <div className="green-card rounded-2xl p-6 space-y-4">
-          <h3 className="text-sm font-bold text-slate-850 uppercase tracking-wider">Student Assessment Attempt Records</h3>
+        <div className="space-y-6 animate-fade-in">
           
-          {attempts.length === 0 ? (
-            <p className="text-slate-400 text-xs py-8 text-center">No student test attempts recorded yet.</p>
-          ) : (
-            <div className="overflow-x-auto custom-scrollbar border border-slate-200 rounded-xl">
-              <table className="w-full text-left text-xs border-collapse">
-                <thead>
-                  <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 uppercase font-semibold">
-                    <th className="px-4 py-3">Student</th>
-                    <th className="px-4 py-3">Test Title</th>
-                    <th className="px-4 py-3">Category</th>
-                    <th className="px-4 py-3 text-center">Score (%)</th>
-                    <th className="px-4 py-3 text-center">Status</th>
-                    <th className="px-4 py-3">Submitted At</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 text-slate-700">
-                  {attempts.map((att) => (
-                    <tr key={att.id} className="hover:bg-slate-50 transition-all">
-                      <td className="px-4 py-3 font-bold text-slate-850">{att.student_name}</td>
-                      <td className="px-4 py-3 font-medium text-slate-800">{att.test_title}</td>
-                      <td className="px-4 py-3 capitalize">{att.test_category}</td>
-                      <td className="px-4 py-3 text-center font-bold text-brand-dark">{att.score}%</td>
-                      <td className="px-4 py-3 text-center">
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${att.passed ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-red-50 text-red-700 border-red-200'}`}>
-                          {att.passed ? 'PASSED' : 'FAILED'}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-slate-500 text-[11px]">{att.completed_at ? new Date(att.completed_at).toLocaleString() : 'In Progress'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+          {/* Active Filter Banner when navigated from catalog card */}
+          {selectedTestFilter !== 'All' && (
+            <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm">
+              <div className="flex items-center space-x-2 text-xs font-bold text-emerald-950">
+                <span>📌 Filtered Submissions for Test:</span>
+                <span className="bg-emerald-700 text-white px-2.5 py-1 rounded-lg">
+                  {tests.find(t => String(t.id) === String(selectedTestFilter))?.title || `Test #${selectedTestFilter}`}
+                </span>
+              </div>
+              <button
+                onClick={() => setSelectedTestFilter('All')}
+                className="text-xs text-emerald-800 hover:text-emerald-950 font-bold bg-white px-3 py-1.5 rounded-xl border border-emerald-300 shadow-sm transition-all self-start sm:self-auto"
+              >
+                ✕ Clear Filter (Show All Tests)
+              </button>
             </div>
           )}
+
+          {/* Summary Analytics Metric Cards */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <div className="green-card rounded-2xl p-4 border border-emerald-200/80">
+              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Total Submissions</span>
+              <span className="text-2xl font-black text-slate-850 mt-1 block">{subTotalCount}</span>
+            </div>
+            <div className="green-card rounded-2xl p-4 border border-emerald-200/80">
+              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Passed Attempts</span>
+              <span className="text-2xl font-black text-emerald-700 mt-1 block">{subPassedCount}</span>
+            </div>
+            <div className="green-card rounded-2xl p-4 border border-emerald-200/80">
+              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Pass Rate Percentage</span>
+              <span className="text-2xl font-black text-brand-dark mt-1 block">{subPassRate}%</span>
+            </div>
+            <div className="green-card rounded-2xl p-4 border border-emerald-200/80">
+              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Class Average Score</span>
+              <span className="text-2xl font-black text-purple-700 mt-1 block">{subAvgScore}%</span>
+            </div>
+          </div>
+
+          {/* Filter Toolbar & Data Table */}
+          <div className="green-card rounded-2xl p-6 space-y-4">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-emerald-100 pb-3">
+              <h3 className="text-sm font-extrabold text-slate-850 uppercase tracking-wider">
+                Student Assessment Attempt Audit ({filteredSubmissions.length})
+              </h3>
+              
+              {(selectedTestFilter !== 'All' || selectedCourseSubFilter !== 'All' || selectedStatusFilter !== 'All' || submissionSearch) && (
+                <button
+                  onClick={() => {
+                    setSelectedTestFilter('All');
+                    setSelectedCourseSubFilter('All');
+                    setSelectedStatusFilter('All');
+                    setSubmissionSearch('');
+                  }}
+                  className="text-xs font-bold text-red-600 hover:text-red-700 bg-red-50 border border-red-200 px-3 py-1 rounded-lg transition-all"
+                >
+                  ✕ Reset All Filters
+                </button>
+              )}
+            </div>
+
+            {/* Filter Dropdowns & Search Input */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Filter by Test Paper</label>
+                <select
+                  value={selectedTestFilter}
+                  onChange={(e) => setSelectedTestFilter(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 text-slate-800 font-bold rounded-lg px-2.5 py-1.5 focus:ring-1 focus:ring-brand-light"
+                >
+                  <option value="All">All Test Papers ({tests.length})</option>
+                  {tests.map(t => (
+                    <option key={t.id} value={t.id}>[{t.course_code}] {t.title}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Filter by Course Program</label>
+                <select
+                  value={selectedCourseSubFilter}
+                  onChange={(e) => setSelectedCourseSubFilter(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 text-slate-800 font-bold rounded-lg px-2.5 py-1.5 focus:ring-1 focus:ring-brand-light"
+                >
+                  <option value="All">All Course Programs ({assignedCourses.length})</option>
+                  {assignedCourses.map(c => (
+                    <option key={c.id} value={c.code}>[{c.code}] {c.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Grade Status</label>
+                <select
+                  value={selectedStatusFilter}
+                  onChange={(e) => setSelectedStatusFilter(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 text-slate-800 font-bold rounded-lg px-2.5 py-1.5 focus:ring-1 focus:ring-brand-light"
+                >
+                  <option value="All">All Attempts (Passed & Failed)</option>
+                  <option value="passed">Passed Submissions Only</option>
+                  <option value="failed">Failed Submissions Only</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Search Student / Title</label>
+                <input
+                  type="text"
+                  placeholder="Student name, reg no, or title..."
+                  value={submissionSearch}
+                  onChange={(e) => setSubmissionSearch(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 text-slate-800 font-medium rounded-lg px-3 py-1.5 focus:ring-1 focus:ring-brand-light"
+                />
+              </div>
+            </div>
+
+            {/* Submissions Table */}
+            {filteredSubmissions.length === 0 ? (
+              <div className="py-12 text-center text-slate-400 text-xs font-semibold bg-slate-50 rounded-xl border border-dashed border-slate-200">
+                No student test attempt submissions match your selected filter criteria.
+              </div>
+            ) : (
+              <div className="overflow-x-auto custom-scrollbar border border-slate-200 rounded-xl">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 uppercase font-bold text-[11px]">
+                      <th className="px-4 py-3">Student Name & Reg No</th>
+                      <th className="px-4 py-3">Test Paper Title</th>
+                      <th className="px-4 py-3 text-center">Score %</th>
+                      <th className="px-4 py-3 text-center">Status</th>
+                      <th className="px-4 py-3 text-center">Security Logs</th>
+                      <th className="px-4 py-3">Submitted At (EAT)</th>
+                      <th className="px-4 py-3 text-right">Scorecard Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-slate-700">
+                    {filteredSubmissions.map((att) => (
+                      <tr key={att.id} className="hover:bg-slate-50/80 transition-all">
+                        <td className="px-4 py-3">
+                          <p className="font-extrabold text-slate-850">{att.student_name || att.student_username}</p>
+                          <span className="text-[10px] text-slate-500 font-mono font-bold">{att.student_reg_number || `@${att.student_username}`}</span>
+                        </td>
+                        <td className="px-4 py-3">
+                          <p className="font-bold text-slate-800">{att.test_title}</p>
+                          <span className="text-[10px] font-bold text-brand-medium">Course: {att.test_course_code}</span>
+                        </td>
+                        <td className="px-4 py-3 text-center font-black text-sm text-slate-850">
+                          {att.score !== null && att.score !== undefined ? `${att.score}%` : 'N/A'}
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider border ${att.passed ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-red-50 text-red-700 border-red-200'}`}>
+                            {att.passed ? 'PASSED' : 'FAILED'}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${att.tab_switches_count > 0 ? 'bg-amber-50 text-amber-800 border border-amber-200' : 'bg-slate-100 text-slate-600'}`}>
+                            {att.tab_switches_count > 0 ? `⚠️ ${att.tab_switches_count} Tab Switches` : 'Clean'}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-slate-600 font-medium text-[11px]">
+                          {formatUgandanTime(att.completed_at || att.started_at)}
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          <button
+                            onClick={() => router.push(`/dashboard/tests/${att.test}/results?attemptId=${att.id}`)}
+                            className="px-3 py-1.5 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-lg shadow-sm transition-all"
+                          >
+                            📋 View Scorecard
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         </div>
       )}
 

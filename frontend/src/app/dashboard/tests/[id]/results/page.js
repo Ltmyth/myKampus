@@ -71,7 +71,7 @@ export default function TestResultsPage({ params }) {
     );
   }
 
-  if (resultData && resultData.is_results_released === false) {
+  if (user?.role === 'student' && resultData && resultData.is_results_released === false) {
     return (
       <div className="max-w-lg mx-auto py-20 text-center space-y-5 animate-fade-in">
         <div className="p-8 bg-purple-50 border-2 border-purple-200 rounded-3xl shadow-sm space-y-3">

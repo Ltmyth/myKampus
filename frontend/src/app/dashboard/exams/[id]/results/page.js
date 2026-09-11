@@ -52,7 +52,7 @@ export default function ExamResultsPage() {
 
       // Fetch results details (includes questions and correct options)
       const data = await api.get(`/attempts/${targetAttemptId}/results/`);
-      if (data.is_results_released === false) {
+      if (user?.role === 'student' && data.is_results_released === false) {
         setErrorMsg(data.detail || 'Examination results are currently withheld by the Academic Registrar / Dean and will be visible once released.');
         setAttempt(data.attempt);
         setQuestions([]);

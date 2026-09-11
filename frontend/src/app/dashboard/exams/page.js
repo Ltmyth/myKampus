@@ -19,10 +19,16 @@ export default function ExamsPage() {
   const [proctoringSetting, setProctoringSetting] = useState({ is_proctoring_enabled: true });
   const [loading, setLoading] = useState(true);
 
-  // Active Tab: 'exams', 'timetables'
+  // Active Tab: 'exams', 'timetables', 'submissions'
   const [activeTab, setActiveTab] = useState('exams');
   const [selectedFacultyFilter, setSelectedFacultyFilter] = useState('All');
   const [selectedCourseFilter, setSelectedCourseFilter] = useState('All');
+
+  // Submissions Tab Filter States (Exams)
+  const [selectedExamFilter, setSelectedExamFilter] = useState('All');
+  const [selectedExamCourseSubFilter, setSelectedExamCourseSubFilter] = useState('All');
+  const [selectedExamStatusFilter, setSelectedExamStatusFilter] = useState('All');
+  const [examSubmissionSearch, setExamSubmissionSearch] = useState('');
 
   // Fee Gate Alert Modal
   const [showFeeGateModal, setShowFeeGateModal] = useState(false);
@@ -128,6 +134,29 @@ export default function ExamsPage() {
   const scopedFaculties = isLecturer
     ? faculties.filter(f => (assignedCourses || []).some(c => c.faculty === f.id || c.faculty_code === f.code))
     : faculties;
+
+  // Filtered Exam Submissions Logic
+  const filteredExamSubmissions = (isStaff ? allAttempts : attempts).filter((att) => {
+    if (selectedExamFilter !== 'All' && String(att.exam) !== String(selectedExamFilter)) return false;
+    if (selectedExamCourseSubFilter !== 'All' && String(att.exam_course_id || att.course) !== String(selectedExamCourseSubFilter) && att.exam_course_code !== selectedExamCourseSubFilter) return false;
+    const isPassed = (att.score || 0) >= 50.0;
+    if (selectedExamStatusFilter === 'passed' && !isPassed) return false;
+    if (selectedExamStatusFilter === 'failed' && isPassed) return false;
+    if (examSubmissionSearch) {
+      const q = examSubmissionSearch.toLowerCase();
+      const sName = (att.student_name || '').toLowerCase();
+      const sUser = (att.student_username || '').toLowerCase();
+      const sReg = (att.student_reg_number || '').toLowerCase();
+      const eTitle = (att.exam_title || '').toLowerCase();
+      if (!sName.includes(q) && !sUser.includes(q) && !sReg.includes(q) && !eTitle.includes(q)) return false;
+    }
+    return true;
+  });
+
+  const examSubTotalCount = filteredExamSubmissions.length;
+  const examSubPassedCount = filteredExamSubmissions.filter(a => (a.score || 0) >= 50.0).length;
+  const examSubPassRate = examSubTotalCount > 0 ? ((examSubPassedCount / examSubTotalCount) * 100).toFixed(1) : '0.0';
+  const examSubAvgScore = examSubTotalCount > 0 ? (filteredExamSubmissions.reduce((acc, a) => acc + (a.score || 0), 0) / examSubTotalCount).toFixed(1) : '0.0';
 
   const handleSelectCourseUnit = (unitId) => {
     setSelectedCourseUnit(unitId);
@@ -516,6 +545,14 @@ export default function ExamsPage() {
           >
             📅 Academic Registrar Exam Timetable ({examTimetables.length})
           </button>
+          {isStaff && (
+            <button
+              onClick={() => setActiveTab('submissions')}
+              className={`pb-3 text-xs font-bold border-b-2 transition-all ${activeTab === 'submissions' ? 'border-brand-light text-brand-dark' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
+            >
+              📊 Exam Submissions ({allAttempts.length})
+            </button>
+          )}
         </div>
 
         {/* Staff Faculty & Course Filter */}
@@ -719,6 +756,17 @@ export default function ExamsPage() {
                                     className="px-3 py-1.5 bg-white border border-emerald-200 hover:bg-emerald-50 text-slate-800 text-xs font-bold rounded-xl transition-all"
                                   >
                                     Questions ({examItem.questions_count})
+                                  </button>
+
+                                  <button
+                                    onClick={() => {
+                                      setSelectedExamFilter(String(examItem.id));
+                                      setActiveTab('submissions');
+                                    }}
+                                    className="px-3 py-1.5 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 text-emerald-800 text-xs font-bold rounded-xl transition-all"
+                                    title="Filter student exam submissions and view scorecards"
+                                  >
+                                    📊 Submissions ({allAttempts.filter(a => a.exam === examItem.id).length})
                                   </button>
 
                                   {!isExecutiveReadOnly && (
@@ -1078,6 +1126,192 @@ export default function ExamsPage() {
                 )}
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* TAB 3: EXAM SUBMISSIONS (Staff) */}
+      {isStaff && activeTab === 'submissions' && (
+        <div className="space-y-6 animate-fade-in">
+          
+          {/* Active Filter Alert Banner */}
+          {selectedExamFilter !== 'All' && (
+            <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm">
+              <div className="flex items-center space-x-2 text-xs font-bold text-emerald-950">
+                <span>📌 Filtered Exam Submissions:</span>
+                <span className="bg-emerald-700 text-white px-2.5 py-1 rounded-lg">
+                  {exams.find(e => String(e.id) === String(selectedExamFilter))?.title || `Exam #${selectedExamFilter}`}
+                </span>
+              </div>
+              <button
+                onClick={() => setSelectedExamFilter('All')}
+                className="text-xs text-emerald-800 hover:text-emerald-950 font-bold bg-white px-3 py-1.5 rounded-xl border border-emerald-300 shadow-sm transition-all self-start sm:self-auto"
+              >
+                ✕ Clear Filter (Show All Exams)
+              </button>
+            </div>
+          )}
+
+          {/* Summary Metric Cards */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <div className="green-card rounded-2xl p-4 border border-emerald-200/80">
+              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Total Exam Submissions</span>
+              <span className="text-2xl font-black text-slate-850 mt-1 block">{examSubTotalCount}</span>
+            </div>
+            <div className="green-card rounded-2xl p-4 border border-emerald-200/80">
+              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Passed Examinations</span>
+              <span className="text-2xl font-black text-emerald-700 mt-1 block">{examSubPassedCount}</span>
+            </div>
+            <div className="green-card rounded-2xl p-4 border border-emerald-200/80">
+              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Pass Rate Percentage</span>
+              <span className="text-2xl font-black text-brand-dark mt-1 block">{examSubPassRate}%</span>
+            </div>
+            <div className="green-card rounded-2xl p-4 border border-emerald-200/80">
+              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Class Average Score</span>
+              <span className="text-2xl font-black text-purple-700 mt-1 block">{examSubAvgScore}%</span>
+            </div>
+          </div>
+
+          {/* Filter Toolbar & Data Table */}
+          <div className="green-card rounded-2xl p-6 space-y-4">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-emerald-100 pb-3">
+              <h3 className="text-sm font-extrabold text-slate-850 uppercase tracking-wider">
+                Student Examination Attempts Audit ({filteredExamSubmissions.length})
+              </h3>
+              
+              {(selectedExamFilter !== 'All' || selectedExamCourseSubFilter !== 'All' || selectedExamStatusFilter !== 'All' || examSubmissionSearch) && (
+                <button
+                  onClick={() => {
+                    setSelectedExamFilter('All');
+                    setSelectedExamCourseSubFilter('All');
+                    setSelectedExamStatusFilter('All');
+                    setExamSubmissionSearch('');
+                  }}
+                  className="text-xs font-bold text-red-600 hover:text-red-700 bg-red-50 border border-red-200 px-3 py-1 rounded-lg transition-all"
+                >
+                  ✕ Reset All Filters
+                </button>
+              )}
+            </div>
+
+            {/* Filter Controls */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Filter by Examination</label>
+                <select
+                  value={selectedExamFilter}
+                  onChange={(e) => setSelectedExamFilter(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 text-slate-800 font-bold rounded-lg px-2.5 py-1.5 focus:ring-1 focus:ring-brand-light"
+                >
+                  <option value="All">All Examination Papers ({exams.length})</option>
+                  {exams.map(e => (
+                    <option key={e.id} value={e.id}>[{e.course_code}] {e.title}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Filter by Course Program</label>
+                <select
+                  value={selectedExamCourseSubFilter}
+                  onChange={(e) => setSelectedExamCourseSubFilter(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 text-slate-800 font-bold rounded-lg px-2.5 py-1.5 focus:ring-1 focus:ring-brand-light"
+                >
+                  <option value="All">All Course Programs ({assignedCourses.length})</option>
+                  {assignedCourses.map(c => (
+                    <option key={c.id} value={c.code}>[{c.code}] {c.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Grade Status</label>
+                <select
+                  value={selectedExamStatusFilter}
+                  onChange={(e) => setSelectedExamStatusFilter(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 text-slate-800 font-bold rounded-lg px-2.5 py-1.5 focus:ring-1 focus:ring-brand-light"
+                >
+                  <option value="All">All Statuses (Passed & Failed)</option>
+                  <option value="passed">Passed Exams Only</option>
+                  <option value="failed">Failed Exams Only</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Search Student / Exam</label>
+                <input
+                  type="text"
+                  placeholder="Student name, reg no, or exam..."
+                  value={examSubmissionSearch}
+                  onChange={(e) => setExamSubmissionSearch(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 text-slate-800 font-medium rounded-lg px-3 py-1.5 focus:ring-1 focus:ring-brand-light"
+                />
+              </div>
+            </div>
+
+            {/* Exam Submissions Table */}
+            {filteredExamSubmissions.length === 0 ? (
+              <div className="py-12 text-center text-slate-400 text-xs font-semibold bg-slate-50 rounded-xl border border-dashed border-slate-200">
+                No student examination submissions match your active filter criteria.
+              </div>
+            ) : (
+              <div className="overflow-x-auto custom-scrollbar border border-slate-200 rounded-xl">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 uppercase font-bold text-[11px]">
+                      <th className="px-4 py-3">Student Name & Reg No</th>
+                      <th className="px-4 py-3">Exam Paper Title</th>
+                      <th className="px-4 py-3 text-center">Score %</th>
+                      <th className="px-4 py-3 text-center">Status</th>
+                      <th className="px-4 py-3 text-center">Proctoring Logs</th>
+                      <th className="px-4 py-3">Submitted At (EAT)</th>
+                      <th className="px-4 py-3 text-right">Scorecard Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-slate-700">
+                    {filteredExamSubmissions.map((att) => {
+                      const isPassed = (att.score || 0) >= 50.0;
+                      return (
+                        <tr key={att.id} className="hover:bg-slate-50/80 transition-all">
+                          <td className="px-4 py-3">
+                            <p className="font-extrabold text-slate-850">{att.student_name || att.student_username}</p>
+                            <span className="text-[10px] text-slate-500 font-mono font-bold">{att.student_reg_number || `@${att.student_username}`}</span>
+                          </td>
+                          <td className="px-4 py-3">
+                            <p className="font-bold text-slate-800">{att.exam_title}</p>
+                            <span className="text-[10px] font-bold text-brand-medium">Course: {att.exam_course_code}</span>
+                          </td>
+                          <td className="px-4 py-3 text-center font-black text-sm text-slate-850">
+                            {att.score !== null && att.score !== undefined ? `${att.score}%` : 'N/A'}
+                          </td>
+                          <td className="px-4 py-3 text-center">
+                            <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider border ${isPassed ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-red-50 text-red-700 border-red-200'}`}>
+                              {isPassed ? 'PASSED' : 'FAILED'}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-center">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${att.tab_switches_count > 0 ? 'bg-amber-50 text-amber-800 border border-amber-200' : 'bg-slate-100 text-slate-600'}`}>
+                              {att.tab_switches_count > 0 ? `⚠️ ${att.tab_switches_count} Tab Switches` : 'Clean'}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-slate-600 font-medium text-[11px]">
+                            {formatUgandanTime(att.completed_at || att.started_at)}
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            <button
+                              onClick={() => router.push(`/dashboard/exams/${att.exam}/results?attemptId=${att.id}`)}
+                              className="px-3 py-1.5 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-lg shadow-sm transition-all"
+                            >
+                              📋 View Scorecard
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         </div>
       )}
