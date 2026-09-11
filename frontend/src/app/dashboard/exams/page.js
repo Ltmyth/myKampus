@@ -24,11 +24,13 @@ export default function ExamsPage() {
   const [selectedFacultyFilter, setSelectedFacultyFilter] = useState('All');
   const [selectedCourseFilter, setSelectedCourseFilter] = useState('All');
 
-  // Submissions Tab Filter States (Exams)
+  // Submissions Tab Filter & Pagination States (Exams)
   const [selectedExamFilter, setSelectedExamFilter] = useState('All');
   const [selectedExamCourseSubFilter, setSelectedExamCourseSubFilter] = useState('All');
   const [selectedExamStatusFilter, setSelectedExamStatusFilter] = useState('All');
   const [examSubmissionSearch, setExamSubmissionSearch] = useState('');
+  const [examSubPage, setExamSubPage] = useState(1);
+  const [examSubPageSize, setExamSubPageSize] = useState(10);
 
   // Fee Gate Alert Modal
   const [showFeeGateModal, setShowFeeGateModal] = useState(false);
@@ -601,8 +603,9 @@ export default function ExamsPage() {
                 <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">Scheduled Exam Papers</h3>
                 
                 {(() => {
-                  const studentFacCode = user?.faculty_code || 'SOBAT';
+                  const studentFacCode = user?.faculty_code;
                   const studentExams = exams.filter(e => {
+                    if (!studentFacCode) return true;
                     const fCode = e.faculty_code || (courses.find(c => c.id === e.course)?.faculty_code);
                     return !fCode || fCode === studentFacCode;
                   });
@@ -747,6 +750,12 @@ export default function ExamsPage() {
 
                                   <h4 className="font-bold text-slate-850 text-sm">{examItem.title}</h4>
                                   <p className="text-xs text-slate-500 font-medium">Duration: <strong className="text-slate-800">{examItem.duration_minutes} mins</strong> · Questions: <strong className="text-slate-800">{examItem.questions_count}</strong> · Lecturer: <strong className="text-slate-800">{examItem.lecturer_name}</strong></p>
+                                  <div className="pt-1 text-[11px] text-slate-600 space-y-0.5 font-medium">
+                                    <p>📅 Scheduled Start (EAT): <span className="font-bold text-slate-800">{formatUgandanTime(examItem.scheduled_start)}</span></p>
+                                    {examItem.due_date && (
+                                      <p>⏳ Due Date (EAT): <span className="font-bold text-amber-700">{formatUgandanTime(examItem.due_date)}</span></p>
+                                    )}
+                                  </div>
                                 </div>
 
                                 {/* Staff Actions */}
@@ -1249,68 +1258,127 @@ export default function ExamsPage() {
               </div>
             </div>
 
-            {/* Exam Submissions Table */}
             {filteredExamSubmissions.length === 0 ? (
               <div className="py-12 text-center text-slate-400 text-xs font-semibold bg-slate-50 rounded-xl border border-dashed border-slate-200">
                 No student examination submissions match your active filter criteria.
               </div>
             ) : (
-              <div className="overflow-x-auto custom-scrollbar border border-slate-200 rounded-xl">
-                <table className="w-full text-left text-xs border-collapse">
-                  <thead>
-                    <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 uppercase font-bold text-[11px]">
-                      <th className="px-4 py-3">Student Name & Reg No</th>
-                      <th className="px-4 py-3">Exam Paper Title</th>
-                      <th className="px-4 py-3 text-center">Score %</th>
-                      <th className="px-4 py-3 text-center">Status</th>
-                      <th className="px-4 py-3 text-center">Proctoring Logs</th>
-                      <th className="px-4 py-3">Submitted At (EAT)</th>
-                      <th className="px-4 py-3 text-right">Scorecard Action</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 text-slate-700">
-                    {filteredExamSubmissions.map((att) => {
-                      const isPassed = (att.score || 0) >= 50.0;
-                      return (
-                        <tr key={att.id} className="hover:bg-slate-50/80 transition-all">
-                          <td className="px-4 py-3">
-                            <p className="font-extrabold text-slate-850">{att.student_name || att.student_username}</p>
-                            <span className="text-[10px] text-slate-500 font-mono font-bold">{att.student_reg_number || `@${att.student_username}`}</span>
-                          </td>
-                          <td className="px-4 py-3">
-                            <p className="font-bold text-slate-800">{att.exam_title}</p>
-                            <span className="text-[10px] font-bold text-brand-medium">Course: {att.exam_course_code}</span>
-                          </td>
-                          <td className="px-4 py-3 text-center font-black text-sm text-slate-850">
-                            {att.score !== null && att.score !== undefined ? `${att.score}%` : 'N/A'}
-                          </td>
-                          <td className="px-4 py-3 text-center">
-                            <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider border ${isPassed ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-red-50 text-red-700 border-red-200'}`}>
-                              {isPassed ? 'PASSED' : 'FAILED'}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 text-center">
-                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${att.tab_switches_count > 0 ? 'bg-amber-50 text-amber-800 border border-amber-200' : 'bg-slate-100 text-slate-600'}`}>
-                              {att.tab_switches_count > 0 ? `⚠️ ${att.tab_switches_count} Tab Switches` : 'Clean'}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 text-slate-600 font-medium text-[11px]">
-                            {formatUgandanTime(att.completed_at || att.started_at)}
-                          </td>
-                          <td className="px-4 py-3 text-right">
-                            <button
-                              onClick={() => router.push(`/dashboard/exams/${att.exam}/results?attemptId=${att.id}`)}
-                              className="px-3 py-1.5 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-lg shadow-sm transition-all"
-                            >
-                              📋 View Scorecard
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+              (() => {
+                const totalExamSubPages = Math.max(1, Math.ceil(filteredExamSubmissions.length / examSubPageSize));
+                const safeExamSubPage = Math.min(Math.max(1, examSubPage), totalExamSubPages);
+                const paginatedExamSubmissions = filteredExamSubmissions.slice((safeExamSubPage - 1) * examSubPageSize, safeExamSubPage * examSubPageSize);
+
+                return (
+                  <>
+                    <div className="overflow-x-auto custom-scrollbar border border-slate-200 rounded-xl">
+                      <table className="w-full text-left text-xs border-collapse">
+                        <thead>
+                          <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 uppercase font-bold text-[11px]">
+                            <th className="px-4 py-3">Student Name & Reg No</th>
+                            <th className="px-4 py-3">Exam Paper Title</th>
+                            <th className="px-4 py-3 text-center">Score %</th>
+                            <th className="px-4 py-3 text-center">Status</th>
+                            <th className="px-4 py-3 text-center">Proctoring Logs</th>
+                            <th className="px-4 py-3">Submitted At (EAT)</th>
+                            <th className="px-4 py-3 text-right">Scorecard Action</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 text-slate-700">
+                          {paginatedExamSubmissions.map((att) => {
+                            const isPassed = (att.score || 0) >= 50.0;
+                            return (
+                              <tr key={att.id} className="hover:bg-slate-50/80 transition-all">
+                                <td className="px-4 py-3">
+                                  <p className="font-extrabold text-slate-850">{att.student_name || att.student_username}</p>
+                                  <span className="text-[10px] text-slate-500 font-mono font-bold">{att.student_reg_number || `@${att.student_username}`}</span>
+                                </td>
+                                <td className="px-4 py-3">
+                                  <p className="font-bold text-slate-800">{att.exam_title}</p>
+                                  <span className="text-[10px] font-bold text-brand-medium">Course: {att.exam_course_code}</span>
+                                </td>
+                                <td className="px-4 py-3 text-center font-black text-sm text-slate-850">
+                                  {att.score !== null && att.score !== undefined ? `${att.score}%` : 'N/A'}
+                                </td>
+                                <td className="px-4 py-3 text-center">
+                                  <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider border ${isPassed ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-red-50 text-red-700 border-red-200'}`}>
+                                    {isPassed ? 'PASSED' : 'FAILED'}
+                                  </span>
+                                </td>
+                                <td className="px-4 py-3 text-center">
+                                  <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${att.tab_switches_count > 0 ? 'bg-amber-50 text-amber-800 border border-amber-200' : 'bg-slate-100 text-slate-600'}`}>
+                                    {att.tab_switches_count > 0 ? `⚠️ ${att.tab_switches_count} Tab Switches` : 'Clean'}
+                                  </span>
+                                </td>
+                                <td className="px-4 py-3 text-slate-600 font-medium text-[11px]">
+                                  {formatUgandanTime(att.completed_at || att.started_at)}
+                                </td>
+                                <td className="px-4 py-3 text-right">
+                                  <button
+                                    onClick={() => router.push(`/dashboard/exams/${att.exam}/results?attemptId=${att.id}`)}
+                                    className="px-3 py-1.5 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-lg shadow-sm transition-all"
+                                  >
+                                    📋 View Scorecard
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* Submissions Pagination Controls Bar */}
+                    <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-3 text-xs text-slate-500 font-semibold border-t border-slate-100">
+                      <div className="flex items-center space-x-2">
+                        <span>Showing {(safeExamSubPage - 1) * examSubPageSize + 1} - {Math.min(safeExamSubPage * examSubPageSize, filteredExamSubmissions.length)} of {filteredExamSubmissions.length} submissions</span>
+                        <select
+                          value={examSubPageSize}
+                          onChange={(e) => { setExamSubPageSize(Number(e.target.value)); setExamSubPage(1); }}
+                          className="bg-slate-50 border border-slate-200 rounded text-xs px-2 py-1 font-bold text-slate-700"
+                        >
+                          <option value={10}>10 per page</option>
+                          <option value={20}>20 per page</option>
+                          <option value={50}>50 per page</option>
+                        </select>
+                      </div>
+
+                      <div className="flex items-center space-x-1.5">
+                        <button
+                          onClick={() => setExamSubPage(1)}
+                          disabled={safeExamSubPage <= 1}
+                          className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-xs font-bold disabled:opacity-40"
+                        >
+                          « First
+                        </button>
+                        <button
+                          onClick={() => setExamSubPage(prev => Math.max(1, prev - 1))}
+                          disabled={safeExamSubPage <= 1}
+                          className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-xs font-bold disabled:opacity-40"
+                        >
+                          ‹ Prev
+                        </button>
+                        <span className="px-3 py-1 font-bold text-slate-800">
+                          Page {safeExamSubPage} of {totalExamSubPages}
+                        </span>
+                        <button
+                          onClick={() => setExamSubPage(prev => Math.min(totalExamSubPages, prev + 1))}
+                          disabled={safeExamSubPage >= totalExamSubPages}
+                          className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-xs font-bold disabled:opacity-40"
+                        >
+                          Next ›
+                        </button>
+                        <button
+                          onClick={() => setExamSubPage(totalExamSubPages)}
+                          disabled={safeExamSubPage >= totalExamSubPages}
+                          className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-xs font-bold disabled:opacity-40"
+                        >
+                          Last »
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                );
+              })()
             )}
           </div>
         </div>

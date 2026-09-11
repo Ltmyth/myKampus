@@ -36,6 +36,13 @@ export default function FacultyManagementPage() {
   const [bulkAllocYearOfStudy, setBulkAllocYearOfStudy] = useState(1);
   const [bulkAllocCourseIds, setBulkAllocCourseIds] = useState([]);
 
+  // Student Directory Filter & Pagination State
+  const [studentSearch, setStudentSearch] = useState('');
+  const [studentFacultyFilter, setStudentFacultyFilter] = useState('All');
+  const [studentYearFilter, setStudentYearFilter] = useState('All');
+  const [studentPage, setStudentPage] = useState(1);
+  const [studentPageSize, setStudentPageSize] = useState(10);
+
   // Form State (Create/Edit Faculty)
   const [showFacultyModal, setShowFacultyModal] = useState(false);
   const [editingFaculty, setEditingFaculty] = useState(null);
@@ -1231,144 +1238,265 @@ export default function FacultyManagementPage() {
           
           {/* Students Directory */}
           <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-slate-100 pb-3">
-              <h3 className="text-sm font-bold text-slate-850 uppercase tracking-wider">Registered Student Allocations ({students.length})</h3>
-              
-              <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (students.length > 0) {
-                      const firstSt = students[0];
-                      setSelectedStudentId(firstSt.id);
-                      setTargetFacultyId(firstSt.faculty || (faculties[0]?.id || ''));
-                      setTargetCourseIds(firstSt.assigned_courses || []);
-                      setTargetYearOfStudy(firstSt.year_of_study || 1);
-                    }
-                    setShowSingleAllocModal(true);
-                  }}
-                  className="px-3.5 py-1.5 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-xl shadow-sm transition-all flex items-center space-x-1.5"
-                >
-                  <span>🎓 + Allocate Student Profile</span>
-                </button>
+            {(() => {
+              const filteredStudents = students.filter(st => {
+                const matchesSearch = !studentSearch || 
+                  (st.first_name || '').toLowerCase().includes(studentSearch.toLowerCase()) ||
+                  (st.last_name || '').toLowerCase().includes(studentSearch.toLowerCase()) ||
+                  (st.username || '').toLowerCase().includes(studentSearch.toLowerCase()) ||
+                  (st.email || '').toLowerCase().includes(studentSearch.toLowerCase()) ||
+                  (st.reg_number || st.registration_number || '').toLowerCase().includes(studentSearch.toLowerCase());
+                const matchesFaculty = studentFacultyFilter === 'All' || (st.faculty_code === studentFacultyFilter || String(st.faculty) === String(studentFacultyFilter));
+                const matchesYear = studentYearFilter === 'All' || String(st.year_of_study || 1) === String(studentYearFilter);
+                return matchesSearch && matchesFaculty && matchesYear;
+              });
 
-                {selectedStudentAllocIds.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => setShowBulkAllocModal(true)}
-                    className="px-3.5 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold rounded-xl shadow-sm transition-all flex items-center space-x-1.5"
-                  >
-                    <span>⚡ Bulk Assign Selected ({selectedStudentAllocIds.length})</span>
-                  </button>
-                )}
-              </div>
-            </div>
-            
-            {students.length === 0 ? (
-              <p className="text-slate-400 text-xs py-8 text-center">No student accounts registered in system.</p>
-            ) : (
-              <div className="overflow-x-auto custom-scrollbar border border-slate-200 rounded-xl">
-                <table className="w-full text-left text-xs border-collapse">
-                  <thead>
-                    <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 uppercase font-semibold">
-                      <th className="px-3 py-3 w-10 text-center">
-                        <input
-                          type="checkbox"
-                          checked={students.length > 0 && selectedStudentAllocIds.length === students.length}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setSelectedStudentAllocIds(students.map(s => s.id));
-                            } else {
-                              setSelectedStudentAllocIds([]);
-                            }
-                          }}
-                          className="rounded text-brand-light cursor-pointer"
-                        />
-                      </th>
-                      <th className="px-4 py-3">Student Name</th>
-                      <th className="px-4 py-3 text-center">Year of Study</th>
-                      <th className="px-4 py-3">Assigned Faculty</th>
-                      <th className="px-4 py-3">Enrolled Course Programs</th>
-                      <th className="px-4 py-3 text-center">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 text-slate-700">
-                    {students.map((st) => (
-                      <tr key={st.id} className="hover:bg-slate-50 transition-all">
-                        <td className="px-3 py-3 text-center">
-                          <input
-                            type="checkbox"
-                            checked={selectedStudentAllocIds.includes(st.id)}
-                            onChange={(e) => {
-                              if (e.target.checked) {
-                                setSelectedStudentAllocIds(prev => [...prev, st.id]);
-                              } else {
-                                setSelectedStudentAllocIds(prev => prev.filter(id => id !== st.id));
-                              }
-                            }}
-                            className="rounded text-brand-light cursor-pointer"
-                          />
-                        </td>
-                        <td className="px-4 py-3 font-bold text-slate-850">
-                          {st.first_name || st.username} {st.last_name}
-                          <span className="block text-[10px] text-slate-400 font-normal">{st.email}</span>
-                        </td>
-                        <td className="px-4 py-3 text-center">
-                          <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-purple-50 text-purple-700 border border-purple-200">
-                            Year {st.year_of_study || 1}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3">
-                          {st.faculty_code ? (
-                            <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-blue-50 text-blue-700 border border-blue-200">
-                              {st.faculty_code} - {st.faculty_name}
-                            </span>
-                          ) : (
-                            <span className="text-slate-400 italic text-[11px]">Unassigned</span>
-                          )}
-                        </td>
-                        <td className="px-4 py-3">
-                          {st.assigned_course_codes && st.assigned_course_codes.length > 0 ? (
-                            <div className="flex flex-wrap gap-1">
-                              {st.assigned_course_codes.map(cCode => (
-                                <span key={cCode} className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
-                                  {cCode}
-                                </span>
-                              ))}
-                            </div>
-                          ) : (
-                            <span className="text-slate-400 italic text-[11px]">No specific courses</span>
-                          )}
-                        </td>
-                        <td className="px-4 py-3 text-center space-x-2">
-                          <button
-                            onClick={() => {
-                              setSelectedStudentId(st.id);
-                              setTargetFacultyId(st.faculty || (faculties[0]?.id || ''));
-                              setTargetCourseIds(st.assigned_courses || []);
-                              setTargetYearOfStudy(st.year_of_study || 1);
-                              setShowSingleAllocModal(true);
-                            }}
-                            className="px-2.5 py-1 bg-brand-light text-white text-[10px] font-bold rounded hover:bg-brand-medium shadow-xs transition-all"
+              const totalStudentPages = Math.max(1, Math.ceil(filteredStudents.length / studentPageSize));
+              const safeStudentPage = Math.min(Math.max(1, studentPage), totalStudentPages);
+              const paginatedStudents = filteredStudents.slice((safeStudentPage - 1) * studentPageSize, safeStudentPage * studentPageSize);
+
+              return (
+                <>
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-slate-100 pb-3">
+                    <h3 className="text-sm font-bold text-slate-850 uppercase tracking-wider">
+                      Registered Student Allocations ({filteredStudents.length} of {students.length})
+                    </h3>
+                    
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (students.length > 0) {
+                            const firstSt = students[0];
+                            setSelectedStudentId(firstSt.id);
+                            setTargetFacultyId(firstSt.faculty || (faculties[0]?.id || ''));
+                            setTargetCourseIds(firstSt.assigned_courses || []);
+                            setTargetYearOfStudy(firstSt.year_of_study || 1);
+                          }
+                          setShowSingleAllocModal(true);
+                        }}
+                        className="px-3.5 py-1.5 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-xl shadow-sm transition-all flex items-center space-x-1.5"
+                      >
+                        <span>🎓 + Allocate Student Profile</span>
+                      </button>
+
+                      {selectedStudentAllocIds.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setShowBulkAllocModal(true)}
+                          className="px-3.5 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold rounded-xl shadow-sm transition-all flex items-center space-x-1.5"
+                        >
+                          <span>⚡ Bulk Assign Selected ({selectedStudentAllocIds.length})</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Search and Filters Toolbar */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs bg-slate-50 p-3 rounded-xl border border-slate-200">
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Search Students</label>
+                      <input
+                        type="text"
+                        placeholder="Search name, reg no, email..."
+                        value={studentSearch}
+                        onChange={(e) => { setStudentSearch(e.target.value); setStudentPage(1); }}
+                        className="w-full bg-white border border-slate-200 text-slate-800 font-medium rounded-lg px-3 py-1.5 focus:ring-1 focus:ring-brand-light"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Filter Faculty</label>
+                      <select
+                        value={studentFacultyFilter}
+                        onChange={(e) => { setStudentFacultyFilter(e.target.value); setStudentPage(1); }}
+                        className="w-full bg-white border border-slate-200 text-slate-800 font-bold rounded-lg px-2.5 py-1.5 focus:ring-1 focus:ring-brand-light"
+                      >
+                        <option value="All">All Faculties ({faculties.length})</option>
+                        {faculties.map(f => (
+                          <option key={f.id} value={f.code}>[{f.code}] {f.name}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Year of Study</label>
+                      <select
+                        value={studentYearFilter}
+                        onChange={(e) => { setStudentYearFilter(e.target.value); setStudentPage(1); }}
+                        className="w-full bg-white border border-slate-200 text-slate-800 font-bold rounded-lg px-2.5 py-1.5 focus:ring-1 focus:ring-brand-light"
+                      >
+                        <option value="All">All Academic Years</option>
+                        <option value="1">Year 1</option>
+                        <option value="2">Year 2</option>
+                        <option value="3">Year 3</option>
+                        <option value="4">Year 4</option>
+                      </select>
+                    </div>
+                  </div>
+                  
+                  {filteredStudents.length === 0 ? (
+                    <p className="text-slate-400 text-xs py-8 text-center bg-slate-50 rounded-xl border border-dashed border-slate-200">
+                      No student accounts match your filter criteria.
+                    </p>
+                  ) : (
+                    <>
+                      <div className="overflow-x-auto custom-scrollbar border border-slate-200 rounded-xl">
+                        <table className="w-full text-left text-xs border-collapse">
+                          <thead>
+                            <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 uppercase font-semibold">
+                              <th className="px-3 py-3 w-10 text-center">
+                                <input
+                                  type="checkbox"
+                                  checked={filteredStudents.length > 0 && selectedStudentAllocIds.length === filteredStudents.length}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      setSelectedStudentAllocIds(filteredStudents.map(s => s.id));
+                                    } else {
+                                      setSelectedStudentAllocIds([]);
+                                    }
+                                  }}
+                                  className="rounded text-brand-light cursor-pointer"
+                                />
+                              </th>
+                              <th className="px-4 py-3">Student Name & Reg No</th>
+                              <th className="px-4 py-3 text-center">Year of Study</th>
+                              <th className="px-4 py-3">Assigned Faculty</th>
+                              <th className="px-4 py-3">Enrolled Course Programs</th>
+                              <th className="px-4 py-3 text-center">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 text-slate-700">
+                            {paginatedStudents.map((st) => (
+                              <tr key={st.id} className="hover:bg-slate-50 transition-all">
+                                <td className="px-3 py-3 text-center">
+                                  <input
+                                    type="checkbox"
+                                    checked={selectedStudentAllocIds.includes(st.id)}
+                                    onChange={(e) => {
+                                      if (e.target.checked) {
+                                        setSelectedStudentAllocIds(prev => [...prev, st.id]);
+                                      } else {
+                                        setSelectedStudentAllocIds(prev => prev.filter(id => id !== st.id));
+                                      }
+                                    }}
+                                    className="rounded text-brand-light cursor-pointer"
+                                  />
+                                </td>
+                                <td className="px-4 py-3 font-bold text-slate-850">
+                                  {st.first_name || st.username} {st.last_name}
+                                  <span className="block text-[10px] text-slate-400 font-normal">{st.email}</span>
+                                </td>
+                                <td className="px-4 py-3 text-center">
+                                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-purple-50 text-purple-700 border border-purple-200">
+                                    Year {st.year_of_study || 1}
+                                  </span>
+                                </td>
+                                <td className="px-4 py-3">
+                                  {st.faculty_code ? (
+                                    <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-blue-50 text-blue-700 border border-blue-200">
+                                      {st.faculty_code} - {st.faculty_name}
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-400 italic text-[11px]">Unassigned</span>
+                                  )}
+                                </td>
+                                <td className="px-4 py-3">
+                                  {st.assigned_course_codes && st.assigned_course_codes.length > 0 ? (
+                                    <div className="flex flex-wrap gap-1">
+                                      {st.assigned_course_codes.map(cCode => (
+                                        <span key={cCode} className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                                          {cCode}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  ) : (
+                                    <span className="text-slate-400 italic text-[11px]">No specific courses</span>
+                                  )}
+                                </td>
+                                <td className="px-4 py-3 text-center space-x-2">
+                                  <button
+                                    onClick={() => {
+                                      setSelectedStudentId(st.id);
+                                      setTargetFacultyId(st.faculty || (faculties[0]?.id || ''));
+                                      setTargetCourseIds(st.assigned_courses || []);
+                                      setTargetYearOfStudy(st.year_of_study || 1);
+                                      setShowSingleAllocModal(true);
+                                    }}
+                                    className="px-2.5 py-1 bg-brand-light text-white text-[10px] font-bold rounded hover:bg-brand-medium shadow-xs transition-all"
+                                  >
+                                    ✏️ Allocate / Edit
+                                  </button>
+                                  {st.faculty && (
+                                    <button
+                                      onClick={() => handleRemoveStudentFromFaculty(st.faculty, st.id)}
+                                      className="px-2 py-1 bg-red-50 text-red-600 hover:bg-red-100 text-[10px] font-bold rounded"
+                                      title="Remove student from faculty"
+                                    >
+                                      Remove
+                                    </button>
+                                  )}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      {/* Pagination Controls Bar */}
+                      <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-3 text-xs text-slate-500 font-semibold border-t border-slate-100">
+                        <div className="flex items-center space-x-2">
+                          <span>Showing {(safeStudentPage - 1) * studentPageSize + 1} - {Math.min(safeStudentPage * studentPageSize, filteredStudents.length)} of {filteredStudents.length} students</span>
+                          <select
+                            value={studentPageSize}
+                            onChange={(e) => { setStudentPageSize(Number(e.target.value)); setStudentPage(1); }}
+                            className="bg-slate-50 border border-slate-200 rounded text-xs px-2 py-1 font-bold text-slate-700"
                           >
-                            ✏️ Allocate / Edit
+                            <option value={10}>10 per page</option>
+                            <option value={20}>20 per page</option>
+                            <option value={50}>50 per page</option>
+                          </select>
+                        </div>
+
+                        <div className="flex items-center space-x-1.5">
+                          <button
+                            onClick={() => setStudentPage(1)}
+                            disabled={safeStudentPage <= 1}
+                            className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-xs font-bold disabled:opacity-40"
+                          >
+                            « First
                           </button>
-                          {st.faculty && (
-                            <button
-                              onClick={() => handleRemoveStudentFromFaculty(st.faculty, st.id)}
-                              className="px-2 py-1 bg-red-50 text-red-600 hover:bg-red-100 text-[10px] font-bold rounded"
-                              title="Remove student from faculty"
-                            >
-                              Remove
-                            </button>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+                          <button
+                            onClick={() => setStudentPage(prev => Math.max(1, prev - 1))}
+                            disabled={safeStudentPage <= 1}
+                            className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-xs font-bold disabled:opacity-40"
+                          >
+                            ‹ Prev
+                          </button>
+                          <span className="px-3 py-1 font-bold text-slate-800">
+                            Page {safeStudentPage} of {totalStudentPages}
+                          </span>
+                          <button
+                            onClick={() => setStudentPage(prev => Math.min(totalStudentPages, prev + 1))}
+                            disabled={safeStudentPage >= totalStudentPages}
+                            className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-xs font-bold disabled:opacity-40"
+                          >
+                            Next ›
+                          </button>
+                          <button
+                            onClick={() => setStudentPage(totalStudentPages)}
+                            disabled={safeStudentPage >= totalStudentPages}
+                            className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-xs font-bold disabled:opacity-40"
+                          >
+                            Last »
+                          </button>
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </>
+              );
+            })()}
           </div>
 
         </div>

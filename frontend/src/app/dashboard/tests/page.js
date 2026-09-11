@@ -23,11 +23,13 @@ export default function TestPortalPage() {
   const [selectedFacultyFilter, setSelectedFacultyFilter] = useState('All');
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState('');
 
-  // Submissions Tab Filter States
+  // Submissions Tab Filter & Pagination States
   const [selectedTestFilter, setSelectedTestFilter] = useState('All');
   const [selectedCourseSubFilter, setSelectedCourseSubFilter] = useState('All');
   const [selectedStatusFilter, setSelectedStatusFilter] = useState('All');
   const [submissionSearch, setSubmissionSearch] = useState('');
+  const [subPage, setSubPage] = useState(1);
+  const [subPageSize, setSubPageSize] = useState(10);
 
   // Fee Gate Alert Modal
   const [showFeeGateModal, setShowFeeGateModal] = useState(false);
@@ -416,8 +418,8 @@ export default function TestPortalPage() {
   const filteredTests = tests.filter((t) => {
     const fCode = t.faculty_code || (courses.find(c => c.id === t.course)?.faculty_code);
     if (user?.role === 'student') {
-      const studentFacCode = user?.faculty_code || 'SOBAT';
-      if (fCode && fCode !== studentFacCode) return false;
+      const studentFacCode = user?.faculty_code;
+      if (studentFacCode && fCode && fCode !== studentFacCode) return false;
     }
 
     const matchesSearch = t.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -429,7 +431,9 @@ export default function TestPortalPage() {
   });
 
   // Calculate Metrics
-  const activeTestsCount = tests.filter(t => t.is_published).length;
+  const activeTestsCount = user?.role === 'student'
+    ? filteredTests.filter(t => t.is_published).length
+    : tests.filter(t => t.is_published).length;
   const totalSubmissions = attempts.filter(a => a.completed_at).length;
   const passRate = attempts.length > 0 ? ((attempts.filter(a => a.passed).length / attempts.length) * 100).toFixed(1) : '0';
 
@@ -738,6 +742,10 @@ export default function TestPortalPage() {
                               
                               <div className="pt-2 text-[11px] text-slate-600 space-y-1 bg-white p-2.5 rounded-xl border border-slate-200 font-medium">
                                 <p>⏱️ Duration: <span className="font-bold text-slate-800">{testItem.duration_minutes} mins</span> | 🎯 Pass Mark: <span className="font-bold text-slate-800">{testItem.pass_percentage}%</span></p>
+                                <p>📅 Scheduled Start (EAT): <span className="font-bold text-slate-800">{formatUgandanTime(testItem.scheduled_start)}</span></p>
+                                {testItem.due_date && (
+                                  <p>⏳ Due Date (EAT): <span className="font-bold text-amber-700">{formatUgandanTime(testItem.due_date)}</span></p>
+                                )}
                                 <p>❓ Questions: <span className="font-bold text-slate-800">{testItem.questions_count}</span></p>
                               </div>
                             </div>
@@ -1285,65 +1293,124 @@ export default function TestPortalPage() {
               </div>
             </div>
 
-            {/* Submissions Table */}
             {filteredSubmissions.length === 0 ? (
               <div className="py-12 text-center text-slate-400 text-xs font-semibold bg-slate-50 rounded-xl border border-dashed border-slate-200">
                 No student test attempt submissions match your selected filter criteria.
               </div>
             ) : (
-              <div className="overflow-x-auto custom-scrollbar border border-slate-200 rounded-xl">
-                <table className="w-full text-left text-xs border-collapse">
-                  <thead>
-                    <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 uppercase font-bold text-[11px]">
-                      <th className="px-4 py-3">Student Name & Reg No</th>
-                      <th className="px-4 py-3">Test Paper Title</th>
-                      <th className="px-4 py-3 text-center">Score %</th>
-                      <th className="px-4 py-3 text-center">Status</th>
-                      <th className="px-4 py-3 text-center">Security Logs</th>
-                      <th className="px-4 py-3">Submitted At (EAT)</th>
-                      <th className="px-4 py-3 text-right">Scorecard Action</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 text-slate-700">
-                    {filteredSubmissions.map((att) => (
-                      <tr key={att.id} className="hover:bg-slate-50/80 transition-all">
-                        <td className="px-4 py-3">
-                          <p className="font-extrabold text-slate-850">{att.student_name || att.student_username}</p>
-                          <span className="text-[10px] text-slate-500 font-mono font-bold">{att.student_reg_number || `@${att.student_username}`}</span>
-                        </td>
-                        <td className="px-4 py-3">
-                          <p className="font-bold text-slate-800">{att.test_title}</p>
-                          <span className="text-[10px] font-bold text-brand-medium">Course: {att.test_course_code}</span>
-                        </td>
-                        <td className="px-4 py-3 text-center font-black text-sm text-slate-850">
-                          {att.score !== null && att.score !== undefined ? `${att.score}%` : 'N/A'}
-                        </td>
-                        <td className="px-4 py-3 text-center">
-                          <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider border ${att.passed ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-red-50 text-red-700 border-red-200'}`}>
-                            {att.passed ? 'PASSED' : 'FAILED'}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3 text-center">
-                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${att.tab_switches_count > 0 ? 'bg-amber-50 text-amber-800 border border-amber-200' : 'bg-slate-100 text-slate-600'}`}>
-                            {att.tab_switches_count > 0 ? `⚠️ ${att.tab_switches_count} Tab Switches` : 'Clean'}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3 text-slate-600 font-medium text-[11px]">
-                          {formatUgandanTime(att.completed_at || att.started_at)}
-                        </td>
-                        <td className="px-4 py-3 text-right">
-                          <button
-                            onClick={() => router.push(`/dashboard/tests/${att.test}/results?attemptId=${att.id}`)}
-                            className="px-3 py-1.5 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-lg shadow-sm transition-all"
-                          >
-                            📋 View Scorecard
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              (() => {
+                const totalSubPages = Math.max(1, Math.ceil(filteredSubmissions.length / subPageSize));
+                const safeSubPage = Math.min(Math.max(1, subPage), totalSubPages);
+                const paginatedSubmissions = filteredSubmissions.slice((safeSubPage - 1) * subPageSize, safeSubPage * subPageSize);
+
+                return (
+                  <>
+                    <div className="overflow-x-auto custom-scrollbar border border-slate-200 rounded-xl">
+                      <table className="w-full text-left text-xs border-collapse">
+                        <thead>
+                          <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 uppercase font-bold text-[11px]">
+                            <th className="px-4 py-3">Student Name & Reg No</th>
+                            <th className="px-4 py-3">Test Paper Title</th>
+                            <th className="px-4 py-3 text-center">Score %</th>
+                            <th className="px-4 py-3 text-center">Status</th>
+                            <th className="px-4 py-3 text-center">Security Logs</th>
+                            <th className="px-4 py-3">Submitted At (EAT)</th>
+                            <th className="px-4 py-3 text-right">Scorecard Action</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 text-slate-700">
+                          {paginatedSubmissions.map((att) => (
+                            <tr key={att.id} className="hover:bg-slate-50/80 transition-all">
+                              <td className="px-4 py-3">
+                                <p className="font-extrabold text-slate-850">{att.student_name || att.student_username}</p>
+                                <span className="text-[10px] text-slate-500 font-mono font-bold">{att.student_reg_number || `@${att.student_username}`}</span>
+                              </td>
+                              <td className="px-4 py-3">
+                                <p className="font-bold text-slate-800">{att.test_title}</p>
+                                <span className="text-[10px] font-bold text-brand-medium">Course: {att.test_course_code}</span>
+                              </td>
+                              <td className="px-4 py-3 text-center font-black text-sm text-slate-850">
+                                {att.score !== null && att.score !== undefined ? `${att.score}%` : 'N/A'}
+                              </td>
+                              <td className="px-4 py-3 text-center">
+                                <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider border ${att.passed ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-red-50 text-red-700 border-red-200'}`}>
+                                  {att.passed ? 'PASSED' : 'FAILED'}
+                                </span>
+                              </td>
+                              <td className="px-4 py-3 text-center">
+                                <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${att.tab_switches_count > 0 ? 'bg-amber-50 text-amber-800 border border-amber-200' : 'bg-slate-100 text-slate-600'}`}>
+                                  {att.tab_switches_count > 0 ? `⚠️ ${att.tab_switches_count} Tab Switches` : 'Clean'}
+                                </span>
+                              </td>
+                              <td className="px-4 py-3 text-slate-600 font-medium text-[11px]">
+                                {formatUgandanTime(att.completed_at || att.started_at)}
+                              </td>
+                              <td className="px-4 py-3 text-right">
+                                <button
+                                  onClick={() => router.push(`/dashboard/tests/${att.test}/results?attemptId=${att.id}`)}
+                                  className="px-3 py-1.5 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-lg shadow-sm transition-all"
+                                >
+                                  📋 View Scorecard
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* Submissions Pagination Controls Bar */}
+                    <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-3 text-xs text-slate-500 font-semibold border-t border-slate-100">
+                      <div className="flex items-center space-x-2">
+                        <span>Showing {(safeSubPage - 1) * subPageSize + 1} - {Math.min(safeSubPage * subPageSize, filteredSubmissions.length)} of {filteredSubmissions.length} submissions</span>
+                        <select
+                          value={subPageSize}
+                          onChange={(e) => { setSubPageSize(Number(e.target.value)); setSubPage(1); }}
+                          className="bg-slate-50 border border-slate-200 rounded text-xs px-2 py-1 font-bold text-slate-700"
+                        >
+                          <option value={10}>10 per page</option>
+                          <option value={20}>20 per page</option>
+                          <option value={50}>50 per page</option>
+                        </select>
+                      </div>
+
+                      <div className="flex items-center space-x-1.5">
+                        <button
+                          onClick={() => setSubPage(1)}
+                          disabled={safeSubPage <= 1}
+                          className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-xs font-bold disabled:opacity-40"
+                        >
+                          « First
+                        </button>
+                        <button
+                          onClick={() => setSubPage(prev => Math.max(1, prev - 1))}
+                          disabled={safeSubPage <= 1}
+                          className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-xs font-bold disabled:opacity-40"
+                        >
+                          ‹ Prev
+                        </button>
+                        <span className="px-3 py-1 font-bold text-slate-800">
+                          Page {safeSubPage} of {totalSubPages}
+                        </span>
+                        <button
+                          onClick={() => setSubPage(prev => Math.min(totalSubPages, prev + 1))}
+                          disabled={safeSubPage >= totalSubPages}
+                          className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-xs font-bold disabled:opacity-40"
+                        >
+                          Next ›
+                        </button>
+                        <button
+                          onClick={() => setSubPage(totalSubPages)}
+                          disabled={safeSubPage >= totalSubPages}
+                          className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-xs font-bold disabled:opacity-40"
+                        >
+                          Last »
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                );
+              })()
             )}
           </div>
         </div>

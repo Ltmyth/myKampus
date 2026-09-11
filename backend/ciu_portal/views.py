@@ -387,22 +387,22 @@ class AdminUserViewSet(viewsets.ModelViewSet):
         for index, r in enumerate(rows, start=1):
             reg = (
                 r.get('registration no') or r.get('registration_no') or
-                r.get('reg_number') or r.get('registration_number') or
+                r.get('registration number') or r.get('reg_number') or r.get('registration_number') or
                 r.get('reg_no') or r.get('regno') or
                 r.get('entry no') or r.get('entry_no') or
-                r.get('student_no') or f"2026SOBAT-B{index:03d}"
+                r.get('student_no') or r.get('student no') or f"2026SOBAT-B{index:03d}"
             ).strip()
 
-            surname = (r.get('surname') or '').strip()
+            surname = (r.get('surname') or r.get('last name') or r.get('last_name') or '').strip()
             first_name_col = (r.get('first name') or r.get('first_name') or '').strip()
             
             if surname or first_name_col:
-                name = f"{surname} {first_name_col}".strip()
+                name = f"{first_name_col} {surname}".strip()
             else:
-                name = (r.get('full_name') or r.get('name') or r.get('student_name') or f"Student {index}").strip()
+                name = (r.get('full name') or r.get('full_name') or r.get('name') or r.get('student name') or r.get('student_name') or f"Student {index}").strip()
 
-            email = (r.get('email') or r.get('student_email') or f"student_{index}@ciu.ac.ug").strip()
-            fac_str = (r.get('faculty') or r.get('faculty_code') or r.get('program') or 'SOBAT').strip()
+            email = (r.get('email') or r.get('student_email') or r.get('student email') or f"student_{index}@ciu.ac.ug").strip()
+            fac_str = (r.get('faculty') or r.get('faculty_code') or r.get('faculty code') or r.get('program') or 'SOBAT').strip()
 
             name_parts = name.split(' ', 1)
             first_name = name_parts[0]
@@ -913,11 +913,13 @@ class ExamViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         if user.role == 'student':
-            student_courses = Course.objects.filter(
-                models.Q(applications__student=user, applications__status='approved') |
-                models.Q(assigned_students=user) |
-                models.Q(faculty=user.faculty)
-            ).distinct()
+            if user.assigned_courses.exists():
+                student_courses = user.assigned_courses.all()
+            else:
+                student_courses = Course.objects.filter(
+                    models.Q(applications__student=user, applications__status='approved') |
+                    models.Q(faculty=user.faculty)
+                ).distinct()
             student_year = getattr(user, 'year_of_study', 1) or 1
             return Exam.objects.filter(
                 is_active=True,
@@ -1203,11 +1205,13 @@ class TestViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         if user.role == 'student':
-            student_courses = Course.objects.filter(
-                models.Q(applications__student=user, applications__status='approved') |
-                models.Q(assigned_students=user) |
-                models.Q(faculty=user.faculty)
-            ).distinct()
+            if user.assigned_courses.exists():
+                student_courses = user.assigned_courses.all()
+            else:
+                student_courses = Course.objects.filter(
+                    models.Q(applications__student=user, applications__status='approved') |
+                    models.Q(faculty=user.faculty)
+                ).distinct()
             student_year = getattr(user, 'year_of_study', 1) or 1
             return Test.objects.filter(
                 is_published=True,

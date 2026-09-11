@@ -12,27 +12,63 @@ class UserSerializer(serializers.ModelSerializer):
     faculty_code = serializers.CharField(source='faculty.code', read_only=True, allow_null=True)
     registration_number = serializers.ReadOnlyField()
     assigned_course_codes = serializers.SerializerMethodField()
+    is_test_cleared = serializers.SerializerMethodField()
+    is_exam_cleared = serializers.SerializerMethodField()
+    clearance_source = serializers.SerializerMethodField()
 
     class Meta:
         model = User
-        fields = ('id', 'username', 'email', 'first_name', 'last_name', 'role', 'phone', 'tuition_paid_percentage', 'faculty', 'faculty_name', 'faculty_code', 'assigned_courses', 'assigned_course_codes', 'reg_number', 'registration_number', 'year_of_study', 'must_change_password')
+        fields = ('id', 'username', 'email', 'first_name', 'last_name', 'role', 'phone', 'tuition_paid_percentage', 'faculty', 'faculty_name', 'faculty_code', 'assigned_courses', 'assigned_course_codes', 'reg_number', 'registration_number', 'year_of_study', 'must_change_password', 'is_test_cleared', 'is_exam_cleared', 'clearance_source')
         read_only_fields = ('role', 'registration_number')
 
     def get_assigned_course_codes(self, obj):
         return [c.code for c in obj.assigned_courses.all()]
+
+    def get_is_test_cleared(self, obj):
+        if obj.role != 'student': return True
+        from .clearance import check_student_clearance
+        return check_student_clearance(obj)['is_test_cleared']
+
+    def get_is_exam_cleared(self, obj):
+        if obj.role != 'student': return True
+        from .clearance import check_student_clearance
+        return check_student_clearance(obj)['is_exam_cleared']
+
+    def get_clearance_source(self, obj):
+        if obj.role != 'student': return 'Staff'
+        from .clearance import check_student_clearance
+        return check_student_clearance(obj)['source']
 
 class AdminUserSerializer(serializers.ModelSerializer):
     faculty_name = serializers.CharField(source='faculty.name', read_only=True, allow_null=True)
     faculty_code = serializers.CharField(source='faculty.code', read_only=True, allow_null=True)
     registration_number = serializers.ReadOnlyField()
     assigned_course_codes = serializers.SerializerMethodField()
+    is_test_cleared = serializers.SerializerMethodField()
+    is_exam_cleared = serializers.SerializerMethodField()
+    clearance_source = serializers.SerializerMethodField()
 
     class Meta:
         model = User
-        fields = ('id', 'username', 'email', 'first_name', 'last_name', 'role', 'phone', 'tuition_paid_percentage', 'faculty', 'faculty_name', 'faculty_code', 'assigned_courses', 'assigned_course_codes', 'reg_number', 'registration_number', 'year_of_study', 'must_change_password')
+        fields = ('id', 'username', 'email', 'first_name', 'last_name', 'role', 'phone', 'tuition_paid_percentage', 'faculty', 'faculty_name', 'faculty_code', 'assigned_courses', 'assigned_course_codes', 'reg_number', 'registration_number', 'year_of_study', 'must_change_password', 'is_test_cleared', 'is_exam_cleared', 'clearance_source')
 
     def get_assigned_course_codes(self, obj):
         return [c.code for c in obj.assigned_courses.all()]
+
+    def get_is_test_cleared(self, obj):
+        if obj.role != 'student': return True
+        from .clearance import check_student_clearance
+        return check_student_clearance(obj)['is_test_cleared']
+
+    def get_is_exam_cleared(self, obj):
+        if obj.role != 'student': return True
+        from .clearance import check_student_clearance
+        return check_student_clearance(obj)['is_exam_cleared']
+
+    def get_clearance_source(self, obj):
+        if obj.role != 'student': return 'Staff'
+        from .clearance import check_student_clearance
+        return check_student_clearance(obj)['source']
 
 class UserCreateSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True)
