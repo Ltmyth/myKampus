@@ -87,3 +87,60 @@ export const api = {
   }),
   delete: (endpoint, options) => apiRequest(endpoint, { method: 'DELETE', ...options }),
 };
+
+export function formatUgandanTime(dateString) {
+  if (!dateString) return 'Open Anytime';
+  const date = new Date(dateString);
+  if (isNaN(date.getTime())) return dateString;
+  return date.toLocaleString('en-UG', {
+    timeZone: 'Africa/Kampala',
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true
+  }) + ' (EAT)';
+}
+
+// Convert input string from <input type="datetime-local"> ("YYYY-MM-DDTHH:mm")
+// explicitly interpreting it as Ugandan Time (UTC+3 / Africa/Kampala)
+export function getUgandanISOString(datetimeLocalStr) {
+  if (!datetimeLocalStr) return null;
+  const clean = datetimeLocalStr.trim();
+  if (clean.length === 16) {
+    return `${clean}:00+03:00`;
+  }
+  if (clean.length === 19) {
+    return `${clean}+03:00`;
+  }
+  return new Date(clean).toISOString();
+}
+
+// Convert ISO string from backend into "YYYY-MM-DDTHH:mm" for <input type="datetime-local">
+// formatted in Ugandan Time (UTC+3 / Africa/Kampala)
+export function toUgandanDatetimeLocal(dateString) {
+  if (!dateString) return '';
+  const date = new Date(dateString);
+  if (isNaN(date.getTime())) return '';
+  
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Africa/Kampala',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  });
+  
+  const parts = formatter.formatToParts(date);
+  const getPart = (type) => parts.find(p => p.type === type)?.value || '00';
+  return `${getPart('year')}-${getPart('month')}-${getPart('day')}T${getPart('hour')}:${getPart('minute')}`;
+}
+
+// Get current Ugandan Time formatted as "YYYY-MM-DDTHH:mm"
+export function getUgandanNowDatetimeLocal() {
+  return toUgandanDatetimeLocal(new Date().toISOString());
+}
+

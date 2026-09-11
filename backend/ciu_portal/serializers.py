@@ -2,18 +2,24 @@ from rest_framework import serializers
 from .models import (
     User, Faculty, Invitation, Course, CourseUnit, Application, Exam, Question, ExamAttempt, 
     Test, TestQuestion, TestAttempt, ClassContent, AttendanceSession, AttendanceRecord,
-    ClassTimetable, ExamTimetable, SystemLog, ProctoringSetting
+    ClassTimetable, ExamTimetable, SystemLog, ProctoringSetting,
+    TemporaryClearance, QuestionBank, QuestionBankItem, ProctorSnapshot
 )
+
 
 class UserSerializer(serializers.ModelSerializer):
     faculty_name = serializers.CharField(source='faculty.name', read_only=True, allow_null=True)
     faculty_code = serializers.CharField(source='faculty.code', read_only=True, allow_null=True)
     registration_number = serializers.ReadOnlyField()
+    assigned_course_codes = serializers.SerializerMethodField()
 
     class Meta:
         model = User
-        fields = ('id', 'username', 'email', 'first_name', 'last_name', 'role', 'phone', 'tuition_paid_percentage', 'faculty', 'faculty_name', 'faculty_code', 'assigned_courses', 'reg_number', 'registration_number')
+        fields = ('id', 'username', 'email', 'first_name', 'last_name', 'role', 'phone', 'tuition_paid_percentage', 'faculty', 'faculty_name', 'faculty_code', 'assigned_courses', 'assigned_course_codes', 'reg_number', 'registration_number', 'year_of_study', 'must_change_password')
         read_only_fields = ('role', 'registration_number')
+
+    def get_assigned_course_codes(self, obj):
+        return [c.code for c in obj.assigned_courses.all()]
 
 class AdminUserSerializer(serializers.ModelSerializer):
     faculty_name = serializers.CharField(source='faculty.name', read_only=True, allow_null=True)
@@ -23,7 +29,7 @@ class AdminUserSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ('id', 'username', 'email', 'first_name', 'last_name', 'role', 'phone', 'tuition_paid_percentage', 'faculty', 'faculty_name', 'faculty_code', 'assigned_courses', 'assigned_course_codes', 'reg_number', 'registration_number')
+        fields = ('id', 'username', 'email', 'first_name', 'last_name', 'role', 'phone', 'tuition_paid_percentage', 'faculty', 'faculty_name', 'faculty_code', 'assigned_courses', 'assigned_course_codes', 'reg_number', 'registration_number', 'year_of_study', 'must_change_password')
 
     def get_assigned_course_codes(self, obj):
         return [c.code for c in obj.assigned_courses.all()]
@@ -34,7 +40,7 @@ class UserCreateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ('username', 'email', 'password', 'first_name', 'last_name', 'role', 'phone', 'faculty', 'assigned_courses', 'invitation_code', 'reg_number')
+        fields = ('username', 'email', 'password', 'first_name', 'last_name', 'role', 'phone', 'faculty', 'assigned_courses', 'invitation_code', 'reg_number', 'year_of_study')
 
     def validate(self, attrs):
         invitation_code = attrs.get('invitation_code')
@@ -84,8 +90,9 @@ class FacultySerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 class CourseSerializer(serializers.ModelSerializer):
-    faculty_name = serializers.CharField(source='faculty.name', read_only=True)
-    faculty_code = serializers.CharField(source='faculty.code', read_only=True)
+    faculty_name = serializers.CharField(source='faculty.name', read_only=True, allow_null=True)
+    faculty_code = serializers.CharField(source='faculty.code', read_only=True, allow_null=True)
+    units_count = serializers.IntegerField(source='units.count', read_only=True)
 
     class Meta:
         model = Course
@@ -94,6 +101,8 @@ class CourseSerializer(serializers.ModelSerializer):
 class CourseUnitSerializer(serializers.ModelSerializer):
     course_code = serializers.CharField(source='course.code', read_only=True)
     course_name = serializers.CharField(source='course.name', read_only=True)
+    faculty_code = serializers.CharField(source='course.faculty.code', read_only=True, allow_null=True)
+    faculty_name = serializers.CharField(source='course.faculty.name', read_only=True, allow_null=True)
     lecturer_details = UserSerializer(source='lecturers', many=True, read_only=True)
 
     class Meta:
@@ -148,6 +157,8 @@ class ExamSerializer(serializers.ModelSerializer):
     faculty_name = serializers.CharField(source='course.faculty.name', read_only=True, allow_null=True)
     faculty_code = serializers.CharField(source='course.faculty.code', read_only=True, allow_null=True)
     course_unit_name = serializers.CharField(source='course_unit.name', read_only=True, allow_null=True)
+    course_unit_code = serializers.CharField(source='course_unit.code', read_only=True, allow_null=True)
+    course_unit_year = serializers.IntegerField(source='course_unit.year_of_study', read_only=True, allow_null=True)
     lecturer_name = serializers.CharField(source='lecturer.get_full_name', read_only=True)
     questions_count = serializers.IntegerField(source='questions.count', read_only=True)
 
@@ -201,6 +212,8 @@ class TestSerializer(serializers.ModelSerializer):
     faculty_name = serializers.CharField(source='course.faculty.name', read_only=True, allow_null=True)
     faculty_code = serializers.CharField(source='course.faculty.code', read_only=True, allow_null=True)
     course_unit_name = serializers.CharField(source='course_unit.name', read_only=True, allow_null=True)
+    course_unit_code = serializers.CharField(source='course_unit.code', read_only=True, allow_null=True)
+    course_unit_year = serializers.IntegerField(source='course_unit.year_of_study', read_only=True, allow_null=True)
     lecturer_name = serializers.CharField(source='lecturer.get_full_name', read_only=True)
     questions_count = serializers.IntegerField(source='questions.count', read_only=True)
     attempts_count = serializers.IntegerField(source='attempts.count', read_only=True)
@@ -310,3 +323,51 @@ class ProctoringSettingSerializer(serializers.ModelSerializer):
     class Meta:
         model = ProctoringSetting
         fields = '__all__'
+
+
+class TemporaryClearanceSerializer(serializers.ModelSerializer):
+    student_name = serializers.CharField(source='student.get_full_name', read_only=True)
+    student_reg_number = serializers.CharField(source='student.registration_number', read_only=True)
+    student_email = serializers.CharField(source='student.email', read_only=True)
+    faculty_code = serializers.CharField(source='student.faculty.code', read_only=True, allow_null=True)
+    granted_by_username = serializers.CharField(source='granted_by.username', read_only=True, allow_null=True)
+    is_currently_valid = serializers.BooleanField(read_only=True)
+
+    class Meta:
+        model = TemporaryClearance
+        fields = '__all__'
+        read_only_fields = ('granted_by', 'valid_from', 'expires_at', 'created_at')
+
+
+class QuestionBankItemSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = QuestionBankItem
+        fields = '__all__'
+
+
+class QuestionBankSerializer(serializers.ModelSerializer):
+    course_code = serializers.CharField(source='course.code', read_only=True)
+    course_name = serializers.CharField(source='course.name', read_only=True)
+    course_unit_name = serializers.CharField(source='course_unit.name', read_only=True, allow_null=True)
+    created_by_name = serializers.CharField(source='created_by.get_full_name', read_only=True)
+    items_count = serializers.IntegerField(source='items.count', read_only=True)
+    items = QuestionBankItemSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = QuestionBank
+        fields = '__all__'
+        read_only_fields = ('created_by', 'created_at')
+
+
+class ProctorSnapshotSerializer(serializers.ModelSerializer):
+    student_name = serializers.CharField(source='student.get_full_name', read_only=True)
+    student_reg_number = serializers.CharField(source='student.registration_number', read_only=True)
+    faculty_code = serializers.CharField(source='student.faculty.code', read_only=True, allow_null=True)
+    test_title = serializers.CharField(source='test.title', read_only=True, allow_null=True)
+    exam_title = serializers.CharField(source='exam.title', read_only=True, allow_null=True)
+
+    class Meta:
+        model = ProctorSnapshot
+        fields = '__all__'
+        read_only_fields = ('captured_at',)
+

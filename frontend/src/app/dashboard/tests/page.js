@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useAuth } from '@/context/AuthContext';
-import { api } from '@/lib/api';
+import { api, formatUgandanTime, getUgandanISOString, toUgandanDatetimeLocal, getUgandanNowDatetimeLocal } from '@/lib/api';
 import { useRouter } from 'next/navigation';
 
 export default function TestPortalPage() {
@@ -30,10 +30,12 @@ export default function TestPortalPage() {
   // Test Builder State
   const [title, setTitle] = useState('');
   const [selectedCourse, setSelectedCourse] = useState('');
+  const [selectedCourseUnit, setSelectedCourseUnit] = useState('');
   const [category, setCategory] = useState('quiz');
   const [duration, setDuration] = useState(30);
   const [passPercentage, setPassPercentage] = useState(50);
   const [allowedAttempts, setAllowedAttempts] = useState(1);
+  const [yearOfStudy, setYearOfStudy] = useState(0); // 0 = All Years, 1-4 = Year X
   const [description, setDescription] = useState('');
   const [scheduledStart, setScheduledStart] = useState('');
   const [dueDate, setDueDate] = useState('');
@@ -99,14 +101,32 @@ export default function TestPortalPage() {
     }
   }
 
-  // Filter assigned courses and faculties for Lecturers
+  // Filter assigned courses and course units based on user role
   const assignedCourses = isLecturer
-    ? courses.filter(c => courseUnits.some(u => u.course_code === c.code && u.lecturer_details?.some(l => l.id === user.id)))
+    ? courses.filter(c => courseUnits.some(u => (u.course_code === c.code || u.course === c.id) && (u.lecturer_details?.some(l => l.id === user.id) || u.lecturers?.includes(user.id))))
     : courses;
 
+  const assignedCourseUnits = isLecturer
+    ? courseUnits.filter(u => u.lecturer_details?.some(l => l.id === user.id) || u.lecturers?.includes(user.id))
+    : isAdmin
+    ? courseUnits
+    : courseUnits.filter(u => (assignedCourses || []).some(c => c.code === u.course_code || c.id === u.course));
+
   const scopedFaculties = isLecturer
-    ? faculties.filter(f => assignedCourses.some(c => c.faculty === f.id || c.faculty_code === f.code))
+    ? faculties.filter(f => (assignedCourses || []).some(c => c.faculty === f.id || c.faculty_code === f.code))
     : faculties;
+
+  const handleSelectCourseUnit = (unitId) => {
+    setSelectedCourseUnit(unitId);
+    if (unitId) {
+      const u = courseUnits.find(item => item.id === parseInt(unitId));
+      if (u) {
+        const parentC = courses.find(c => c.code === u.course_code || c.id === u.course);
+        if (parentC) setSelectedCourse(parentC.id);
+        if (u.year_of_study) setYearOfStudy(u.year_of_study);
+      }
+    }
+  };
 
   const handleDeleteTest = async (testItem) => {
     if (isExecutiveReadOnly) return;
@@ -138,8 +158,8 @@ export default function TestPortalPage() {
     setEditDuration(testItem.duration_minutes || 30);
     setEditPassPercentage(testItem.pass_percentage || 50);
     setEditAllowedAttempts(testItem.allowed_attempts || 1);
-    setEditScheduledStart(testItem.scheduled_start ? new Date(testItem.scheduled_start).toISOString().slice(0, 16) : '');
-    setEditDueDate(testItem.due_date ? new Date(testItem.due_date).toISOString().slice(0, 16) : '');
+    setEditScheduledStart(toUgandanDatetimeLocal(testItem.scheduled_start));
+    setEditDueDate(toUgandanDatetimeLocal(testItem.due_date));
   };
 
   const handleSaveEditTest = async (e) => {
@@ -155,8 +175,8 @@ export default function TestPortalPage() {
         duration_minutes: parseInt(editDuration),
         pass_percentage: parseFloat(editPassPercentage),
         allowed_attempts: parseInt(editAllowedAttempts),
-        scheduled_start: editScheduledStart ? new Date(editScheduledStart).toISOString() : null,
-        due_date: editDueDate ? new Date(editDueDate).toISOString() : null
+        scheduled_start: getUgandanISOString(editScheduledStart),
+        due_date: getUgandanISOString(editDueDate)
       };
 
       await api.patch(`/tests/${editingTestModal.id}/`, payload);
@@ -173,8 +193,12 @@ export default function TestPortalPage() {
   const handleCreateTest = async (e) => {
     e.preventDefault();
     if (isExecutiveReadOnly) return;
-    if (!title || !selectedCourse) {
-      setErrorMsg('Please specify a title and select a course.');
+    if (!title || (!selectedCourse && !selectedCourseUnit)) {
+      setErrorMsg('Please specify a test title, course unit, and course program.');
+      return;
+    }
+    if (!isAdmin && yearOfStudy === 0 && !selectedCourseUnit) {
+      setErrorMsg('Only System Administrators can set tests for All Course Units & All Years (Year 0). Please select an assigned course unit.');
       return;
     }
     setErrorMsg('');
@@ -185,23 +209,23 @@ export default function TestPortalPage() {
       const payload = {
         title,
         course: parseInt(selectedCourse),
+        course_unit: selectedCourseUnit ? parseInt(selectedCourseUnit) : null,
         category,
         duration_minutes: parseInt(duration),
         pass_percentage: parseFloat(passPercentage),
         allowed_attempts: parseInt(allowedAttempts),
+        year_of_study: parseInt(yearOfStudy),
         description,
-        is_published: true
+        is_published: true,
+        scheduled_start: getUgandanISOString(scheduledStart),
+        due_date: getUgandanISOString(dueDate)
       };
-      if (scheduledStart) {
-        payload.scheduled_start = new Date(scheduledStart).toISOString();
-      }
-      if (dueDate) {
-        payload.due_date = new Date(dueDate).toISOString();
-      }
+
       const created = await api.post('/tests/', payload);
-      setSuccessMsg('Test created successfully! Select it below to add questions.');
+      setSuccessMsg('Test paper saved successfully! You can add questions below.');
       setTitle('');
       setSelectedCourse('');
+      setSelectedCourseUnit('');
       setDescription('');
       setScheduledStart('');
       setDueDate('');
@@ -362,11 +386,16 @@ export default function TestPortalPage() {
 
   // Filtered Tests
   const filteredTests = tests.filter((t) => {
+    const fCode = t.faculty_code || (courses.find(c => c.id === t.course)?.faculty_code);
+    if (user?.role === 'student') {
+      const studentFacCode = user?.faculty_code || 'SOBAT';
+      if (fCode && fCode !== studentFacCode) return false;
+    }
+
     const matchesSearch = t.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
                           t.course_code.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesCourse = selectedCourseFilter ? t.course === parseInt(selectedCourseFilter) : true;
     const matchesCategory = selectedCategoryFilter ? t.category === selectedCategoryFilter : true;
-    const fCode = t.faculty_code || (courses.find(c => c.id === t.course)?.faculty_code);
     const matchesFaculty = selectedFacultyFilter === 'All' ? true : fCode === selectedFacultyFilter;
     return matchesSearch && matchesCourse && matchesCategory && matchesFaculty;
   });
@@ -578,9 +607,9 @@ export default function TestPortalPage() {
                       
                       <div className="pt-2 text-[11px] text-slate-600 space-y-1 bg-slate-50 p-2.5 rounded-xl border border-slate-100 font-medium">
                         <p>⏱️ Duration: <span className="font-bold text-slate-800">{testItem.duration_minutes} mins</span> | 🎯 Pass Mark: <span className="font-bold text-slate-800">{testItem.pass_percentage}%</span></p>
-                        <p>📅 Scheduled Start: <span className="font-bold text-slate-800">{testItem.scheduled_start ? new Date(testItem.scheduled_start).toLocaleString([], {year:'numeric', month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'}) : 'Open Anytime'}</span></p>
+                        <p>📅 Scheduled Start (EAT): <span className="font-bold text-slate-800">{formatUgandanTime(testItem.scheduled_start)}</span></p>
                         {testItem.due_date && (
-                          <p>⏳ Due Date (Deadline): <span className="font-bold text-amber-700">{new Date(testItem.due_date).toLocaleString([], {year:'numeric', month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'})}</span></p>
+                          <p>⏳ Due Date (EAT): <span className="font-bold text-amber-700">{formatUgandanTime(testItem.due_date)}</span></p>
                         )}
                         <p>❓ Questions: <span className="font-bold text-slate-800">{testItem.questions_count}</span> | 💰 Fee Gate: <span className="font-bold text-emerald-700">50%+ Paid</span></p>
                       </div>
@@ -784,14 +813,28 @@ export default function TestPortalPage() {
 
             <form onSubmit={handleCreateTest} className="space-y-3">
               <div>
-                <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Select Course Program</label>
+                <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Select Course Unit *</label>
+                <select
+                  value={selectedCourseUnit}
+                  onChange={(e) => handleSelectCourseUnit(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:ring-1 focus:ring-brand-light"
+                >
+                  <option value="">{isAdmin ? '-- All Course Units (System Admin Default) --' : '-- Select Assigned Course Unit --'}</option>
+                  {assignedCourseUnits.map((u) => (
+                    <option key={u.id} value={u.id}>[{u.code}] {u.name} (Year {u.year_of_study || 1})</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Course Program *</label>
                 <select
                   value={selectedCourse}
                   onChange={(e) => setSelectedCourse(e.target.value)}
                   className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-800 focus:ring-1 focus:ring-brand-light"
                   required
                 >
-                  <option value="">Select Course...</option>
+                  <option value="">Select Course Program...</option>
                   {assignedCourses.map((c) => (
                     <option key={c.id} value={c.id}>[{c.code}] {c.name}</option>
                   ))}
@@ -799,7 +842,22 @@ export default function TestPortalPage() {
               </div>
 
               <div>
-                <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Test Title</label>
+                <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Target Year of Study</label>
+                <select
+                  value={yearOfStudy}
+                  onChange={(e) => setYearOfStudy(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800"
+                >
+                  {isAdmin && <option value={0}>🌐 All Years (Year 0 - System Admin Exclusive)</option>}
+                  <option value={1}>Year 1</option>
+                  <option value={2}>Year 2</option>
+                  <option value={3}>Year 3</option>
+                  <option value={4}>Year 4</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Test Title *</label>
                 <input
                   type="text"
                   placeholder="e.g. Unit Test 1: Data Structures"
@@ -857,24 +915,73 @@ export default function TestPortalPage() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Scheduled Start</label>
-                  <input
-                    type="datetime-local"
-                    value={scheduledStart}
-                    onChange={(e) => setScheduledStart(e.target.value)}
-                    className="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs font-semibold text-slate-800"
-                  />
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="block text-[11px] font-bold text-slate-700 uppercase">Scheduled Start & Due Date</label>
+                  <span className="text-[10px] font-extrabold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                    🕒 Ugandan Time (UTC+3, EAT)
+                  </span>
                 </div>
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Due Date</label>
-                  <input
-                    type="datetime-local"
-                    value={dueDate}
-                    onChange={(e) => setDueDate(e.target.value)}
-                    className="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs font-semibold text-slate-800"
-                  />
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[10px] text-slate-500 font-semibold mb-0.5">Start Date & Time (EAT)</label>
+                    <input
+                      type="datetime-local"
+                      value={scheduledStart}
+                      onChange={(e) => setScheduledStart(e.target.value)}
+                      className="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs font-semibold text-slate-800"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-slate-500 font-semibold mb-0.5">Due Date & Time (EAT)</label>
+                    <input
+                      type="datetime-local"
+                      value={dueDate}
+                      onChange={(e) => setDueDate(e.target.value)}
+                      className="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs font-semibold text-slate-800"
+                    />
+                  </div>
+                </div>
+
+                {/* Quick Date Presets */}
+                <div className="flex flex-wrap items-center gap-1 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setScheduledStart(getUgandanNowDatetimeLocal())}
+                    className="px-2 py-0.5 bg-slate-100 hover:bg-emerald-50 text-slate-700 text-[10px] font-bold rounded border border-slate-200 transition-all"
+                  >
+                    ⚡ Start Now
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const d = new Date();
+                      d.setDate(d.getDate() + 1);
+                      setDueDate(toUgandanDatetimeLocal(d.toISOString()));
+                    }}
+                    className="px-2 py-0.5 bg-slate-100 hover:bg-emerald-50 text-slate-700 text-[10px] font-bold rounded border border-slate-200 transition-all"
+                  >
+                    📅 Due +1 Day
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const d = new Date();
+                      d.setDate(d.getDate() + 7);
+                      setDueDate(toUgandanDatetimeLocal(d.toISOString()));
+                    }}
+                    className="px-2 py-0.5 bg-slate-100 hover:bg-emerald-50 text-slate-700 text-[10px] font-bold rounded border border-slate-200 transition-all"
+                  >
+                    📅 Due +7 Days
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setScheduledStart(''); setDueDate(''); }}
+                    className="px-2 py-0.5 bg-slate-100 hover:bg-red-50 text-slate-600 text-[10px] font-bold rounded border border-slate-200 transition-all"
+                  >
+                    ❌ Clear
+                  </button>
                 </div>
               </div>
 
@@ -892,9 +999,9 @@ export default function TestPortalPage() {
               <button
                 type="submit"
                 disabled={submitting}
-                className="w-full py-2 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-lg shadow-sm transition-all"
+                className="w-full py-2.5 bg-brand-light hover:bg-brand-medium text-white text-xs font-extrabold uppercase tracking-wide rounded-xl shadow-md transition-all flex items-center justify-center space-x-2"
               >
-                {submitting ? 'Creating...' : 'Save & Build Question Bank'}
+                <span>💾 Save Test Paper & Build Questions</span>
               </button>
             </form>
           </div>
@@ -913,12 +1020,21 @@ export default function TestPortalPage() {
 
                   <div className="flex items-center space-x-2">
                     {!isExecutiveReadOnly && (
-                      <button
-                        onClick={() => handleBulkSeedQuestions(selectedTest.id)}
-                        className="px-3 py-1.5 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 text-xs font-bold rounded-lg transition-all"
-                      >
-                        ⚡ Seed Sample Package
-                      </button>
+                      <>
+                        <button
+                          onClick={() => handleOpenEditTestModal(selectedTest)}
+                          className="px-3 py-1.5 bg-brand-light text-white hover:bg-brand-medium text-xs font-bold rounded-lg shadow-sm transition-all flex items-center space-x-1"
+                          title="Save and edit test dates, title, duration"
+                        >
+                          <span>💾 Save Details</span>
+                        </button>
+                        <button
+                          onClick={() => handleBulkSeedQuestions(selectedTest.id)}
+                          className="px-3 py-1.5 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 text-xs font-bold rounded-lg transition-all"
+                        >
+                          ⚡ Seed Sample Package
+                        </button>
+                      </>
                     )}
                     <button
                       onClick={() => setSelectedTest(null)}

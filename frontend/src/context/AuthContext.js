@@ -32,8 +32,7 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     if (loading) return;
 
-    const publicPages = ['/login', '/register'];
-    const isPublicPage = publicPages.includes(pathname) || pathname.startsWith('/register/');
+    const isPublicPage = pathname.startsWith('/login') || pathname.startsWith('/register');
 
     if (!user && !isPublicPage) {
       router.push('/login');
@@ -42,12 +41,27 @@ export function AuthProvider({ children }) {
     }
   }, [user, loading, pathname, router]);
 
-  const login = async (username, password) => {
+  const login = async (username, password, portalType = null) => {
     try {
       setLoading(true);
       const data = await api.post('/auth/login/', { username, password });
       
       const { access, refresh, user: userProfile } = data;
+
+      // Strict role isolation between Student and Staff portals
+      if (portalType === 'student' && userProfile.role !== 'student') {
+        return { 
+          success: false, 
+          error: 'Access Denied: Staff accounts cannot sign in through the Student Portal. Please use the Staff & Executive Portal.' 
+        };
+      }
+      if (portalType === 'staff' && userProfile.role === 'student') {
+        return { 
+          success: false, 
+          error: 'Access Denied: Student accounts cannot sign in through the Staff Portal. Please use the Student Portal.' 
+        };
+      }
+
       localStorage.setItem('ciu_tokens', JSON.stringify({ access, refresh }));
       localStorage.setItem('ciu_user', JSON.stringify(userProfile));
       
@@ -74,10 +88,15 @@ export function AuthProvider({ children }) {
   };
 
   const logout = () => {
+    const isStudent = user?.role === 'student';
     localStorage.removeItem('ciu_tokens');
     localStorage.removeItem('ciu_user');
     setUser(null);
-    router.push('/login');
+    if (isStudent) {
+      router.push('/login/student');
+    } else {
+      router.push('/login/staff');
+    }
   };
 
   return (

@@ -31,6 +31,11 @@ export default function TestRunnerPage({ params }) {
   const [submitting, setSubmitting] = useState(false);
   const autoSubmittedRef = useRef(false);
 
+  // Webcam Proctoring Refs & States
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+  const [cameraActive, setCameraActive] = useState(false);
+
   useEffect(() => {
     initTestRunner();
   }, [testId]);
@@ -74,6 +79,56 @@ export default function TestRunnerPage({ params }) {
       setLoading(false);
     }
   }
+
+  // Live Webcam Stream Capture Effect
+  useEffect(() => {
+    if (loading || !activeAttempt || !proctoringSetting.is_proctoring_enabled) return;
+
+    let streamObj = null;
+    let captureInterval = null;
+
+    async function startCamera() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 320, height: 240 } });
+        streamObj = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+        }
+        setCameraActive(true);
+
+        captureInterval = setInterval(() => {
+          if (videoRef.current && canvasRef.current) {
+            const video = videoRef.current;
+            const canvas = canvasRef.current;
+            canvas.width = 320;
+            canvas.height = 240;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(video, 0, 0, 320, 240);
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.5);
+
+            api.post('/proctoring-monitor/stream_snapshot/', {
+              image_data: dataUrl,
+              test_id: testId,
+              tab_switches: tabSwitches,
+              is_camera_active: true
+            }).catch(() => {});
+          }
+        }, 10000);
+      } catch (err) {
+        setCameraActive(false);
+        setSecurityNotice('⚠️ Camera Access Notice: Live proctoring requires video camera stream.');
+      }
+    }
+
+    startCamera();
+
+    return () => {
+      if (captureInterval) clearInterval(captureInterval);
+      if (streamObj) {
+        streamObj.getTracks().forEach(track => track.stop());
+      }
+    };
+  }, [loading, activeAttempt, proctoringSetting.is_proctoring_enabled, testId, tabSwitches]);
 
   // 1. Timer Countdown Effect
   useEffect(() => {
@@ -155,11 +210,10 @@ export default function TestRunnerPage({ params }) {
         auto_submitted_reason: reason
       });
 
-      // Clear local draft backup
       const draftKey = `ciu_test_draft_${testId}_${user.id}`;
       localStorage.removeItem(draftKey);
 
-      setSubmitSuccess('✅ Test submitted successfully! Redirecting to your academic scorecard...');
+      setSubmitSuccess('✅ Test submitted successfully! Redirecting to your scorecard...');
       setTimeout(() => {
         router.push(`/dashboard/tests/${testId}/results?attemptId=${activeAttempt.id}`);
       }, 700);
@@ -213,19 +267,31 @@ export default function TestRunnerPage({ params }) {
   const progressPercent = totalQuestions > 0 ? (answeredCount / totalQuestions) * 100 : 0;
 
   return (
-    <div className="space-y-6 animate-fade-in max-w-6xl mx-auto">
+    <div className="space-y-6 animate-fade-in max-w-6xl mx-auto relative pb-20">
       
-      {/* Live Proctoring Banner */}
+      {/* Live Proctoring Banner & Camera Feed Overlay */}
       {proctoringSetting.is_proctoring_enabled && (
         <div className="bg-red-950 text-white p-3 rounded-2xl border border-red-800 shadow-md flex items-center justify-between text-xs animate-pulse">
           <div className="flex items-center space-x-2">
             <span className="w-3 h-3 rounded-full bg-red-500 animate-ping"></span>
-            <span className="font-bold">🔴 LIVE AI & WEBCAM PROCTORING ACTIVE</span>
-            <span className="hidden md:inline text-red-300">| Camera stream and tab focus are being monitored by the System Admin</span>
+            <span className="font-bold">🔴 LIVE WEBCAM PROCTORING ACTIVE</span>
+            <span className="hidden md:inline text-red-300">| Camera stream and tab switches are monitored in real time</span>
           </div>
           <span className="bg-red-900 px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase border border-red-700">
-            Anti-Cheat ON
+            {cameraActive ? 'Camera Connected 🟢' : 'Camera Disconnected 🔴'}
           </span>
+        </div>
+      )}
+
+      {/* Floating Proctor Webcam Box */}
+      {proctoringSetting.is_proctoring_enabled && (
+        <div className="fixed bottom-4 right-4 z-40 w-40 h-28 bg-slate-900 border-2 border-red-600 rounded-2xl overflow-hidden shadow-2xl flex items-center justify-center">
+          <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
+          <canvas ref={canvasRef} className="hidden" />
+          <div className="absolute top-1 left-1 px-1.5 py-0.5 bg-black/80 text-white text-[9px] font-bold rounded flex items-center space-x-1">
+            <span className="w-1.5 h-1.5 bg-red-500 rounded-full animate-ping"></span>
+            <span>PROCTOR</span>
+          </div>
         </div>
       )}
 

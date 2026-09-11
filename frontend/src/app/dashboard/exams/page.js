@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useAuth } from '@/context/AuthContext';
-import { api } from '@/lib/api';
+import { api, formatUgandanTime, getUgandanISOString, toUgandanDatetimeLocal, getUgandanNowDatetimeLocal } from '@/lib/api';
 import { useRouter } from 'next/navigation';
 
 export default function ExamsPage() {
@@ -33,7 +33,10 @@ export default function ExamsPage() {
   const [selectedCourse, setSelectedCourse] = useState('');
   const [selectedCourseUnit, setSelectedCourseUnit] = useState('');
   const [duration, setDuration] = useState(60);
-  
+  const [examYearOfStudy, setExamYearOfStudy] = useState(0); // 0 = All Years, 1-4 = Year X
+  const [scheduledStart, setScheduledStart] = useState('');
+  const [dueDate, setDueDate] = useState('');
+
   // Manage Questions states (Lecturer/Staff)
   const [selectedExam, setSelectedExam] = useState(null);
   const [questions, setQuestions] = useState([]);
@@ -111,14 +114,32 @@ export default function ExamsPage() {
     }
   }
 
-  // Filter assigned courses and faculties for Lecturers
+  // Filter assigned courses and course units based on user role
   const assignedCourses = isLecturer
-    ? courses.filter(c => courseUnits.some(u => u.course_code === c.code && u.lecturer_details?.some(l => l.id === user.id)))
+    ? courses.filter(c => courseUnits.some(u => (u.course_code === c.code || u.course === c.id) && (u.lecturer_details?.some(l => l.id === user.id) || u.lecturers?.includes(user.id))))
     : courses;
 
+  const assignedCourseUnits = isLecturer
+    ? courseUnits.filter(u => u.lecturer_details?.some(l => l.id === user.id) || u.lecturers?.includes(user.id))
+    : isAdmin
+    ? courseUnits
+    : courseUnits.filter(u => (assignedCourses || []).some(c => c.code === u.course_code || c.id === u.course));
+
   const scopedFaculties = isLecturer
-    ? faculties.filter(f => assignedCourses.some(c => c.faculty === f.id || c.faculty_code === f.code))
+    ? faculties.filter(f => (assignedCourses || []).some(c => c.faculty === f.id || c.faculty_code === f.code))
     : faculties;
+
+  const handleSelectCourseUnit = (unitId) => {
+    setSelectedCourseUnit(unitId);
+    if (unitId) {
+      const u = courseUnits.find(item => item.id === parseInt(unitId));
+      if (u) {
+        const parentC = courses.find(c => c.code === u.course_code || c.id === u.course);
+        if (parentC) setSelectedCourse(parentC.id);
+        if (u.year_of_study) setExamYearOfStudy(u.year_of_study);
+      }
+    }
+  };
 
   const handleToggleProctoring = async () => {
     if (isExecutiveReadOnly) return;
@@ -133,13 +154,12 @@ export default function ExamsPage() {
     }
   };
 
-  const [scheduledStart, setScheduledStart] = useState('');
-
   // Edit Exam Modal State
   const [editingExamModal, setEditingExamModal] = useState(null);
   const [editExamTitle, setEditExamTitle] = useState('');
   const [editExamDuration, setEditExamDuration] = useState(60);
   const [editExamScheduledStart, setEditExamScheduledStart] = useState('');
+  const [editExamDueDate, setEditExamDueDate] = useState('');
   const [editExamIsActive, setEditExamIsActive] = useState(true);
 
   const handleDeleteExam = async (examItem) => {
@@ -170,7 +190,8 @@ export default function ExamsPage() {
     setEditingExamModal(exam);
     setEditExamTitle(exam.title);
     setEditExamDuration(exam.duration_minutes || 60);
-    setEditExamScheduledStart(exam.scheduled_start ? new Date(exam.scheduled_start).toISOString().slice(0, 16) : '');
+    setEditExamScheduledStart(toUgandanDatetimeLocal(exam.scheduled_start));
+    setEditExamDueDate(toUgandanDatetimeLocal(exam.due_date));
     setEditExamIsActive(exam.is_active);
   };
 
@@ -190,7 +211,8 @@ export default function ExamsPage() {
         title: editExamTitle,
         duration_minutes: parseInt(editExamDuration),
         is_active: editExamIsActive,
-        scheduled_start: editExamScheduledStart ? new Date(editExamScheduledStart).toISOString() : null
+        scheduled_start: getUgandanISOString(editExamScheduledStart),
+        due_date: getUgandanISOString(editExamDueDate)
       };
 
       await api.patch(`/exams/${editingExamModal.id}/`, payload);
@@ -207,8 +229,12 @@ export default function ExamsPage() {
   const handleCreateExam = async (e) => {
     e.preventDefault();
     if (isExecutiveReadOnly) return;
-    if (!examTitle || !selectedCourse) {
-      setErrorMsg('Please enter an exam title and select a course.');
+    if (!examTitle || (!selectedCourse && !selectedCourseUnit)) {
+      setErrorMsg('Please enter an exam title, course unit, and course program.');
+      return;
+    }
+    if (!isAdmin && examYearOfStudy === 0 && !selectedCourseUnit) {
+      setErrorMsg('Only System Administrators can set exams for All Course Units & All Years (Year 0). Please select an assigned course unit.');
       return;
     }
     setErrorMsg('');
@@ -221,17 +247,19 @@ export default function ExamsPage() {
         course: parseInt(selectedCourse),
         course_unit: selectedCourseUnit ? parseInt(selectedCourseUnit) : null,
         duration_minutes: parseInt(duration),
-        is_active: true
+        year_of_study: parseInt(examYearOfStudy),
+        is_active: true,
+        scheduled_start: getUgandanISOString(scheduledStart),
+        due_date: getUgandanISOString(dueDate)
       };
-      if (scheduledStart) {
-        payload.scheduled_start = new Date(scheduledStart).toISOString();
-      }
+
       const created = await api.post('/exams/', payload);
-      setSuccessMsg('Exam paper created successfully! Select it below to add questions.');
+      setSuccessMsg('Exam paper saved successfully! Select questions below.');
       setExamTitle('');
       setSelectedCourse('');
       setSelectedCourseUnit('');
       setScheduledStart('');
+      setDueDate('');
       loadExamData();
       setSelectedExam(created);
     } catch (err) {
@@ -535,12 +563,19 @@ export default function ExamsPage() {
               <div className="green-card rounded-2xl p-6 space-y-4">
                 <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">Scheduled Exam Papers</h3>
                 
-                {exams.length === 0 ? (
-                  <p className="text-slate-400 text-xs py-8 text-center">No active examination papers scheduled.</p>
-                ) : (
-                  <div className="space-y-4">
-                    {exams.map((examItem) => {
-                      const myAttempt = attempts.find(a => a.exam === examItem.id);
+                {(() => {
+                  const studentFacCode = user?.faculty_code || 'SOBAT';
+                  const studentExams = exams.filter(e => {
+                    const fCode = e.faculty_code || (courses.find(c => c.id === e.course)?.faculty_code);
+                    return !fCode || fCode === studentFacCode;
+                  });
+
+                  return studentExams.length === 0 ? (
+                    <p className="text-slate-400 text-xs py-8 text-center">No active examination papers scheduled for {user?.faculty_name || 'your assigned faculty'}.</p>
+                  ) : (
+                    <div className="space-y-4">
+                      {studentExams.map((examItem) => {
+                        const myAttempt = attempts.find(a => a.exam === examItem.id);
                       return (
                         <div key={examItem.id} className="p-5 bg-gradient-to-br from-white to-emerald-50/30 rounded-2xl border border-emerald-200/70 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                           <div className="space-y-1.5 flex-1">
@@ -561,7 +596,7 @@ export default function ExamsPage() {
                             <h4 className="font-bold text-slate-850 text-base">{examItem.title}</h4>
                             <p className="text-xs text-slate-500 font-medium">Duration: <strong className="text-slate-800">{examItem.duration_minutes} mins</strong> · Questions: <strong className="text-slate-800">{examItem.questions_count}</strong></p>
                             <p className="text-xs text-slate-600 font-medium pt-1">
-                              📅 Scheduled Start: <strong className="text-slate-800">{examItem.scheduled_start ? new Date(examItem.scheduled_start).toLocaleString([], {year:'numeric', month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'}) : 'Open Anytime'}</strong>
+                              📅 Scheduled Start (EAT): <strong className="text-slate-800">{formatUgandanTime(examItem.scheduled_start)}</strong>
                             </p>
                             <p className="text-[11px] text-emerald-700 font-medium pt-0.5">💰 Fee Gate: 100% Full Tuition Clearance Required</p>
                           </div>
@@ -603,7 +638,8 @@ export default function ExamsPage() {
                       );
                     })}
                   </div>
-                )}
+                );
+              })()}
               </div>
             ) : (
               /* STAFF FACULTY ORGANIZED EXAMS VIEW */
@@ -764,19 +800,33 @@ export default function ExamsPage() {
           {/* Right Column Form: Create Exam / Question Editor */}
           <div className="space-y-6">
             
-            {isLecturer && !isExecutiveReadOnly && (
+            {(isLecturer || isAdmin || user.role === 'faculty_admin') && !isExecutiveReadOnly && (
               <div className="green-card rounded-2xl p-6 space-y-4">
                 <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">Draft New Examination</h3>
                 <form onSubmit={handleCreateExam} className="space-y-3">
                   <div>
-                    <label className="block text-slate-700 text-xs font-bold uppercase mb-1">Course Program</label>
+                    <label className="block text-slate-700 text-xs font-bold uppercase mb-1">Select Course Unit *</label>
+                    <select
+                      value={selectedCourseUnit}
+                      onChange={(e) => handleSelectCourseUnit(e.target.value)}
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:ring-1 focus:ring-brand-light"
+                    >
+                      <option value="">{isAdmin ? '-- All Course Units (System Admin Default) --' : '-- Select Assigned Course Unit --'}</option>
+                      {assignedCourseUnits.map((u) => (
+                        <option key={u.id} value={u.id}>[{u.code}] {u.name} (Year {u.year_of_study || 1})</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-700 text-xs font-bold uppercase mb-1">Course Program *</label>
                     <select
                       value={selectedCourse}
                       onChange={(e) => setSelectedCourse(e.target.value)}
                       className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
                       required
                     >
-                      <option value="">Select Course...</option>
+                      <option value="">Select Course Program...</option>
                       {assignedCourses.map((c) => (
                         <option key={c.id} value={c.id}>[{c.code}] {c.name}</option>
                       ))}
@@ -784,18 +834,20 @@ export default function ExamsPage() {
                   </div>
 
                   <div>
-                    <label className="block text-slate-700 text-xs font-bold uppercase mb-1">Course Unit (Optional)</label>
+                    <label className="block text-slate-700 text-xs font-bold uppercase mb-1">Target Year of Study</label>
                     <select
-                      value={selectedCourseUnit}
-                      onChange={(e) => setSelectedCourseUnit(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
+                      value={examYearOfStudy}
+                      onChange={(e) => setExamYearOfStudy(e.target.value)}
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800"
                     >
-                      <option value="">Select Course Unit...</option>
-                      {courseUnits.map((u) => (
-                        <option key={u.id} value={u.id}>[{u.code}] {u.name}</option>
-                      ))}
+                      {isAdmin && <option value={0}>🌐 All Years (Year 0 - System Admin Exclusive)</option>}
+                      <option value={1}>Year 1</option>
+                      <option value={2}>Year 2</option>
+                      <option value={3}>Year 3</option>
+                      <option value={4}>Year 4</option>
                     </select>
                   </div>
+
 
                   <div>
                     <label className="block text-slate-700 text-xs font-bold uppercase mb-1">Exam Title</label>
@@ -820,22 +872,82 @@ export default function ExamsPage() {
                     />
                   </div>
 
-                  <div>
-                    <label className="block text-slate-700 text-xs font-bold uppercase mb-1">Scheduled Date & Time (Optional)</label>
-                    <input
-                      type="datetime-local"
-                      value={scheduledStart}
-                      onChange={(e) => setScheduledStart(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800"
-                    />
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="block text-[11px] font-bold text-slate-700 uppercase">Scheduled Start & Due Date</label>
+                      <span className="text-[10px] font-extrabold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                        🕒 Ugandan Time (UTC+3, EAT)
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-[10px] text-slate-500 font-semibold mb-0.5">Start Date & Time (EAT)</label>
+                        <input
+                          type="datetime-local"
+                          value={scheduledStart}
+                          onChange={(e) => setScheduledStart(e.target.value)}
+                          className="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs font-semibold text-slate-800"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] text-slate-500 font-semibold mb-0.5">Due Date & Time (EAT)</label>
+                        <input
+                          type="datetime-local"
+                          value={dueDate}
+                          onChange={(e) => setDueDate(e.target.value)}
+                          className="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs font-semibold text-slate-800"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Quick Date Presets */}
+                    <div className="flex flex-wrap items-center gap-1 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => setScheduledStart(getUgandanNowDatetimeLocal())}
+                        className="px-2 py-0.5 bg-slate-100 hover:bg-emerald-50 text-slate-700 text-[10px] font-bold rounded border border-slate-200 transition-all"
+                      >
+                        ⚡ Start Now
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const d = new Date();
+                          d.setDate(d.getDate() + 1);
+                          setDueDate(toUgandanDatetimeLocal(d.toISOString()));
+                        }}
+                        className="px-2 py-0.5 bg-slate-100 hover:bg-emerald-50 text-slate-700 text-[10px] font-bold rounded border border-slate-200 transition-all"
+                      >
+                        📅 Due +1 Day
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const d = new Date();
+                          d.setDate(d.getDate() + 7);
+                          setDueDate(toUgandanDatetimeLocal(d.toISOString()));
+                        }}
+                        className="px-2 py-0.5 bg-slate-100 hover:bg-emerald-50 text-slate-700 text-[10px] font-bold rounded border border-slate-200 transition-all"
+                      >
+                        📅 Due +7 Days
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setScheduledStart(''); setDueDate(''); }}
+                        className="px-2 py-0.5 bg-slate-100 hover:bg-red-50 text-slate-600 text-[10px] font-bold rounded border border-slate-200 transition-all"
+                      >
+                        ❌ Clear
+                      </button>
+                    </div>
                   </div>
 
                   <button
                     type="submit"
                     disabled={submitting}
-                    className="w-full py-2 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-lg transition-all shadow-sm"
+                    className="w-full py-2.5 bg-brand-light hover:bg-brand-medium text-white text-xs font-extrabold uppercase tracking-wide rounded-xl shadow-md transition-all flex items-center justify-center space-x-2"
                   >
-                    {submitting ? 'Drafting...' : 'Save & Build Questions'}
+                    <span>💾 Save Exam Paper & Build Questions</span>
                   </button>
                 </form>
               </div>
@@ -846,7 +958,18 @@ export default function ExamsPage() {
               <div className="green-card rounded-2xl p-6 space-y-4 animate-slide-up">
                 <div className="flex justify-between items-center border-b border-emerald-100 pb-2">
                   <h3 className="text-xs font-bold text-slate-800 uppercase">Question Bank ({selectedExam.title})</h3>
-                  <button onClick={() => setSelectedExam(null)} className="text-xs text-slate-400 hover:text-slate-600 font-bold">✕ Close</button>
+                  <div className="flex items-center space-x-2">
+                    {!isExecutiveReadOnly && (
+                      <button
+                        onClick={() => handleOpenEditExamModal(selectedExam)}
+                        className="px-2.5 py-1 bg-brand-light text-white hover:bg-brand-medium text-xs font-bold rounded-lg shadow-sm transition-all"
+                        title="Save and edit exam dates, duration, title"
+                      >
+                        💾 Save Details
+                      </button>
+                    )}
+                    <button onClick={() => setSelectedExam(null)} className="text-xs text-slate-400 hover:text-slate-600 font-bold">✕ Close</button>
+                  </div>
                 </div>
 
                 {isLecturer && selectedExam.is_approved_by_dean && (
@@ -1124,19 +1247,30 @@ export default function ExamsPage() {
                 />
               </div>
 
-              <div>
-                <label className="block text-slate-700 font-bold uppercase mb-1">Scheduled Start</label>
-                <input
-                  type="datetime-local"
-                  value={editExamScheduledStart}
-                  onChange={(e) => setEditExamScheduledStart(e.target.value)}
-                  className="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs font-semibold text-slate-800"
-                />
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-slate-700 font-bold uppercase mb-1">Scheduled Start (EAT)</label>
+                  <input
+                    type="datetime-local"
+                    value={editExamScheduledStart}
+                    onChange={(e) => setEditExamScheduledStart(e.target.value)}
+                    className="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs font-semibold text-slate-800"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-700 font-bold uppercase mb-1">Due Date (EAT)</label>
+                  <input
+                    type="datetime-local"
+                    value={editExamDueDate}
+                    onChange={(e) => setEditExamDueDate(e.target.value)}
+                    className="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs font-semibold text-slate-800"
+                  />
+                </div>
               </div>
 
               <div className="flex space-x-2 pt-2">
-                <button type="submit" disabled={submitting} className="flex-1 py-2 bg-brand-light text-white text-xs font-bold rounded-lg">
-                  Save Changes
+                <button type="submit" disabled={submitting} className="flex-1 py-2 bg-brand-light hover:bg-brand-medium text-white text-xs font-extrabold uppercase rounded-lg shadow-sm">
+                  💾 Save Changes
                 </button>
                 <button type="button" onClick={() => setEditingExamModal(null)} className="px-4 py-2 bg-slate-100 text-slate-600 text-xs font-bold rounded-lg">
                   Cancel

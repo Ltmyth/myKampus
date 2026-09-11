@@ -2,11 +2,12 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenRefreshView
 from .views import (
-    MyTokenObtainPairView, RegisterView, ProfileView,
+    MyTokenObtainPairView, RegisterView, ProfileView, ChangePasswordView,
     AdminUserViewSet, InvitationViewSet, FacultyViewSet, CourseViewSet, CourseUnitViewSet, 
     ApplicationViewSet, ExamViewSet, ExamAttemptViewSet, TestViewSet, TestAttemptViewSet,
     ClassContentViewSet, AttendanceSessionViewSet, ReportsViewSet,
-    ClassTimetableViewSet, ExamTimetableViewSet, SystemLogViewSet, ProctoringSettingViewSet
+    ClassTimetableViewSet, ExamTimetableViewSet, SystemLogViewSet, ProctoringSettingViewSet,
+    TemporaryClearanceViewSet, QuestionBankViewSet, QuestionBankItemViewSet, ProctoringMonitorViewSet
 )
 
 router = DefaultRouter()
@@ -27,11 +28,17 @@ router.register('class-timetables', ClassTimetableViewSet, basename='class-timet
 router.register('exam-timetables', ExamTimetableViewSet, basename='exam-timetables')
 router.register('system-logs', SystemLogViewSet, basename='system-logs')
 router.register('proctoring-settings', ProctoringSettingViewSet, basename='proctoring-settings')
+router.register('temporary-clearances', TemporaryClearanceViewSet, basename='temporary-clearances')
+router.register('question-banks', QuestionBankViewSet, basename='question-banks')
+router.register('question-bank-items', QuestionBankItemViewSet, basename='question-bank-items')
+router.register('proctoring-monitor', ProctoringMonitorViewSet, basename='proctoring-monitor')
 
 urlpatterns = [
     path('auth/login/', MyTokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('auth/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('auth/register/', RegisterView.as_view(), name='auth_register'),
     path('auth/profile/', ProfileView.as_view(), name='auth_profile'),
+    path('auth/change_password/', ChangePasswordView.as_view(), name='auth_change_password'),
     path('', include(router.urls)),
 ]
+

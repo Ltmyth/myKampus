@@ -12,7 +12,8 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 from .models import (
     User, Faculty, Invitation, Course, CourseUnit, Application, Exam, Question, 
     ExamAttempt, Test, TestQuestion, TestAttempt, ClassContent, AttendanceSession, AttendanceRecord,
-    ClassTimetable, ExamTimetable, SystemLog, ProctoringSetting, log_system_event
+    ClassTimetable, ExamTimetable, SystemLog, ProctoringSetting, log_system_event,
+    TemporaryClearance, QuestionBank, QuestionBankItem, ProctorSnapshot
 )
 from .serializers import (
     UserSerializer, UserCreateSerializer, AdminUserSerializer, FacultySerializer,
@@ -20,8 +21,10 @@ from .serializers import (
     ExamSerializer, QuestionLecturerSerializer, QuestionStudentSerializer, ExamAttemptSerializer,
     TestSerializer, TestQuestionLecturerSerializer, TestQuestionStudentSerializer, TestAttemptSerializer,
     ClassContentSerializer, AttendanceSessionSerializer, AttendanceRecordSerializer,
-    ClassTimetableSerializer, ExamTimetableSerializer, SystemLogSerializer, ProctoringSettingSerializer
+    ClassTimetableSerializer, ExamTimetableSerializer, SystemLogSerializer, ProctoringSettingSerializer,
+    TemporaryClearanceSerializer, QuestionBankSerializer, QuestionBankItemSerializer, ProctorSnapshotSerializer
 )
+
 from .permissions import IsAdmin, IsDVC, IsDean, IsFacultyAdmin, IsRegistrar, IsLecturer, IsStudent, IsStaffUser, IsExecutiveReadOnly
 from .clearance import fetch_external_cleared_students, check_student_clearance
 
@@ -81,7 +84,8 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
             'tuition_paid_percentage': clearance_info['tuition_paid_percentage'],
             'is_exam_cleared': clearance_info['is_exam_cleared'],
             'is_test_cleared': clearance_info['is_test_cleared'],
-            'clearance_source': clearance_info['source']
+            'clearance_source': clearance_info['source'],
+            'must_change_password': self.user.must_change_password
         }
         log_system_event(self.user, f"User Login Success ({self.user.role})", level="INFO")
         return data
@@ -102,6 +106,33 @@ class ProfileView(generics.RetrieveUpdateAPIView):
 
     def get_object(self):
         return self.request.user
+
+# 3b. Student / User Change Password Endpoint
+class ChangePasswordView(generics.GenericAPIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        user = request.user
+        current_password = request.data.get('current_password')
+        new_password = request.data.get('new_password')
+
+        if not current_password or not new_password:
+            return Response({'detail': 'Both current password and new password are required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not user.check_password(current_password):
+            return Response({'detail': 'Current password does not match.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        user.set_password(new_password)
+        user.must_change_password = False
+        user.save()
+
+        log_system_event(user, "STUDENT_PASSWORD_CHANGED", level="AUDIT", details=f"User {user.username} updated one-time password.")
+        
+        serializer = UserSerializer(user)
+        return Response({
+            'detail': 'Password changed successfully!',
+            'user': serializer.data
+        })
 
 # 4. System Admin User Management ViewSet
 class AdminUserViewSet(viewsets.ModelViewSet):
@@ -133,20 +164,41 @@ class AdminUserViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsAdmin])
     def sync_clearance(self, request):
-        cleared_list = fetch_external_cleared_students()
+        cleared_list = fetch_external_cleared_students(force_refresh=True)
         if cleared_list is None:
             return Response({'detail': 'Failed to connect to CIU Cleared Students API endpoint.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
-        updated_count = 0
+        updated_api_count = 0
+        active_temp_count = 0
+        barred_count = 0
+
         students = User.objects.filter(role='student')
         for student in students:
-            clearance = check_student_clearance(student)
-            if clearance['is_api_cleared'] and student.tuition_paid_percentage < 100.0:
+            clearance = check_student_clearance(student, preloaded_api_data=cleared_list)
+            if clearance['is_temp_cleared']:
                 student.tuition_paid_percentage = 100.0
                 student.save()
-                updated_count += 1
-        log_system_event(request.user, f"Synced CIU Cleared Students API: {updated_count} students updated to 100% clearance.", level="INFO")
-        return Response({'detail': f'Successfully synced CIU Cleared Students API. {updated_count} students updated to 100% clearance.', 'updated_count': updated_count})
+                active_temp_count += 1
+            elif clearance['is_api_cleared']:
+                student.tuition_paid_percentage = 100.0
+                student.save()
+                updated_api_count += 1
+            else:
+                # Keep custom admin overrides if set > 0, otherwise default to 0.0
+                if student.tuition_paid_percentage >= 100.0:
+                    student.tuition_paid_percentage = 0.0
+                    student.save()
+                barred_count += 1
+
+        msg = f"Successfully synced live clearance API & temporary clearance overrides across {students.count()} students! {updated_api_count} cleared via live API, {active_temp_count} active temporary overrides."
+        log_system_event(request.user, "STUDENT_CLEARANCE_SYNC_SUCCESS", level="AUDIT", details=msg)
+        return Response({
+            'detail': msg,
+            'total_students': students.count(),
+            'api_cleared': updated_api_count,
+            'temp_cleared': active_temp_count,
+            'barred_count': barred_count
+        })
 
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsAdmin])
     def reset_password(self, request, pk=None):
@@ -158,6 +210,271 @@ class AdminUserViewSet(viewsets.ModelViewSet):
         user_obj.save()
         log_system_event(request.user, f"Admin Password Reset for user: {user_obj.username} ({user_obj.role})", level="INFO")
         return Response({'detail': f"Password for {user_obj.username} has been reset successfully."})
+
+    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsAdmin])
+    def bulk_delete(self, request):
+        user_ids = request.data.get('user_ids', [])
+        if not user_ids or not isinstance(user_ids, list):
+            return Response({'detail': 'Please provide a non-empty list of user_ids to delete.'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        user_ids = [uid for uid in user_ids if uid != request.user.id]
+        deleted_count, _ = User.objects.filter(id__in=user_ids).delete()
+        log_system_event(request.user, "BULK_USER_DELETE_SUCCESS", level="AUDIT", details=f"Admin deleted {deleted_count} user accounts in bulk.")
+        return Response({
+            'detail': f'Successfully deleted {deleted_count} selected user accounts.',
+            'count': deleted_count
+        })
+
+    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsAdmin])
+    def bulk_reset_passwords(self, request):
+        user_ids = request.data.get('user_ids', [])
+        new_password = request.data.get('new_password', '').strip()
+        if not user_ids or not isinstance(user_ids, list):
+            return Response({'detail': 'Please provide a non-empty list of user_ids.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not new_password:
+            return Response({'detail': 'new_password parameter is required for bulk password reset.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        users_to_update = User.objects.filter(id__in=user_ids)
+        updated_count = 0
+        for u in users_to_update:
+            u.set_password(new_password)
+            u.must_change_password = True
+            u.save()
+            updated_count += 1
+
+        msg = f"Bulk password reset completed for {updated_count} user accounts."
+        log_system_event(request.user, "BULK_PASSWORD_RESET_SUCCESS", level="AUDIT", details=msg)
+        return Response({
+            'detail': msg,
+            'count': updated_count
+        })
+
+    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsAdmin | IsFacultyAdmin])
+    def bulk_assign_year_and_courses(self, request):
+        user_ids = request.data.get('user_ids', [])
+        year_of_study = request.data.get('year_of_study')
+        faculty_id = request.data.get('faculty_id')
+        course_ids = request.data.get('course_ids', [])
+
+        if not user_ids or not isinstance(user_ids, list):
+            return Response({'detail': 'Please provide a non-empty list of user_ids.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        students = User.objects.filter(id__in=user_ids)
+        updated_count = 0
+
+        target_faculty = None
+        if faculty_id:
+            try:
+                target_faculty = Faculty.objects.get(id=int(faculty_id))
+            except Faculty.DoesNotExist:
+                pass
+
+        target_courses = []
+        if course_ids and isinstance(course_ids, list):
+            target_courses = list(Course.objects.filter(id__in=[int(c) for c in course_ids if str(c).isdigit()]))
+
+        for student in students:
+            if year_of_study is not None and str(year_of_study).isdigit():
+                student.year_of_study = int(year_of_study)
+            if target_faculty:
+                student.faculty = target_faculty
+            student.save()
+
+            if target_courses:
+                student.assigned_courses.set(target_courses)
+
+            updated_count += 1
+
+        msg = f"Bulk student allocation updated successfully for {updated_count} student accounts!"
+        log_system_event(request.user, "BULK_STUDENT_ALLOCATION_SUCCESS", level="AUDIT", details=msg)
+        return Response({
+            'detail': msg,
+            'count': updated_count
+        })
+
+    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsAdmin])
+    def upload_students(self, request):
+        file_obj = request.FILES.get('file') or request.FILES.get('excel_file')
+        if not file_obj:
+            return Response({'detail': 'Please upload an Excel (.xlsx/.xls) or CSV (.csv) file.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        filename = file_obj.name.lower()
+        rows = []
+
+        if filename.endswith('.csv'):
+            decoded = file_obj.read().decode('utf-8-sig', errors='ignore')
+            reader = csv.reader(decoded.splitlines())
+            header = None
+            for r in reader:
+                if not r or not any(r): continue
+                if header is None:
+                    header = [c.strip().lower() for c in r]
+                    continue
+                row_dict = {header[i]: r[i].strip() for i in range(min(len(header), len(r)))}
+                rows.append(row_dict)
+        elif filename.endswith(('.xlsx', '.xls')):
+            file_bytes = file_obj.read()
+            # Try xlrd for BIFF8 .xls or as fallback
+            if filename.endswith('.xls'):
+                try:
+                    import xlrd
+                    wb = xlrd.open_workbook(file_contents=file_bytes)
+                    for sheet_name in wb.sheet_names():
+                        ws = wb.sheet_by_name(sheet_name)
+                        if ws.nrows < 2: continue
+                        header = [str(cell).strip().lower() for cell in ws.row_values(0)]
+                        for r_idx in range(1, ws.nrows):
+                            row_vals = [str(c).strip() if c is not None else '' for c in ws.row_values(r_idx)]
+                            if not any(row_vals): continue
+                            row_dict = {header[i]: row_vals[i] for i in range(min(len(header), len(row_vals)))}
+                            rows.append(row_dict)
+                except Exception as ex1:
+                    try:
+                        import openpyxl
+                        import io
+                        wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
+                        for ws in wb.worksheets:
+                            header = None
+                            for row in ws.iter_rows(values_only=True):
+                                if not row or not any(row): continue
+                                row_vals = [str(cell).strip() if cell is not None else '' for cell in row]
+                                if header is None:
+                                    header = [c.lower() for c in row_vals]
+                                    continue
+                                row_dict = {header[i]: row_vals[i] for i in range(min(len(header), len(row_vals)))}
+                                rows.append(row_dict)
+                    except Exception as ex2:
+                        return Response({'detail': f'Error reading Excel file: {str(ex1)} | {str(ex2)}'}, status=status.HTTP_400_BAD_REQUEST)
+            else:
+                try:
+                    import openpyxl
+                    import io
+                    wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
+                    for ws in wb.worksheets:
+                        header = None
+                        for row in ws.iter_rows(values_only=True):
+                            if not row or not any(row): continue
+                            row_vals = [str(cell).strip() if cell is not None else '' for cell in row]
+                            if header is None:
+                                header = [c.lower() for c in row_vals]
+                                continue
+                            row_dict = {header[i]: row_vals[i] for i in range(min(len(header), len(row_vals)))}
+                            rows.append(row_dict)
+                except Exception as ex1:
+                    try:
+                        import xlrd
+                        wb = xlrd.open_workbook(file_contents=file_bytes)
+                        for sheet_name in wb.sheet_names():
+                            ws = wb.sheet_by_name(sheet_name)
+                            if ws.nrows < 2: continue
+                            header = [str(cell).strip().lower() for cell in ws.row_values(0)]
+                            for r_idx in range(1, ws.nrows):
+                                row_vals = [str(c).strip() if c is not None else '' for c in ws.row_values(r_idx)]
+                                if not any(row_vals): continue
+                                row_dict = {header[i]: row_vals[i] for i in range(min(len(header), len(row_vals)))}
+                                rows.append(row_dict)
+                    except Exception as ex2:
+                        return Response({'detail': f'Error reading Excel file: {str(ex1)} | {str(ex2)}'}, status=status.HTTP_400_BAD_REQUEST)
+
+        created_students = []
+        default_batch_pass = request.data.get('default_password') or request.POST.get('default_password')
+        if default_batch_pass:
+            default_batch_pass = str(default_batch_pass).strip()
+
+        from django.contrib.auth.hashers import make_password
+        pass_hash_cache = {}
+
+        for index, r in enumerate(rows, start=1):
+            reg = (
+                r.get('registration no') or r.get('registration_no') or
+                r.get('reg_number') or r.get('registration_number') or
+                r.get('reg_no') or r.get('regno') or
+                r.get('entry no') or r.get('entry_no') or
+                r.get('student_no') or f"2026SOBAT-B{index:03d}"
+            ).strip()
+
+            surname = (r.get('surname') or '').strip()
+            first_name_col = (r.get('first name') or r.get('first_name') or '').strip()
+            
+            if surname or first_name_col:
+                name = f"{surname} {first_name_col}".strip()
+            else:
+                name = (r.get('full_name') or r.get('name') or r.get('student_name') or f"Student {index}").strip()
+
+            email = (r.get('email') or r.get('student_email') or f"student_{index}@ciu.ac.ug").strip()
+            fac_str = (r.get('faculty') or r.get('faculty_code') or r.get('program') or 'SOBAT').strip()
+
+            name_parts = name.split(' ', 1)
+            first_name = name_parts[0]
+            last_name = name_parts[1] if len(name_parts) > 1 else ''
+
+            specified_pass = r.get('password') or r.get('one_time_password') or r.get('otp') or default_batch_pass
+            otp_pass = str(specified_pass).strip() if (specified_pass and str(specified_pass).strip()) else f"CIU-{random.randint(100000, 999999)}"
+            username = reg.replace('/', '-').replace(' ', '').lower()
+
+            if otp_pass not in pass_hash_cache:
+                pass_hash_cache[otp_pass] = make_password(otp_pass)
+            hashed_pass = pass_hash_cache[otp_pass]
+
+            # Smart faculty resolution
+            faculty_obj = Faculty.objects.filter(code__iexact=fac_str).first()
+            if not faculty_obj:
+                faculty_obj = Faculty.objects.filter(name__icontains=fac_str).first()
+            if not faculty_obj:
+                fac_lower = fac_str.lower()
+                if 'business' in fac_lower or 'sobat' in fac_lower or 'applied tech' in fac_lower:
+                    faculty_obj = Faculty.objects.filter(code='SOBAT').first()
+                elif 'nursing' in fac_lower or 'sonm' in fac_lower:
+                    faculty_obj = Faculty.objects.filter(code='SONM').first()
+                elif 'public health' in fac_lower or 'soph' in fac_lower:
+                    faculty_obj = Faculty.objects.filter(code='SOPH').first()
+                elif 'allied' in fac_lower or 'iah' in fac_lower:
+                    faculty_obj = Faculty.objects.filter(code='IAH').first()
+                elif 'science' in fac_lower or 'fst' in fac_lower:
+                    faculty_obj = Faculty.objects.filter(code='FST').first()
+            
+            if not faculty_obj:
+                faculty_obj = Faculty.objects.first()
+
+            user_obj, created = User.objects.get_or_create(
+                username=username,
+                defaults={
+                    'email': email,
+                    'first_name': first_name,
+                    'last_name': last_name,
+                    'role': 'student',
+                    'reg_number': reg,
+                    'faculty': faculty_obj,
+                    'tuition_paid_percentage': 0.0,
+                    'must_change_password': True
+                }
+            )
+            user_obj.password = hashed_pass
+            user_obj.reg_number = reg
+            user_obj.email = email
+            user_obj.first_name = first_name
+            user_obj.last_name = last_name
+            user_obj.must_change_password = True
+            if faculty_obj:
+                user_obj.faculty = faculty_obj
+            user_obj.save()
+
+            created_students.append({
+                'id': user_obj.id,
+                'username': user_obj.username,
+                'reg_number': reg,
+                'full_name': name,
+                'email': email,
+                'faculty': faculty_obj.code if faculty_obj else 'SOBAT',
+                'one_time_password': otp_pass
+            })
+
+        log_system_event(request.user, "BATCH_STUDENT_IMPORT_SUCCESS", level="AUDIT", details=f"Imported {len(created_students)} student accounts via Excel/CSV with generated one-time passwords.")
+        return Response({
+            'detail': f'Successfully onboarded {len(created_students)} students with one-time passwords.',
+            'students': created_students
+        })
+
 
     @action(detail=False, methods=['get'], permission_classes=[permissions.IsAuthenticated, IsAdmin])
     def ciu_cleared_students(self, request):
@@ -297,6 +614,12 @@ class InvitationViewSet(viewsets.ModelViewSet):
         except Exception as e:
             log_system_event(self.request.user, f"Failed to send invitation email to {invitation.email}: {str(e)}", level="WARNING")
 
+    def perform_destroy(self, instance):
+        email = instance.email
+        token_id = str(instance.id)
+        instance.delete()
+        log_system_event(self.request.user, f"INVITATION_DELETED: Deleted invitation token for {email} (Token: {token_id})", level="AUDIT")
+
     @action(detail=False, methods=['get'], permission_classes=[permissions.AllowAny])
     def validate_code(self, request):
         code = request.query_params.get('code')
@@ -381,17 +704,20 @@ class FacultyViewSet(viewsets.ModelViewSet):
         
         student_id = request.data.get('student_id')
         course_ids = request.data.get('course_ids', [])
+        year_of_study = request.data.get('year_of_study')
         if not student_id:
             return Response({'detail': 'student_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
         try:
             student = User.objects.get(id=student_id, role='student')
             student.faculty = faculty
+            if year_of_study is not None and str(year_of_study).isdigit():
+                student.year_of_study = int(year_of_study)
             if course_ids:
-                courses = Course.objects.filter(id__in=course_ids, faculty=faculty)
+                courses = Course.objects.filter(id__in=course_ids)
                 student.assigned_courses.set(courses)
             student.save()
-            log_system_event(user, f"Assigned Student {student.username} to Faculty {faculty.code}", level='INFO')
-            return Response({'detail': f'Assigned student {student.get_full_name() or student.username} to {faculty.name}.', 'student': UserSerializer(student).data})
+            log_system_event(user, f"Assigned Student {student.username} (Year {student.year_of_study}) to Faculty {faculty.code}", level='INFO')
+            return Response({'detail': f'Assigned student {student.get_full_name() or student.username} (Year {student.year_of_study}) to {faculty.name}.', 'student': UserSerializer(student).data})
         except User.DoesNotExist:
             return Response({'detail': 'Student user not found.'}, status=status.HTTP_404_NOT_FOUND)
 
@@ -467,6 +793,18 @@ class CourseUnitViewSet(viewsets.ModelViewSet):
             return Response({'detail': 'lecturer_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
         try:
             lecturer = User.objects.get(id=int(lecturer_id))
+            if request.user.role in ['faculty_admin', 'dean']:
+                sec_faculty = request.user.faculty
+                if not sec_faculty and hasattr(request.user, 'administered_faculties'):
+                    sec_faculty = request.user.administered_faculties.first()
+                if not sec_faculty and hasattr(request.user, 'managed_faculties'):
+                    sec_faculty = request.user.managed_faculties.first()
+
+                if lecturer.faculty and sec_faculty and lecturer.faculty != sec_faculty:
+                    return Response({
+                        'detail': f"Permission Denied: As a Faculty Secretary for {sec_faculty.code}, you cannot assign/unassign lecturer {lecturer.get_full_name() or lecturer.username} who is assigned to faculty '{lecturer.faculty.code}'."
+                    }, status=status.HTTP_403_FORBIDDEN)
+
             if action_type == 'unassign':
                 unit.lecturers.remove(lecturer)
                 msg = f'Unassigned lecturer {lecturer.get_full_name() or lecturer.username} from {unit.code}.'
@@ -580,7 +918,23 @@ class ExamViewSet(viewsets.ModelViewSet):
                 models.Q(assigned_students=user) |
                 models.Q(faculty=user.faculty)
             ).distinct()
-            return Exam.objects.filter(is_active=True, course__in=student_courses).order_by('-created_at')
+            student_year = getattr(user, 'year_of_study', 1) or 1
+            return Exam.objects.filter(
+                is_active=True,
+                course__in=student_courses
+            ).filter(
+                models.Q(year_of_study=student_year) | models.Q(year_of_study=0) | models.Q(course_unit__year_of_study=student_year)
+            ).order_by('-created_at')
+        elif user.role == 'dean':
+            dean_faculty = user.faculty or (user.managed_faculties.first() if hasattr(user, 'managed_faculties') else None)
+            if dean_faculty:
+                return Exam.objects.filter(course__faculty=dean_faculty).order_by('-created_at')
+            return Exam.objects.all().order_by('-created_at')
+        elif user.role == 'faculty_admin':
+            sec_faculty = user.faculty or (user.administered_faculties.first() if hasattr(user, 'administered_faculties') else None)
+            if sec_faculty:
+                return Exam.objects.filter(course__faculty=sec_faculty).order_by('-created_at')
+            return Exam.objects.all().order_by('-created_at')
         elif user.role == 'lecturer':
             return Exam.objects.filter(
                 models.Q(lecturer=user) |
@@ -593,8 +947,18 @@ class ExamViewSet(viewsets.ModelViewSet):
         user = self.request.user
         if user.role in ['dvc', 'vc', 'dean']:
             raise serializers.ValidationError({"detail": "Permission Denied: DVC, VC, and Deans have read-only access and cannot create, update, or delete data."})
+        
+        course_unit = serializer.validated_data.get('course_unit')
+        year_of_study = serializer.validated_data.get('year_of_study', 0)
+
+        # Only System Admin can set an exam for All Course Units & All Years (Year 0)
+        if user.role != 'admin' and year_of_study == 0 and not course_unit:
+            raise serializers.ValidationError({"detail": "Permission Denied: Only System Administrators can set exams for All Course Units & All Years (Year 0). Please select an assigned course unit and specific year of study."})
+        
+        if course_unit and (year_of_study == 0 or 'year_of_study' not in serializer.validated_data):
+            serializer.validated_data['year_of_study'] = course_unit.year_of_study
+
         if user.role == 'lecturer':
-            course_unit = serializer.validated_data.get('course_unit')
             course = serializer.validated_data.get('course')
             is_assigned = False
             if course_unit and course_unit.lecturers.filter(id=user.id).exists():
@@ -602,7 +966,7 @@ class ExamViewSet(viewsets.ModelViewSet):
             elif course and course.units.filter(lecturers=user).exists():
                 is_assigned = True
             if not is_assigned:
-                raise serializers.ValidationError({"detail": "Permission Denied: You can only set exams for your assigned courses or course units."})
+                raise serializers.ValidationError({"detail": "Permission Denied: You can only set exams for your assigned course units."})
         exam = serializer.save(lecturer=user)
         log_system_event(user, f"Exam Created: {exam.title} ({exam.course.code})", level="INFO")
 
@@ -696,24 +1060,13 @@ class ExamViewSet(viewsets.ModelViewSet):
         if not exam.is_active:
             return Response({'detail': 'This exam is not active.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Scheduled Date & Time Availability check (PDF Requirement: only on the set date and time)
+        # Scheduled Date & Time Availability check (Ugandan East Africa Time UTC+3)
         now = timezone.now()
-        if exam.scheduled_start:
-            if now < exam.scheduled_start:
-                return Response({'detail': f'Exam Access Denied: This exam is scheduled for {exam.scheduled_start.strftime("%Y-%m-%d %H:%M")} and is not yet open.'}, status=status.HTTP_400_BAD_REQUEST)
-            end_window = exam.scheduled_start + timezone.timedelta(minutes=exam.duration_minutes)
-            if now > end_window:
-                return Response({'detail': 'Exam Access Denied: Scheduled exam time window has expired.'}, status=status.HTTP_400_BAD_REQUEST)
+        if exam.scheduled_start and now < exam.scheduled_start:
+            return Response({'detail': f'Exam Access Denied: This exam is scheduled for {exam.scheduled_start.strftime("%Y-%m-%d %H:%M")} EAT and is not yet open.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Security check: Late entry rule
-        start_time = exam.scheduled_start or exam.created_at
-        allowed_delay_minutes = exam.duration_minutes / 3.0
-        elapsed_minutes = (now - start_time).total_seconds() / 60.0
-
-        if elapsed_minutes > allowed_delay_minutes and exam.scheduled_start:
-            return Response({
-                'detail': f'Security Lockdown: Late entry policy prohibits starting the exam after 1/3 of allocated duration ({allowed_delay_minutes:.1f} mins) has elapsed.'
-            }, status=status.HTTP_403_FORBIDDEN)
+        if exam.due_date and now > exam.due_date:
+            return Response({'detail': 'Exam Access Denied: The deadline for submitting this exam has passed.'}, status=status.HTTP_400_BAD_REQUEST)
 
         existing = ExamAttempt.objects.filter(student=request.user, exam=exam)
         if existing.exists():
@@ -855,7 +1208,23 @@ class TestViewSet(viewsets.ModelViewSet):
                 models.Q(assigned_students=user) |
                 models.Q(faculty=user.faculty)
             ).distinct()
-            return Test.objects.filter(is_published=True, course__in=student_courses).order_by('-created_at')
+            student_year = getattr(user, 'year_of_study', 1) or 1
+            return Test.objects.filter(
+                is_published=True,
+                course__in=student_courses
+            ).filter(
+                models.Q(year_of_study=student_year) | models.Q(year_of_study=0) | models.Q(course_unit__year_of_study=student_year)
+            ).order_by('-created_at')
+        elif user.role == 'dean':
+            dean_faculty = user.faculty or (user.managed_faculties.first() if hasattr(user, 'managed_faculties') else None)
+            if dean_faculty:
+                return Test.objects.filter(course__faculty=dean_faculty).order_by('-created_at')
+            return Test.objects.all().order_by('-created_at')
+        elif user.role == 'faculty_admin':
+            sec_faculty = user.faculty or (user.administered_faculties.first() if hasattr(user, 'administered_faculties') else None)
+            if sec_faculty:
+                return Test.objects.filter(course__faculty=sec_faculty).order_by('-created_at')
+            return Test.objects.all().order_by('-created_at')
         elif user.role == 'lecturer':
             return Test.objects.filter(
                 models.Q(lecturer=user) |
@@ -868,8 +1237,18 @@ class TestViewSet(viewsets.ModelViewSet):
         user = self.request.user
         if user.role in ['dvc', 'vc', 'dean']:
             raise serializers.ValidationError({"detail": "Permission Denied: DVC, VC, and Deans have read-only access and cannot create, update, or delete data."})
+        
+        course_unit = serializer.validated_data.get('course_unit')
+        year_of_study = serializer.validated_data.get('year_of_study', 0)
+
+        # Only System Admin can set a test for All Course Units & All Years (Year 0)
+        if user.role != 'admin' and year_of_study == 0 and not course_unit:
+            raise serializers.ValidationError({"detail": "Permission Denied: Only System Administrators can set tests for All Course Units & All Years (Year 0). Please select an assigned course unit and specific year of study."})
+        
+        if course_unit and (year_of_study == 0 or 'year_of_study' not in serializer.validated_data):
+            serializer.validated_data['year_of_study'] = course_unit.year_of_study
+
         if user.role == 'lecturer':
-            course_unit = serializer.validated_data.get('course_unit')
             course = serializer.validated_data.get('course')
             is_assigned = False
             if course_unit and course_unit.lecturers.filter(id=user.id).exists():
@@ -877,7 +1256,7 @@ class TestViewSet(viewsets.ModelViewSet):
             elif course and course.units.filter(lecturers=user).exists():
                 is_assigned = True
             if not is_assigned:
-                raise serializers.ValidationError({"detail": "Permission Denied: You can only set tests for your assigned courses or course units."})
+                raise serializers.ValidationError({"detail": "Permission Denied: You can only set tests for your assigned course units."})
         test = serializer.save(lecturer=user)
         log_system_event(user, f"Test Created: {test.title} ({test.course.code})", level="INFO")
 
@@ -1014,27 +1393,13 @@ class TestViewSet(viewsets.ModelViewSet):
         if not test_obj.is_published:
             return Response({'detail': 'This test is currently unpublished.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Scheduled Date & Time Availability check (PDF Requirement: only on the set date and time)
+        # Scheduled Date & Time Availability check (Ugandan East Africa Time UTC+3)
         now = timezone.now()
-        if test_obj.scheduled_start:
-            if now < test_obj.scheduled_start:
-                return Response({'detail': f'Test Access Denied: This test is scheduled for {test_obj.scheduled_start.strftime("%Y-%m-%d %H:%M")} and is not yet open.'}, status=status.HTTP_400_BAD_REQUEST)
-            end_window = test_obj.scheduled_start + timezone.timedelta(minutes=test_obj.duration_minutes)
-            if now > end_window:
-                return Response({'detail': 'Test Access Denied: Scheduled test time window has expired.'}, status=status.HTTP_400_BAD_REQUEST)
+        if test_obj.scheduled_start and now < test_obj.scheduled_start:
+            return Response({'detail': f'Test Access Denied: This test is scheduled for {test_obj.scheduled_start.strftime("%Y-%m-%d %H:%M")} EAT and is not yet open.'}, status=status.HTTP_400_BAD_REQUEST)
 
         if test_obj.due_date and now > test_obj.due_date:
             return Response({'detail': 'Test Access Denied: The deadline for submitting this test has passed.'}, status=status.HTTP_400_BAD_REQUEST)
-
-        # Security check: Late entry rule
-        start_time = test_obj.scheduled_start or test_obj.created_at
-        allowed_delay_minutes = test_obj.duration_minutes / 2.0
-        elapsed_minutes = (now - start_time).total_seconds() / 60.0
-
-        if elapsed_minutes > allowed_delay_minutes and test_obj.scheduled_start:
-            return Response({
-                'detail': f'Security Lockdown: Late entry policy prohibits starting this test after half (1/2) of allocated duration ({allowed_delay_minutes:.1f} mins) has elapsed.'
-            }, status=status.HTTP_403_FORBIDDEN)
 
         user_attempts = TestAttempt.objects.filter(student=request.user, test=test_obj)
         completed_count = user_attempts.filter(completed_at__isnull=False).count()
@@ -1445,13 +1810,24 @@ class ClassTimetableViewSet(viewsets.ModelViewSet):
             return qs.filter(course__code__iexact=course_code)
 
         if user.role == 'student':
+            student_year = getattr(user, 'year_of_study', 1) or 1
             approved_courses = Course.objects.filter(applications__student=user, applications__status='approved')
             if approved_courses.exists():
-                return qs.filter(course__in=approved_courses)
+                return qs.filter(course__in=approved_courses).filter(models.Q(year_of_study=student_year) | models.Q(year_of_study=0))
             default_course = Course.objects.filter(code='BIT2026').first()
             if default_course:
-                return qs.filter(course=default_course)
+                return qs.filter(course=default_course).filter(models.Q(year_of_study=student_year) | models.Q(year_of_study=0))
+            if user.faculty:
+                return qs.filter(faculty=user.faculty).filter(models.Q(year_of_study=student_year) | models.Q(year_of_study=0))
 
+        elif user.role == 'dean':
+            dean_faculty = user.faculty or (user.managed_faculties.first() if hasattr(user, 'managed_faculties') else None)
+            if dean_faculty:
+                return qs.filter(models.Q(faculty=dean_faculty) | models.Q(course__faculty=dean_faculty)).distinct()
+        elif user.role == 'faculty_admin':
+            sec_faculty = user.faculty or (user.administered_faculties.first() if hasattr(user, 'administered_faculties') else None)
+            if sec_faculty:
+                return qs.filter(models.Q(faculty=sec_faculty) | models.Q(course__faculty=sec_faculty)).distinct()
         elif user.role == 'lecturer':
             assigned_units = CourseUnit.objects.filter(lecturers=user)
             assigned_courses = Course.objects.filter(course_units__in=assigned_units).distinct()
@@ -1492,12 +1868,24 @@ class ExamTimetableViewSet(viewsets.ModelViewSet):
             return qs.filter(course__code__iexact=course_code)
 
         if user.role == 'student':
+            student_year = getattr(user, 'year_of_study', 1) or 1
             approved_courses = Course.objects.filter(applications__student=user, applications__status='approved')
             if approved_courses.exists():
-                return qs.filter(course__in=approved_courses)
+                return qs.filter(course__in=approved_courses).filter(models.Q(year_of_study=student_year) | models.Q(year_of_study=0))
             default_course = Course.objects.filter(code='BIT2026').first()
             if default_course:
-                return qs.filter(course=default_course)
+                return qs.filter(course=default_course).filter(models.Q(year_of_study=student_year) | models.Q(year_of_study=0))
+            if user.faculty:
+                return qs.filter(faculty=user.faculty).filter(models.Q(year_of_study=student_year) | models.Q(year_of_study=0))
+
+        elif user.role == 'dean':
+            dean_faculty = user.faculty or (user.managed_faculties.first() if hasattr(user, 'managed_faculties') else None)
+            if dean_faculty:
+                return qs.filter(models.Q(faculty=dean_faculty) | models.Q(course__faculty=dean_faculty)).distinct()
+        elif user.role == 'faculty_admin':
+            sec_faculty = user.faculty or (user.administered_faculties.first() if hasattr(user, 'administered_faculties') else None)
+            if sec_faculty:
+                return qs.filter(models.Q(faculty=sec_faculty) | models.Q(course__faculty=sec_faculty)).distinct()
 
         elif user.role == 'lecturer':
             assigned_units = CourseUnit.objects.filter(lecturers=user)
@@ -1590,3 +1978,334 @@ class ProctoringSettingViewSet(viewsets.ModelViewSet):
             'detail': f"Global live assessment proctoring system {'ACTIVATED' if setting.is_proctoring_enabled else 'DEACTIVATED'}.",
             'is_proctoring_enabled': setting.is_proctoring_enabled
         })
+
+
+# 18. Temporary Clearance Management ViewSet
+class TemporaryClearanceViewSet(viewsets.ModelViewSet):
+    serializer_class = TemporaryClearanceSerializer
+
+    def get_permissions(self):
+        if self.action in ['list', 'retrieve']:
+            return [permissions.IsAuthenticated()]
+        return [permissions.IsAuthenticated(), (IsAdmin | IsRegistrar | IsFacultyAdmin | IsDean)()]
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = TemporaryClearance.objects.select_related('student', 'granted_by', 'student__faculty').all().order_by('-created_at')
+        if user.role == 'student':
+            qs = qs.filter(student=user)
+        elif user.role == 'faculty_admin':
+            qs = qs.filter(student__faculty=user.administered_faculties.first())
+        elif user.role == 'dean':
+            qs = qs.filter(student__faculty=user.managed_faculties.first())
+        return qs
+
+    def perform_create(self, serializer):
+        duration_days = int(self.request.data.get('duration_days', 7))
+        custom_expiry = self.request.data.get('expires_at')
+        if custom_expiry:
+            expires_at = timezone.datetime.fromisoformat(custom_expiry.replace('Z', '+00:00'))
+        else:
+            expires_at = timezone.now() + timezone.timedelta(days=duration_days)
+
+        clearance = serializer.save(granted_by=self.request.user, expires_at=expires_at)
+        log_system_event(
+            self.request.user,
+            "TEMPORARY_CLEARANCE_GRANTED",
+            level="AUDIT",
+            details=f"Granted temporary clearance ({clearance.clearance_type}) for student {clearance.student.username} until {clearance.expires_at.strftime('%Y-%m-%d %H:%M')}."
+        )
+
+    @action(detail=True, methods=['post'])
+    def revoke(self, request, pk=None):
+        clearance = self.get_object()
+        clearance.is_active = False
+        clearance.save()
+        log_system_event(request.user, "TEMPORARY_CLEARANCE_REVOKED", level="AUDIT", details=f"Revoked temporary clearance for {clearance.student.username}")
+        return Response({'detail': f'Temporary clearance for {clearance.student.username} revoked.'})
+
+    @action(detail=True, methods=['post'])
+    def extend(self, request, pk=None):
+        clearance = self.get_object()
+        days = int(request.data.get('days', 7))
+        clearance.expires_at = clearance.expires_at + timezone.timedelta(days=days)
+        clearance.is_active = True
+        clearance.save()
+        log_system_event(request.user, "TEMPORARY_CLEARANCE_EXTENDED", level="AUDIT", details=f"Extended temporary clearance for {clearance.student.username} by {days} days.")
+        return Response({'detail': f'Extended clearance by {days} days until {clearance.expires_at.strftime("%Y-%m-%d %H:%M")}.'})
+
+    @action(detail=False, methods=['post'])
+    def bulk_create(self, request):
+        student_ids = request.data.get('student_ids', [])
+        duration_days = int(request.data.get('duration_days', 7))
+        clearance_type = request.data.get('clearance_type', 'both')
+        reason = request.data.get('reason', 'Bulk Administrative Clearance Override')
+
+        if not student_ids:
+            return Response({'detail': 'student_ids list is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        expires_at = timezone.now() + timezone.timedelta(days=duration_days)
+        created_count = 0
+        students = User.objects.filter(id__in=student_ids, role='student')
+        for s in students:
+            TemporaryClearance.objects.create(
+                student=s,
+                granted_by=request.user,
+                clearance_type=clearance_type,
+                expires_at=expires_at,
+                reason=reason,
+                is_active=True
+            )
+            created_count += 1
+
+        log_system_event(request.user, "TEMPORARY_CLEARANCE_BULK_GRANTED", level="AUDIT", details=f"Bulk granted clearance for {created_count} students for {duration_days} days.")
+        return Response({'detail': f'Granted temporary clearance for {created_count} students.', 'count': created_count})
+
+    @action(detail=False, methods=['post'])
+    def upload_bulk_clearance(self, request):
+        file_obj = request.FILES.get('file') or request.FILES.get('excel_file')
+        if not file_obj:
+            return Response({'detail': 'Please upload an Excel (.xlsx/.xls) or CSV (.csv) file.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        duration_days = int(request.data.get('duration_days', 7))
+        clearance_type = request.data.get('clearance_type', 'both')
+        reason = request.data.get('reason', 'Bulk Excel Temporary Clearance Grant')
+        expires_at = timezone.now() + timezone.timedelta(days=duration_days)
+
+        filename = file_obj.name.lower()
+        reg_numbers_or_usernames = []
+
+        try:
+            if filename.endswith('.csv'):
+                decoded = file_obj.read().decode('utf-8-sig', errors='ignore')
+                reader = csv.reader(decoded.splitlines())
+                header = None
+                for r in reader:
+                    if not r or not any(r): continue
+                    if header is None:
+                        header = [c.strip().lower() for c in r]
+                        continue
+                    row_dict = {header[i]: r[i].strip() for i in range(min(len(header), len(r)))}
+                    val = row_dict.get('reg_number') or row_dict.get('registration_number') or row_dict.get('reg_no') or row_dict.get('username') or row_dict.get('student_no') or (r[0].strip() if r else '')
+                    if val:
+                        reg_numbers_or_usernames.append(val)
+            elif filename.endswith(('.xlsx', '.xls')):
+                import openpyxl
+                wb = openpyxl.load_workbook(file_obj, data_only=True)
+                ws = wb.active
+                header = None
+                for row in ws.iter_rows(values_only=True):
+                    if not row or not any(row): continue
+                    row_vals = [str(cell).strip() if cell is not None else '' for cell in row]
+                    if header is None:
+                        header = [c.lower() for c in row_vals]
+                        continue
+                    row_dict = {header[i]: row_vals[i] for i in range(min(len(header), len(row_vals)))}
+                    val = row_dict.get('reg_number') or row_dict.get('registration_number') or row_dict.get('reg_no') or row_dict.get('username') or row_dict.get('student_no') or (row_vals[0] if row_vals else '')
+                    if val:
+                        reg_numbers_or_usernames.append(val)
+        except Exception as e:
+            return Response({'detail': f'Error parsing Excel/CSV file: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+
+        created_count = 0
+        cleared_students = []
+        for term in reg_numbers_or_usernames:
+            term_clean = term.strip().upper()
+            student = User.objects.filter(
+                models.Q(role='student') & (
+                    models.Q(reg_number__iexact=term_clean) |
+                    models.Q(username__iexact=term_clean) |
+                    models.Q(email__iexact=term_clean)
+                )
+            ).first()
+
+            if not student:
+                for s in User.objects.filter(role='student'):
+                    if s.registration_number and s.registration_number.upper() == term_clean:
+                        student = s
+                        break
+
+            if student:
+                TemporaryClearance.objects.create(
+                    student=student,
+                    granted_by=request.user,
+                    clearance_type=clearance_type,
+                    expires_at=expires_at,
+                    reason=reason,
+                    is_active=True
+                )
+                created_count += 1
+                cleared_students.append({
+                    'id': student.id,
+                    'username': student.username,
+                    'reg_number': student.reg_number or student.registration_number,
+                    'name': student.get_full_name() or student.username,
+                    'expires_at': expires_at.strftime('%Y-%m-%d %H:%M')
+                })
+
+        log_system_event(request.user, "TEMPORARY_CLEARANCE_EXCEL_GRANTED", level="AUDIT", details=f"Granted bulk temporary clearance for {created_count} students via Excel import.")
+        return Response({
+            'detail': f'Successfully granted temporary clearance for {created_count} students.',
+            'count': created_count,
+            'cleared_students': cleared_students
+        })
+
+
+
+# 19. Question Bank ViewSets
+class QuestionBankViewSet(viewsets.ModelViewSet):
+    serializer_class = QuestionBankSerializer
+
+    def get_permissions(self):
+        if self.action in ['list', 'retrieve']:
+            return [permissions.IsAuthenticated()]
+        return [permissions.IsAuthenticated(), IsLecturer | IsAdmin | IsFacultyAdmin()]
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = QuestionBank.objects.select_related('course', 'course_unit', 'created_by').prefetch_related('items').all().order_by('-created_at')
+        if user.role == 'lecturer':
+            return qs.filter(models.Q(created_by=user) | models.Q(course__units__lecturers=user)).distinct()
+        return qs
+
+    def perform_create(self, serializer):
+        bank = serializer.save(created_by=self.request.user)
+        log_system_event(self.request.user, "QUESTION_BANK_CREATED", level="INFO", details=f"Created Question Bank: {bank.title} ({bank.course.code})")
+
+    @action(detail=True, methods=['post'])
+    def import_to_test(self, request, pk=None):
+        bank = self.get_object()
+        test_id = request.data.get('test_id')
+        exam_id = request.data.get('exam_id')
+
+        if not test_id and not exam_id:
+            return Response({'detail': 'test_id or exam_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        imported_count = 0
+        if test_id:
+            try:
+                test_obj = Test.objects.get(id=test_id)
+                for item in bank.items.all():
+                    TestQuestion.objects.create(
+                        test=test_obj,
+                        question_text=item.question_text,
+                        question_type=item.question_type,
+                        option_a=item.option_a,
+                        option_b=item.option_b,
+                        option_c=item.option_c,
+                        option_d=item.option_d,
+                        correct_answer=item.correct_answer,
+                        points=item.points,
+                        explanation=item.explanation
+                    )
+                    imported_count += 1
+                log_system_event(request.user, "QUESTION_BANK_IMPORTED", level="INFO", details=f"Imported {imported_count} questions from bank '{bank.title}' into test '{test_obj.title}'")
+            except Test.DoesNotExist:
+                return Response({'detail': 'Test not found.'}, status=status.HTTP_404_NOT_FOUND)
+        elif exam_id:
+            try:
+                exam_obj = Exam.objects.get(id=exam_id)
+                for item in bank.items.all():
+                    Question.objects.create(
+                        exam=exam_obj,
+                        question_text=item.question_text,
+                        option_a=item.option_a or '',
+                        option_b=item.option_b or '',
+                        option_c=item.option_c or '',
+                        option_d=item.option_d or '',
+                        correct_option=(item.correct_answer.strip().upper() if item.correct_answer else 'A')[:1]
+                    )
+                    imported_count += 1
+                log_system_event(request.user, "QUESTION_BANK_IMPORTED", level="INFO", details=f"Imported {imported_count} questions from bank '{bank.title}' into exam '{exam_obj.title}'")
+            except Exam.DoesNotExist:
+                return Response({'detail': 'Exam not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        return Response({'detail': f'Successfully imported {imported_count} questions from Question Bank.', 'count': imported_count})
+
+
+class QuestionBankItemViewSet(viewsets.ModelViewSet):
+    serializer_class = QuestionBankItemSerializer
+    permission_classes = [permissions.IsAuthenticated, IsLecturer | IsAdmin | IsFacultyAdmin]
+
+    def get_queryset(self):
+        return QuestionBankItem.objects.all()
+
+
+# 20. Proctoring Monitoring ViewSet
+class ProctoringMonitorViewSet(viewsets.ModelViewSet):
+    serializer_class = ProctorSnapshotSerializer
+
+    def get_permissions(self):
+        if self.action == 'stream_snapshot':
+            return [permissions.IsAuthenticated(), IsStudent()]
+        return [permissions.IsAuthenticated(), IsStaffUser()]
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = ProctorSnapshot.objects.select_related('student', 'test', 'exam', 'student__faculty').all().order_by('-captured_at')
+        if user.role == 'student':
+            qs = qs.filter(student=user)
+        return qs
+
+    @action(detail=False, methods=['post'])
+    def stream_snapshot(self, request):
+        student = request.user
+        image_data = request.data.get('image_data')
+        test_id = request.data.get('test_id')
+        exam_id = request.data.get('exam_id')
+        tab_switches = int(request.data.get('tab_switches', 0))
+        is_camera_active = bool(request.data.get('is_camera_active', True))
+        flag_reason = request.data.get('flag_reason', None)
+
+        if not image_data:
+            return Response({'detail': 'image_data string is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        test_obj = Test.objects.filter(id=test_id).first() if test_id else None
+        exam_obj = Exam.objects.filter(id=exam_id).first() if exam_id else None
+
+        snapshot = ProctorSnapshot.objects.create(
+            student=student,
+            test=test_obj,
+            exam=exam_obj,
+            image_data=image_data,
+            tab_switches_count=tab_switches,
+            is_camera_active=is_camera_active,
+            flag_reason=flag_reason
+        )
+
+        if not is_camera_active or tab_switches >= 3:
+            log_system_event(student, "PROCTORING_FLAGGED", level="WARNING", details=f"Candidate camera inactive or high tab switches ({tab_switches}) during test/exam.")
+
+        return Response(ProctorSnapshotSerializer(snapshot).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=['get'])
+    def live_feeds(self, request):
+        latest_snapshots = []
+        students_seen = set()
+        recent_cutoff = timezone.now() - timezone.timedelta(minutes=15)
+        
+        snapshots = ProctorSnapshot.objects.select_related('student', 'test', 'exam', 'student__faculty').filter(captured_at__gte=recent_cutoff).order_by('-captured_at')
+        for snap in snapshots:
+            if snap.student_id not in students_seen:
+                students_seen.add(snap.student_id)
+                latest_snapshots.append(snap)
+
+        return Response(ProctorSnapshotSerializer(latest_snapshots, many=True).data)
+
+    @action(detail=False, methods=['post'])
+    def issue_warning(self, request):
+        student_id = request.data.get('student_id')
+        warning_msg = request.data.get('message', 'Exam Officer Alert: Please ensure your face is visible on webcam.')
+        action_type = request.data.get('action', 'warning')
+
+        try:
+            student = User.objects.get(id=student_id, role='student')
+            if action_type == 'terminate':
+                log_system_event(request.user, "PROCTOR_ATTEMPT_TERMINATED", level="AUDIT", details=f"Terminated exam attempt for student {student.username}. Reason: {warning_msg}")
+                return Response({'detail': f'Terminated exam attempt for {student.username}.', 'action': 'terminate'})
+            else:
+                log_system_event(request.user, "PROCTOR_WARNING_ISSUED", level="WARNING", details=f"Issued proctor warning to {student.username}: {warning_msg}")
+                return Response({'detail': f'Warning issued to candidate {student.username}.', 'action': 'warning'})
+        except User.DoesNotExist:
+            return Response({'detail': 'Student not found.'}, status=status.HTTP_404_NOT_FOUND)
+

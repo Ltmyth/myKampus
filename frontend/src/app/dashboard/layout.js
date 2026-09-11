@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useAuth } from '@/context/AuthContext';
+import { api } from '@/lib/api';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 
@@ -10,6 +11,53 @@ export default function DashboardLayout({ children }) {
   const pathname = usePathname();
   const router = useRouter();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  // Change OTP Password State
+  const [currentOtpPass, setCurrentOtpPass] = useState('');
+  const [newOtpPass, setNewOtpPass] = useState('');
+  const [confirmOtpPass, setConfirmOtpPass] = useState('');
+  const [otpError, setOtpError] = useState('');
+  const [otpSuccess, setOtpSuccess] = useState('');
+  const [submittingOtp, setSubmittingOtp] = useState(false);
+
+  const handleChangeOneTimePassword = async (e) => {
+    e.preventDefault();
+    if (!currentOtpPass || !newOtpPass || !confirmOtpPass) {
+      setOtpError('Please fill in all password fields.');
+      return;
+    }
+    if (newOtpPass !== confirmOtpPass) {
+      setOtpError('New passwords do not match.');
+      return;
+    }
+    if (newOtpPass.length < 6) {
+      setOtpError('New password must be at least 6 characters long.');
+      return;
+    }
+
+    setOtpError('');
+    setOtpSuccess('');
+    setSubmittingOtp(true);
+
+    try {
+      const res = await api.post('/auth/change_password/', {
+        current_password: currentOtpPass,
+        new_password: newOtpPass
+      });
+
+      setOtpSuccess(res.detail || 'Password changed successfully!');
+      if (res.user) {
+        localStorage.setItem('ciu_user', JSON.stringify(res.user));
+        setTimeout(() => {
+          window.location.reload();
+        }, 800);
+      }
+    } catch (err) {
+      setOtpError(err.message || 'Failed to change password. Double-check your current one-time password.');
+    } finally {
+      setSubmittingOtp(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -224,45 +272,30 @@ export default function DashboardLayout({ children }) {
           </div>
         </header>
 
-        {/* Student Academic Info Banner */}
+        {/* Student Academic Info Banner - Top Faculty Header */}
         {user.role === 'student' && (
-          <div className="bg-white text-slate-800 px-6 py-3 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 shadow-md animate-fade-in">
+          <div className="bg-gradient-to-r from-[#0f4a2e] via-[#1a5c38] to-[#154d2f] text-white px-6 py-3.5 border-b border-emerald-800/60 flex flex-wrap items-center justify-between gap-3 shadow-md animate-fade-in">
             <div className="flex items-center space-x-3">
-              <div className="w-9 h-9 rounded-xl bg-brand-light/10 border border-brand-light/20 flex items-center justify-center font-extrabold text-brand-dark text-sm shadow-sm">
-                🎓
+              <div className="w-10 h-10 rounded-xl bg-white/15 border border-white/20 flex items-center justify-center font-extrabold text-white text-base shadow-sm">
+                🏛️
               </div>
               <div>
-                <p className="text-xs font-black tracking-wide uppercase text-slate-800">
-                  {user.first_name || user.username} {user.last_name}
-                </p>
-                <p className="text-[11px] text-brand-dark font-bold">
-                  Reg No: <span className="font-mono text-brand-dark bg-slate-100 px-2 py-0.5 rounded border border-slate-200 ml-1">{user.registration_number || `2026/CIU/FST/${user.id}`}</span>
+                <span className="text-[10px] font-extrabold uppercase tracking-widest text-emerald-300 block">ASSIGNED FACULTY</span>
+                <p className="text-sm font-black tracking-wide text-white">
+                  {user.faculty_name ? `${user.faculty_code} - ${user.faculty_name}` : 'SOBAT - School of Business & Technology'}
                 </p>
               </div>
             </div>
 
-            <div className="flex flex-wrap items-center gap-4 text-xs font-semibold">
-              <div className="flex items-center space-x-1.5 bg-slate-50 px-3 py-1 rounded-xl border border-slate-200 shadow-sm">
-                <span className="text-slate-500 font-bold uppercase text-[10px]">Faculty:</span>
-                <span className="text-emerald-700 font-bold">{user.faculty_name ? `${user.faculty_code} (${user.faculty_name})` : 'Faculty of Science & Technology (FST)'}</span>
-              </div>
-
-              <div className="flex items-center space-x-1.5 bg-slate-50 px-3 py-1 rounded-xl border border-slate-200 shadow-sm">
-                <span className="text-slate-500 font-bold uppercase text-[10px]">Registered Program:</span>
-                <span className="text-indigo-700 font-bold">
-                  {user.assigned_course_codes && user.assigned_course_codes.length > 0 
-                    ? user.assigned_course_codes.join(', ') 
-                    : 'Bachelor of Information Technology (BIT)'}
-                </span>
-              </div>
-
-              <div className="flex items-center space-x-1.5 bg-emerald-50 px-3 py-1 rounded-xl border border-emerald-200 shadow-sm">
-                <span className="text-emerald-800 font-bold uppercase text-[10px]">Status:</span>
-                <span className="text-emerald-700 font-bold">Active Registered Student</span>
+            <div className="flex flex-wrap items-center gap-3 text-xs font-semibold">
+              <div className="flex items-center space-x-2 bg-black/20 px-3 py-1.5 rounded-xl border border-white/10 shadow-sm">
+                <span className="text-emerald-300 font-bold uppercase text-[10px]">Student Reg No:</span>
+                <span className="font-mono text-white font-bold">{user.registration_number || user.reg_number || `2026/CIU/FST/${user.id}`}</span>
               </div>
             </div>
           </div>
         )}
+
 
         {/* Page Content */}
         <main className="flex-1 p-6 md:p-8 overflow-y-auto custom-scrollbar">
@@ -331,6 +364,81 @@ export default function DashboardLayout({ children }) {
                 Sign Out
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Mandatory Change One-Time Password Modal */}
+      {user.must_change_password && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md animate-fade-in">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full p-8 border border-white/20 space-y-5 animate-slide-up">
+            <div className="text-center space-y-2">
+              <div className="w-14 h-14 bg-amber-100 text-amber-700 rounded-2xl flex items-center justify-center text-2xl mx-auto font-bold border border-amber-200">
+                🔒
+              </div>
+              <h3 className="text-lg font-bold text-slate-900">Change One-Time Password</h3>
+              <p className="text-xs text-slate-500 font-medium">
+                You logged in using an initial One-Time Password assigned during onboarding. Please set a new secure password to continue.
+              </p>
+            </div>
+
+            {otpError && (
+              <div className="p-3 bg-red-50 border-l-4 border-red-500 rounded-xl text-red-700 text-xs font-semibold">
+                {otpError}
+              </div>
+            )}
+
+            {otpSuccess && (
+              <div className="p-3 bg-emerald-50 border-l-4 border-emerald-500 rounded-xl text-emerald-800 text-xs font-semibold">
+                {otpSuccess}
+              </div>
+            )}
+
+            <form onSubmit={handleChangeOneTimePassword} className="space-y-4 text-xs">
+              <div>
+                <label className="block text-slate-700 font-bold uppercase mb-1">Current One-Time Password</label>
+                <input
+                  type="password"
+                  value={currentOtpPass}
+                  onChange={(e) => setCurrentOtpPass(e.target.value)}
+                  placeholder="e.g. CIU-123456"
+                  className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-semibold text-slate-800"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-700 font-bold uppercase mb-1">New Password</label>
+                <input
+                  type="password"
+                  value={newOtpPass}
+                  onChange={(e) => setNewOtpPass(e.target.value)}
+                  placeholder="••••••••"
+                  className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-700 font-bold uppercase mb-1">Confirm New Password</label>
+                <input
+                  type="password"
+                  value={confirmOtpPass}
+                  onChange={(e) => setConfirmOtpPass(e.target.value)}
+                  placeholder="••••••••"
+                  className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800"
+                  required
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={submittingOtp}
+                className="w-full py-3 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-xl shadow-md transition-all active:scale-[0.98] disabled:opacity-50"
+              >
+                {submittingOtp ? 'Updating Password...' : 'Save New Password & Continue'}
+              </button>
+            </form>
           </div>
         </div>
       )}

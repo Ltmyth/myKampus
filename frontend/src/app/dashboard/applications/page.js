@@ -18,6 +18,12 @@ export default function ApplicationsPage() {
   const [reviewingApp, setReviewingApp] = useState(null);
   const [reviewerFeedback, setReviewerFeedback] = useState('');
   
+  // Filter & Pagination states for Executive Users / Staff
+  const [statusFilter, setStatusFilter] = useState('ALL');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+
   // UI states
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
@@ -45,6 +51,26 @@ export default function ApplicationsPage() {
       setLoading(false);
     }
   }
+
+  // Filter & Pagination Calculations
+  const filteredApplications = applications.filter((app) => {
+    if (statusFilter !== 'ALL' && app.status !== statusFilter) return false;
+    if (searchQuery.trim()) {
+      const term = searchQuery.toLowerCase().trim();
+      const sName = (app.student_name || '').toLowerCase();
+      const cName = (app.course_name || '').toLowerCase();
+      const cCode = (app.course_code || '').toLowerCase();
+      if (!sName.includes(term) && !cName.includes(term) && !cCode.includes(term)) {
+        return false;
+      }
+    }
+    return true;
+  });
+
+  const totalPages = Math.max(1, Math.ceil(filteredApplications.length / pageSize));
+  const safeCurrentPage = Math.min(Math.max(1, currentPage), totalPages);
+  const startIndex = (safeCurrentPage - 1) * pageSize;
+  const paginatedApplications = filteredApplications.slice(startIndex, startIndex + pageSize);
 
   const handleApplySubmit = async (e) => {
     e.preventDefault();
@@ -130,14 +156,63 @@ export default function ApplicationsPage() {
         
         {/* Application List */}
         <div className="lg:col-span-2 space-y-6">
+          
+          {/* Executive & Staff Filter Controls */}
+          <div className="bg-white rounded-2xl p-4 shadow-sm border border-slate-200 space-y-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+              <div className="sm:col-span-1">
+                <label className="block text-slate-600 font-bold uppercase mb-1 text-[10px]">Search Applicants</label>
+                <input
+                  type="text"
+                  placeholder="Applicant or course..."
+                  value={searchQuery}
+                  onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1); }}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-brand-light"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-600 font-bold uppercase mb-1 text-[10px]">Status Filter</label>
+                <select
+                  value={statusFilter}
+                  onChange={(e) => { setStatusFilter(e.target.value); setCurrentPage(1); }}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800"
+                >
+                  <option value="ALL">All Statuses</option>
+                  <option value="pending">Pending Review</option>
+                  <option value="approved">Approved</option>
+                  <option value="rejected">Rejected</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-slate-600 font-bold uppercase mb-1 text-[10px]">Page Size</label>
+                <select
+                  value={pageSize}
+                  onChange={(e) => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800"
+                >
+                  <option value={10}>10 per page</option>
+                  <option value={25}>25 per page</option>
+                  <option value={50}>50 per page</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
           <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200 space-y-4">
-            <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">Application Filings</h3>
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">Application Filings</h3>
+              <span className="text-xs font-bold text-emerald-800 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200">
+                {filteredApplications.length} Record{filteredApplications.length !== 1 ? 's' : ''}
+              </span>
+            </div>
             
-            {applications.length === 0 ? (
-              <p className="text-center text-slate-400 text-sm py-8">No applications filed yet.</p>
+            {paginatedApplications.length === 0 ? (
+              <p className="text-center text-slate-400 text-sm py-8">No application filings match your current filter rules.</p>
             ) : (
               <div className="space-y-4">
-                {applications.map((app) => (
+                {paginatedApplications.map((app) => (
                   <div key={app.id} className="p-4 bg-slate-50 rounded-xl border border-slate-200 flex flex-col md:flex-row md:items-center justify-between gap-4 hover:shadow-sm transition-all">
                     <div className="space-y-1">
                       <div className="flex items-center space-x-2">
@@ -186,6 +261,33 @@ export default function ApplicationsPage() {
                 ))}
               </div>
             )}
+
+            {/* Pagination Controls Bar */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-3 border-t border-slate-100 text-xs">
+              <div className="text-slate-500 font-medium text-[11px]">
+                Showing <span className="font-bold text-slate-800">{filteredApplications.length === 0 ? 0 : startIndex + 1}</span> to <span className="font-bold text-slate-800">{Math.min(startIndex + pageSize, filteredApplications.length)}</span> of <span className="font-bold text-slate-800">{filteredApplications.length}</span> applications
+              </div>
+
+              <div className="flex items-center space-x-1">
+                <button
+                  onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                  disabled={safeCurrentPage <= 1}
+                  className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 disabled:opacity-40 text-[11px] font-bold transition-all"
+                >
+                  ‹ Prev
+                </button>
+                <span className="px-3 py-1 bg-emerald-50 text-emerald-800 font-extrabold border border-emerald-200 rounded-lg text-[11px]">
+                  Page {safeCurrentPage} of {totalPages}
+                </span>
+                <button
+                  onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                  disabled={safeCurrentPage >= totalPages}
+                  className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 disabled:opacity-40 text-[11px] font-bold transition-all"
+                >
+                  Next ›
+                </button>
+              </div>
+            </div>
           </div>
         </div>
 

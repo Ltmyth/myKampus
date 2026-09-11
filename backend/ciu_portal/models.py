@@ -14,12 +14,20 @@ class User(AbstractUser):
         ('vc', 'Vice-Chancellor (VC)'),
         ('admin', 'System Admin'),
     )
-    role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='student')
+    role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='student', db_index=True)
     phone = models.CharField(max_length=20, blank=True, null=True)
-    tuition_paid_percentage = models.FloatField(default=100.0, help_text="Tuition clearance percentage (0.0 to 100.0)")
+    tuition_paid_percentage = models.FloatField(default=0.0, help_text="Tuition clearance percentage (0.0 to 100.0)")
     faculty = models.ForeignKey('Faculty', on_delete=models.SET_NULL, null=True, blank=True, related_name='students')
     assigned_courses = models.ManyToManyField('Course', blank=True, related_name='assigned_students')
-    reg_number = models.CharField(max_length=50, blank=True, null=True, help_text="Official Registration Number (e.g. 2026SOBAT-A001)")
+    reg_number = models.CharField(max_length=50, blank=True, null=True, db_index=True, help_text="Official Registration Number (e.g. 2026SOBAT-A001)")
+    YEAR_OF_STUDY_CHOICES = (
+        (1, 'Year 1'),
+        (2, 'Year 2'),
+        (3, 'Year 3'),
+        (4, 'Year 4'),
+    )
+    year_of_study = models.IntegerField(choices=YEAR_OF_STUDY_CHOICES, default=1, help_text="Academic Year of Study for students (1-4)")
+    must_change_password = models.BooleanField(default=False, help_text="Flag indicating student must change one-time password on login")
 
     @property
     def registration_number(self):
@@ -61,6 +69,14 @@ class Course(models.Model):
     code = models.CharField(max_length=20, unique=True)
     description = models.TextField(blank=True)
     department = models.CharField(max_length=100, blank=True)
+    DURATION_CHOICES = (
+        (1, '1 Year'),
+        (2, '2 Years'),
+        (3, '3 Years'),
+        (4, '4 Years'),
+        (5, '5 Years'),
+    )
+    duration_years = models.IntegerField(choices=DURATION_CHOICES, default=3, help_text="Duration of the course in academic years")
 
     def __str__(self):
         return f"{self.code} - {self.name}"
@@ -70,10 +86,17 @@ class CourseUnit(models.Model):
     name = models.CharField(max_length=150)
     code = models.CharField(max_length=20)
     credit_units = models.IntegerField(default=3)
+    YEAR_OF_STUDY_CHOICES = (
+        (1, 'Year 1'),
+        (2, 'Year 2'),
+        (3, 'Year 3'),
+        (4, 'Year 4'),
+    )
+    year_of_study = models.IntegerField(choices=YEAR_OF_STUDY_CHOICES, default=1, help_text="Academic Year of Study for this course unit (1-4)")
     lecturers = models.ManyToManyField(User, limit_choices_to={'role': 'lecturer'}, related_name='assigned_course_units', blank=True)
 
     def __str__(self):
-        return f"{self.code} - {self.name} ({self.course.code})"
+        return f"{self.code} - {self.name} (Year {self.year_of_study}, {self.course.code})"
 
 class Application(models.Model):
     STATUS_CHOICES = (
@@ -99,7 +122,16 @@ class Exam(models.Model):
     title = models.CharField(max_length=150)
     duration_minutes = models.IntegerField(default=60)
     scheduled_start = models.DateTimeField(null=True, blank=True)
-    is_active = models.BooleanField(default=False)
+    YEAR_SCOPING_CHOICES = (
+        (0, 'All Years'),
+        (1, 'Year 1'),
+        (2, 'Year 2'),
+        (3, 'Year 3'),
+        (4, 'Year 4'),
+    )
+    year_of_study = models.IntegerField(choices=YEAR_SCOPING_CHOICES, default=0, help_text="Target academic year of study (0 for All Years, 1-4 for specific year)")
+    due_date = models.DateTimeField(null=True, blank=True)
+    is_active = models.BooleanField(default=False, db_index=True)
     is_approved_by_dean = models.BooleanField(default=False)
     is_results_released = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -157,8 +189,9 @@ class Test(models.Model):
     total_marks = models.IntegerField(default=100)
     pass_percentage = models.FloatField(default=50.0)
     allowed_attempts = models.IntegerField(default=1, help_text="Set to 0 or -1 for unlimited attempts")
-    is_published = models.BooleanField(default=False)
+    is_published = models.BooleanField(default=False, db_index=True)
     is_results_released = models.BooleanField(default=True, help_text="Whether test results & scorecards are released to students")
+    year_of_study = models.IntegerField(choices=((0, 'All Years'), (1, 'Year 1'), (2, 'Year 2'), (3, 'Year 3'), (4, 'Year 4')), default=0, help_text="Target academic year of study")
     due_date = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -257,6 +290,7 @@ class ClassTimetable(models.Model):
     start_time = models.TimeField()
     end_time = models.TimeField()
     room = models.CharField(max_length=100)
+    year_of_study = models.IntegerField(choices=((0, 'All Years'), (1, 'Year 1'), (2, 'Year 2'), (3, 'Year 3'), (4, 'Year 4')), default=0, help_text="Target academic year of study")
     class_type = models.CharField(max_length=20, choices=CLASS_TYPE_CHOICES, default='lecture')
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='created_class_timetables')
     created_at = models.DateTimeField(auto_now_add=True)
@@ -274,6 +308,7 @@ class ExamTimetable(models.Model):
     exam_date = models.DateField()
     start_time = models.TimeField()
     end_time = models.TimeField()
+    year_of_study = models.IntegerField(choices=((0, 'All Years'), (1, 'Year 1'), (2, 'Year 2'), (3, 'Year 3'), (4, 'Year 4')), default=0, help_text="Target academic year of study")
     venue = models.CharField(max_length=100)
     invigilator = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, limit_choices_to={'role': 'lecturer'}, related_name='invigilated_exams')
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='created_exam_timetables')
@@ -320,3 +355,75 @@ def log_system_event(user, action, level='INFO', details='', ip_address=None):
         )
     except Exception:
         pass
+
+
+class TemporaryClearance(models.Model):
+    CLEARANCE_TYPE_CHOICES = (
+        ('both', 'Tests & Exams (50% & 100% Gates)'),
+        ('tests', 'Tests Only (50% Gate)'),
+        ('exams', 'Exams Only (100% Gate)'),
+    )
+    student = models.ForeignKey(User, on_delete=models.CASCADE, limit_choices_to={'role': 'student'}, related_name='temporary_clearances', db_index=True)
+    granted_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='granted_clearances')
+    clearance_type = models.CharField(max_length=20, choices=CLEARANCE_TYPE_CHOICES, default='both')
+    valid_from = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField(db_index=True)
+    reason = models.TextField(blank=True, default="Financial Guarantee / Dean Approval")
+    is_active = models.BooleanField(default=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def is_currently_valid(self):
+        from django.utils import timezone
+        now = timezone.now()
+        return self.is_active and self.valid_from <= now <= self.expires_at
+
+    def __str__(self):
+        return f"Temp Clearance for {self.student.username} ({self.clearance_type}) until {self.expires_at.strftime('%Y-%m-%d %H:%M')}"
+
+
+class QuestionBank(models.Model):
+    title = models.CharField(max_length=150)
+    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='question_banks')
+    course_unit = models.ForeignKey(CourseUnit, on_delete=models.SET_NULL, null=True, blank=True, related_name='question_banks')
+    created_by = models.ForeignKey(User, on_delete=models.CASCADE, limit_choices_to={'role': 'lecturer'}, related_name='question_banks')
+    description = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.title} ({self.course.code})"
+
+
+class QuestionBankItem(models.Model):
+    TYPE_CHOICES = (
+        ('mcq', 'Multiple Choice'),
+        ('tf', 'True / False'),
+        ('short', 'Short Answer'),
+    )
+    bank = models.ForeignKey(QuestionBank, on_delete=models.CASCADE, related_name='items')
+    question_text = models.TextField()
+    question_type = models.CharField(max_length=10, choices=TYPE_CHOICES, default='mcq')
+    option_a = models.CharField(max_length=255, blank=True, null=True)
+    option_b = models.CharField(max_length=255, blank=True, null=True)
+    option_c = models.CharField(max_length=255, blank=True, null=True)
+    option_d = models.CharField(max_length=255, blank=True, null=True)
+    correct_answer = models.CharField(max_length=255)
+    points = models.FloatField(default=1.0)
+    explanation = models.TextField(blank=True, null=True)
+
+    def __str__(self):
+        return f"Q: {self.question_text[:40]} ({self.bank.title})"
+
+
+class ProctorSnapshot(models.Model):
+    student = models.ForeignKey(User, on_delete=models.CASCADE, limit_choices_to={'role': 'student'}, related_name='proctor_snapshots', db_index=True)
+    test = models.ForeignKey(Test, on_delete=models.CASCADE, null=True, blank=True, related_name='proctor_snapshots')
+    exam = models.ForeignKey(Exam, on_delete=models.CASCADE, null=True, blank=True, related_name='proctor_snapshots')
+    image_data = models.TextField(help_text="Base64 data URL string for camera snapshot")
+    tab_switches_count = models.IntegerField(default=0)
+    is_camera_active = models.BooleanField(default=True)
+    flag_reason = models.CharField(max_length=255, null=True, blank=True)
+    captured_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    def __str__(self):
+        return f"Snapshot {self.student.username} at {self.captured_at.strftime('%H:%M:%S')}"
+
