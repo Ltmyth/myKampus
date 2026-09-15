@@ -110,7 +110,7 @@ export default function FacultyManagementPage() {
   const [submitting, setSubmitting] = useState(false);
 
   const isExecutiveReadOnly = ['dvc', 'vc', 'dean'].includes(user?.role);
-  const isAdmin = user?.role === 'admin' && !isExecutiveReadOnly;
+  const isAdmin = (user?.role === 'admin' || user?.role === 'platform_coordinator') && !isExecutiveReadOnly;
   const isSecretaryOrStaff = ['faculty_admin', 'admin'].includes(user?.role) && !isExecutiveReadOnly;
   const isStudent = user?.role === 'student';
   const isLecturer = user?.role === 'lecturer';

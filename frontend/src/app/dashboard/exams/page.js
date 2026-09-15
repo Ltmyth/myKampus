@@ -74,7 +74,7 @@ export default function ExamsPage() {
   const [successMsg, setSuccessMsg] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  const isAdmin = user?.role === 'admin';
+  const isAdmin = user?.role === 'admin' || user?.role === 'platform_coordinator';
   const isRegistrarOrStaff = ['registrar', 'admin'].includes(user?.role);
   const isExecutiveReadOnly = ['dvc', 'vc', 'dean'].includes(user?.role);
   const isStaff = ['lecturer', 'admin', 'faculty_admin', 'registrar', 'dean', 'dvc', 'vc'].includes(user?.role);

@@ -2,7 +2,11 @@ from rest_framework import permissions
 
 class IsAdmin(permissions.BasePermission):
     def has_permission(self, request, view):
-        return request.user and request.user.is_authenticated and request.user.role == 'admin'
+        return request.user and request.user.is_authenticated and request.user.role in ['admin', 'platform_coordinator']
+
+class IsPlatformCoordinator(permissions.BasePermission):
+    def has_permission(self, request, view):
+        return request.user and request.user.is_authenticated and request.user.role == 'platform_coordinator'
 
 class IsDVC(permissions.BasePermission):
     def has_permission(self, request, view):
@@ -42,7 +46,8 @@ class IsExecutiveReadOnly(permissions.BasePermission):
 
 class IsStaffUser(permissions.BasePermission):
     """
-    Allows access to Admin, DVC, VC, Dean, Faculty Admin, Registrar, and Lecturer
+    Allows access to Admin, Platform Coordinator, DVC, VC, Dean, Faculty Admin, Registrar, and Lecturer
     """
     def has_permission(self, request, view):
-        return request.user and request.user.is_authenticated and request.user.role in ['admin', 'dvc', 'vc', 'dean', 'faculty_admin', 'registrar', 'lecturer']
+        return request.user and request.user.is_authenticated and request.user.role in ['admin', 'platform_coordinator', 'dvc', 'vc', 'dean', 'faculty_admin', 'registrar', 'lecturer']
+

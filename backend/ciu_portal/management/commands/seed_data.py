@@ -14,6 +14,7 @@ class Command(BaseCommand):
         # 1. Create Default Users for all Roles
         roles_data = [
             {'username': 'admin', 'email': 'admin@ciu.ac.ug', 'role': 'admin', 'first_name': 'System', 'last_name': 'Admin'},
+            {'username': 'coordinator', 'email': 'coordinator@ciu.ac.ug', 'role': 'platform_coordinator', 'first_name': 'Platform', 'last_name': 'Coordinator'},
             {'username': 'dvc', 'email': 'dvc@ciu.ac.ug', 'role': 'dvc', 'first_name': 'Chancellor', 'last_name': 'DVC'},
             {'username': 'dean', 'email': 'dean@ciu.ac.ug', 'role': 'dean', 'first_name': 'School', 'last_name': 'Dean'},
             {'username': 'lecturer', 'email': 'lecturer@ciu.ac.ug', 'role': 'lecturer', 'first_name': 'Dr. Sarah', 'last_name': 'Mukasa'},

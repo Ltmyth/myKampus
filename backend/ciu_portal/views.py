@@ -200,9 +200,23 @@ class AdminUserViewSet(viewsets.ModelViewSet):
             'barred_count': barred_count
         })
 
+    def update(self, request, *args, **kwargs):
+        user_obj = self.get_object()
+        if request.user.role == 'platform_coordinator' and user_obj.role == 'admin':
+            return Response({'detail': 'Platform Coordinator cannot modify System Admin accounts.'}, status=status.HTTP_403_FORBIDDEN)
+        return super().update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        user_obj = self.get_object()
+        if request.user.role == 'platform_coordinator' and user_obj.role == 'admin':
+            return Response({'detail': 'Platform Coordinator cannot delete System Admin accounts.'}, status=status.HTTP_403_FORBIDDEN)
+        return super().destroy(request, *args, **kwargs)
+
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsAdmin])
     def reset_password(self, request, pk=None):
         user_obj = self.get_object()
+        if request.user.role == 'platform_coordinator' and user_obj.role == 'admin':
+            return Response({'detail': 'Platform Coordinator cannot reset System Admin password.'}, status=status.HTTP_403_FORBIDDEN)
         new_password = request.data.get('new_password')
         if not new_password:
             return Response({'detail': 'New password parameter is required.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -218,7 +232,10 @@ class AdminUserViewSet(viewsets.ModelViewSet):
             return Response({'detail': 'Please provide a non-empty list of user_ids to delete.'}, status=status.HTTP_400_BAD_REQUEST)
         
         user_ids = [uid for uid in user_ids if uid != request.user.id]
-        deleted_count, _ = User.objects.filter(id__in=user_ids).delete()
+        qs = User.objects.filter(id__in=user_ids)
+        if request.user.role == 'platform_coordinator':
+            qs = qs.exclude(role='admin')
+        deleted_count, _ = qs.delete()
         log_system_event(request.user, "BULK_USER_DELETE_SUCCESS", level="AUDIT", details=f"Admin deleted {deleted_count} user accounts in bulk.")
         return Response({
             'detail': f'Successfully deleted {deleted_count} selected user accounts.',
@@ -235,6 +252,9 @@ class AdminUserViewSet(viewsets.ModelViewSet):
             return Response({'detail': 'new_password parameter is required for bulk password reset.'}, status=status.HTTP_400_BAD_REQUEST)
 
         users_to_update = User.objects.filter(id__in=user_ids)
+        if request.user.role == 'platform_coordinator':
+            users_to_update = users_to_update.exclude(role='admin')
+
         updated_count = 0
         for u in users_to_update:
             u.set_password(new_password)

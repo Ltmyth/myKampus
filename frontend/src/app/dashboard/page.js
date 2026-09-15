@@ -34,7 +34,7 @@ export default function DashboardPage() {
           api.get('/exam-timetables/').then(res => res.length).catch(() => 0),
         ];
 
-        if (user.role === 'admin') {
+        if (user.role === 'admin' || user.role === 'platform_coordinator') {
           fetchPromises.push(api.get('/admin/users/').then(res => res.length).catch(() => 0));
           fetchPromises.push(api.get('/invitations/').then(res => res.length).catch(() => 0));
         } else {
@@ -140,7 +140,7 @@ export default function DashboardPage() {
               Manage Exam Timetables
             </button>
           )}
-          {user.role === 'admin' && (
+          {(user.role === 'admin' || user.role === 'platform_coordinator') && (
             <button onClick={() => router.push('/dashboard/admin')} className="px-5 py-2.5 bg-brand-emerald hover:bg-brand-emerald/90 text-brand-dark rounded-xl font-bold text-sm shadow-md transition-all active:scale-[0.98]">
               Manage Users & Audit Logs
             </button>
@@ -204,10 +204,10 @@ export default function DashboardPage() {
           </div>
           <div>
             <p className="text-slate-400 text-xs font-semibold uppercase tracking-wider">
-              {user.role === 'admin' ? 'Active Invites' : 'Exam Schedules'}
+              {user.role === 'admin' || user.role === 'platform_coordinator' ? 'Active Invites' : 'Exam Schedules'}
             </p>
             <h3 className="text-2xl font-bold text-slate-800">
-              {user.role === 'admin' ? stats.invites : stats.examTimetables}
+              {user.role === 'admin' || user.role === 'platform_coordinator' ? stats.invites : stats.examTimetables}
             </h3>
           </div>
         </div>
@@ -301,7 +301,7 @@ export default function DashboardPage() {
                   📊 Executive Academic Analytics & Reports
                 </button>
               )}
-              {user.role === 'admin' && (
+              {(user.role === 'admin' || user.role === 'platform_coordinator') && (
                 <>
                   <button onClick={() => router.push('/dashboard/admin')} className="w-full text-left px-4 py-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 transition-all">
                     + Generate User Invite Link

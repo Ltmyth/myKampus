@@ -12,9 +12,10 @@ class User(AbstractUser):
         ('registrar', 'Academic Registrar'),
         ('dvc', 'Chancellor (DVC)'),
         ('vc', 'Vice-Chancellor (VC)'),
+        ('platform_coordinator', 'Platform Coordinator'),
         ('admin', 'System Admin'),
     )
-    role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='student', db_index=True)
+    role = models.CharField(max_length=35, choices=ROLE_CHOICES, default='student', db_index=True)
     phone = models.CharField(max_length=20, blank=True, null=True)
     tuition_paid_percentage = models.FloatField(default=0.0, help_text="Tuition clearance percentage (0.0 to 100.0)")
     faculty = models.ForeignKey('Faculty', on_delete=models.SET_NULL, null=True, blank=True, related_name='students')
@@ -55,7 +56,7 @@ class Faculty(models.Model):
 class Invitation(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     email = models.EmailField()
-    role = models.CharField(max_length=20, choices=User.ROLE_CHOICES)
+    role = models.CharField(max_length=35, choices=User.ROLE_CHOICES)
     created_by = models.ForeignKey(User, on_delete=models.CASCADE, related_name='created_invitations')
     is_used = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)

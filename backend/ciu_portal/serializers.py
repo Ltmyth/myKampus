@@ -91,7 +91,7 @@ class UserCreateSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({"invitation_code": "Invalid or already used invitation code."})
         else:
             request = self.context.get('request')
-            is_admin = request and request.user and request.user.is_authenticated and request.user.role == 'admin'
+            is_admin = request and request.user and request.user.is_authenticated and request.user.role in ['admin', 'platform_coordinator']
             if not is_admin and role != 'student':
                 raise serializers.ValidationError({"role": "Only administrators can register users with non-student roles directly."})
                 

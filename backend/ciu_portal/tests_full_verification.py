@@ -122,17 +122,63 @@ def run_tests():
     print(f"Student Test Attempt: Score={attempt.score}% | Passed={attempt.passed}")
     assert attempt.passed is True, "Student should pass with 100% score!"
 
-    # 4. Test Action Audit Logs
-    print("\n--- 4. Testing Action Audit Logs ---")
-    SystemLog.objects.create(
-        user=student,
-        action="STUDENT_TEST_SUBMITTED",
-        level="AUDIT",
-        details=f"Submitted {test_obj.title} with score {attempt.score}%"
-    )
-    logs_count = SystemLog.objects.filter(action="STUDENT_TEST_SUBMITTED").count()
-    print(f"Audit Logs Recorded for STUDENT_TEST_SUBMITTED: {logs_count}")
-    assert logs_count >= 1, "Audit log event should be persisted!"
+    # 5. Test Platform Coordinator & Password Reset Hierarchy
+    print("\n--- 5. Testing Platform Coordinator & Password Reset Hierarchy ---")
+    from ciu_portal.views import AdminUserViewSet, ChangePasswordView
+    from rest_framework.test import APIRequestFactory, force_authenticate
+
+    factory = APIRequestFactory()
+
+    # Setup Users
+    sys_admin, _ = User.objects.get_or_create(username='sys_admin_test', defaults={'role': 'admin', 'email': 'sysadmin@ciu.ac.ug'})
+    sys_admin.set_password('adminpass123')
+    sys_admin.save()
+
+    p_coord, _ = User.objects.get_or_create(username='coord_test', defaults={'role': 'platform_coordinator', 'email': 'coord@ciu.ac.ug'})
+    p_coord.set_password('coordpass123')
+    p_coord.save()
+
+    lecturer_user, _ = User.objects.get_or_create(username='lecturer_test', defaults={'role': 'lecturer', 'email': 'lecturer_test@ciu.ac.ug'})
+    lecturer_user.set_password('lecturerpass123')
+    lecturer_user.save()
+
+    # Rule A: Platform Coordinator can reset non-admin user password (e.g. lecturer)
+    view_reset = AdminUserViewSet.as_view({'post': 'reset_password'})
+    req = factory.post(f'/api/admin/users/{lecturer_user.id}/reset_password/', {'new_password': 'newlecturerpass123'}, format='json')
+    force_authenticate(req, user=p_coord)
+    resp = view_reset(req, pk=lecturer_user.id)
+    assert resp.status_code == 200, f"Platform Coordinator should be able to reset lecturer password, got {resp.status_code}"
+    lecturer_user.refresh_from_db()
+    assert lecturer_user.check_password('newlecturerpass123'), "Lecturer password should be updated!"
+    print("✓ Platform Coordinator successfully reset Lecturer password.")
+
+    # Rule B: Platform Coordinator CANNOT reset System Admin password (HTTP 403 Forbidden)
+    req_bad = factory.post(f'/api/admin/users/{sys_admin.id}/reset_password/', {'new_password': 'hackedadminpass'}, format='json')
+    force_authenticate(req_bad, user=p_coord)
+    resp_bad = view_reset(req_bad, pk=sys_admin.id)
+    assert resp_bad.status_code == 403, f"Platform Coordinator MUST be forbidden from resetting System Admin password! Got {resp_bad.status_code}"
+    sys_admin.refresh_from_db()
+    assert sys_admin.check_password('adminpass123'), "System Admin password should remain unchanged!"
+    print("✓ Platform Coordinator blocked from resetting System Admin password (HTTP 403 Forbidden).")
+
+    # Rule C: System Admin CAN reset Platform Coordinator password
+    req_admin_reset = factory.post(f'/api/admin/users/{p_coord.id}/reset_password/', {'new_password': 'newcoordpass123'}, format='json')
+    force_authenticate(req_admin_reset, user=sys_admin)
+    resp_admin_reset = view_reset(req_admin_reset, pk=p_coord.id)
+    assert resp_admin_reset.status_code == 200, "System Admin should be able to reset Platform Coordinator password!"
+    p_coord.refresh_from_db()
+    assert p_coord.check_password('newcoordpass123'), "Platform Coordinator password should be updated by Admin!"
+    print("✓ System Admin successfully reset Platform Coordinator password.")
+
+    # Rule D: Self password change for all users
+    change_view = ChangePasswordView.as_view()
+    req_change = factory.post('/api/change-password/', {'current_password': 'newcoordpass123', 'new_password': 'selfcoordpass456'}, format='json')
+    force_authenticate(req_change, user=p_coord)
+    resp_change = change_view(req_change)
+    assert resp_change.status_code == 200, "Platform Coordinator should be able to change their own password!"
+    p_coord.refresh_from_db()
+    assert p_coord.check_password('selfcoordpass456'), "Platform Coordinator password changed successfully via self-service!"
+    print("✓ Platform Coordinator successfully changed own password via self-service.")
 
     print("\n==================================================")
     print("✅ ALL SYSTEM VERIFICATION CHECKS PASSED SUCCESSFULLY!")

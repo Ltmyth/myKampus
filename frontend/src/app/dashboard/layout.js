@@ -128,8 +128,8 @@ export default function DashboardLayout({ children }) {
     }
   ];
 
-  // System Admin gets user invite panel
-  if (user.role === 'admin') {
+  // System Admin & Platform Coordinator get user invite panel
+  if (user.role === 'admin' || user.role === 'platform_coordinator') {
     menuItems.push({
       name: 'Manage Users & Invites',
       path: '/dashboard/admin',
@@ -149,6 +149,7 @@ export default function DashboardLayout({ children }) {
   const getRoleBadgeColor = (role) => {
     switch (role) {
       case 'admin': return 'bg-brand-dark text-white border-brand-dark';
+      case 'platform_coordinator': return 'bg-purple-900 text-white border-purple-900 font-bold';
       case 'vc': return 'bg-emerald-100 text-emerald-900 border-emerald-300 font-extrabold';
       case 'dvc': return 'bg-emerald-100 text-emerald-900 border-emerald-300 font-extrabold';
       case 'registrar': return 'bg-emerald-50 text-emerald-800 border-emerald-200';
@@ -162,6 +163,7 @@ export default function DashboardLayout({ children }) {
   const getRoleLabel = (role) => {
     switch (role) {
       case 'admin': return 'System Admin';
+      case 'platform_coordinator': return 'Platform Coordinator';
       case 'vc': return 'Vice-Chancellor (VC)';
       case 'dvc': return 'DVC / Chancellor';
       case 'registrar': return 'Academic Registrar';

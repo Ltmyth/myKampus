@@ -21,6 +21,13 @@ class Command(BaseCommand):
         admin.role = 'admin'
         admin.save()
 
+        coordinator, _ = User.objects.get_or_create(username='coordinator', defaults={
+            'email': 'coordinator@ciu.ac.ug', 'first_name': 'Platform', 'last_name': 'Coordinator', 'role': 'platform_coordinator', 'tuition_paid_percentage': 100.0
+        })
+        coordinator.set_password('coordinator123')
+        coordinator.role = 'platform_coordinator'
+        coordinator.save()
+
         vc, _ = User.objects.get_or_create(username='vc_nanyonga', defaults={
             'email': 'vc@ciu.ac.ug', 'first_name': 'Ass. Prof. Rose Clarke', 'last_name': 'Nanyonga', 'role': 'vc', 'tuition_paid_percentage': 100.0
         })
