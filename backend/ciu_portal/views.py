@@ -134,6 +134,23 @@ class ChangePasswordView(generics.GenericAPIView):
             'user': serializer.data
         })
 
+def get_user_assigned_faculties(user):
+    if not user or not user.is_authenticated:
+        return Faculty.objects.none()
+    if user.role in ['admin', 'platform_coordinator', 'registrar', 'dvc', 'vc']:
+        return Faculty.objects.all()
+    
+    facs = Faculty.objects.filter(
+        models.Q(id=user.faculty_id) |
+        models.Q(dean=user) |
+        models.Q(secretary=user)
+    ).distinct()
+
+    if not facs.exists() and getattr(user, 'faculty', None):
+        facs = Faculty.objects.filter(id=user.faculty.id)
+
+    return facs
+
 # 4. System Admin User Management ViewSet
 class AdminUserViewSet(viewsets.ModelViewSet):
     serializer_class = AdminUserSerializer
@@ -161,6 +178,13 @@ class AdminUserViewSet(viewsets.ModelViewSet):
             return User.objects.filter(
                 role='lecturer',
                 assigned_course_units__course__in=student_courses
+            ).distinct().order_by('-date_joined')
+        elif user.role in ['dean', 'faculty_admin', 'faculty_secretary']:
+            assigned_facs = get_user_assigned_faculties(user)
+            return qs.filter(
+                models.Q(faculty__in=assigned_facs) |
+                models.Q(assigned_courses__faculty__in=assigned_facs) |
+                models.Q(assigned_course_units__course__faculty__in=assigned_facs)
             ).distinct().order_by('-date_joined')
         return qs
 
@@ -723,10 +747,15 @@ class FacultyViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        qs = Faculty.objects.all().order_by('code')
-        if user and user.is_authenticated and user.role == 'lecturer':
-            return Faculty.objects.filter(courses__units__lecturers=user).distinct().order_by('code')
-        return qs
+        if not user or not user.is_authenticated:
+            return Faculty.objects.none()
+        if user.role in ['dean', 'faculty_admin', 'faculty_secretary']:
+            return get_user_assigned_faculties(user).order_by('code')
+        if user.role == 'lecturer':
+            return Faculty.objects.filter(
+                models.Q(courses__units__lecturers=user) | models.Q(id=user.faculty_id)
+            ).distinct().order_by('code')
+        return Faculty.objects.all().order_by('code')
 
     def get_permissions(self):
         if self.action in ['list', 'retrieve']:
@@ -832,15 +861,40 @@ class CourseViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        qs = Course.objects.all().order_by('code')
-        if user and user.is_authenticated and user.role == 'lecturer':
-            return Course.objects.filter(units__lecturers=user).distinct().order_by('code')
-        return qs
+        if not user or not user.is_authenticated:
+            return Course.objects.none()
+        if user.role in ['dean', 'faculty_admin', 'faculty_secretary']:
+            assigned_facs = get_user_assigned_faculties(user)
+            return Course.objects.filter(faculty__in=assigned_facs).order_by('code')
+        if user.role == 'lecturer':
+            return Course.objects.filter(
+                models.Q(units__lecturers=user) | models.Q(faculty=user.faculty)
+            ).distinct().order_by('code')
+        return Course.objects.all().order_by('code')
 
     def get_permissions(self):
         if self.action in ['list', 'retrieve']:
             return [permissions.IsAuthenticated()]
         return [permissions.IsAuthenticated(), (IsAdmin | IsFacultyAdmin)()]
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        if user.role in ['faculty_admin', 'faculty_secretary']:
+            faculty = serializer.validated_data.get('faculty')
+            assigned_facs = get_user_assigned_faculties(user)
+            if faculty and faculty not in assigned_facs:
+                raise serializers.ValidationError({"detail": "Permission Denied: You can only create courses for your assigned faculty."})
+        course = serializer.save()
+        log_system_event(user, f"Course Created: {course.code} - {course.name}", level='INFO')
+
+    def perform_update(self, serializer):
+        user = self.request.user
+        if user.role in ['faculty_admin', 'faculty_secretary']:
+            assigned_facs = get_user_assigned_faculties(user)
+            if serializer.instance.faculty and serializer.instance.faculty not in assigned_facs:
+                raise serializers.ValidationError({"detail": "Permission Denied: You cannot modify courses from other faculties."})
+        course = serializer.save()
+        log_system_event(user, f"Course Updated: {course.code} - {course.name}", level='INFO')
 
 class CourseUnitViewSet(viewsets.ModelViewSet):
     serializer_class = CourseUnitSerializer
@@ -854,9 +908,11 @@ class CourseUnitViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        qs = CourseUnit.objects.all().order_by('code')
         if not user or not user.is_authenticated:
-            return qs
+            return CourseUnit.objects.none()
+        if user.role in ['dean', 'faculty_admin', 'faculty_secretary']:
+            assigned_facs = get_user_assigned_faculties(user)
+            return CourseUnit.objects.filter(course__faculty__in=assigned_facs).order_by('code')
         if user.role == 'student':
             student_courses = Course.objects.filter(
                 models.Q(applications__student=user, applications__status='approved') |
@@ -868,7 +924,7 @@ class CourseUnitViewSet(viewsets.ModelViewSet):
             return CourseUnit.objects.filter(
                 models.Q(lecturers=user) | models.Q(course__units__lecturers=user)
             ).distinct().order_by('code')
-        return qs
+        return CourseUnit.objects.all().order_by('code')
 
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsAdmin | IsFacultyAdmin])
     def assign_lecturer(self, request, pk=None):
@@ -975,7 +1031,14 @@ class ApplicationViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        if user.role in ['admin', 'dvc', 'dean', 'faculty_admin', 'registrar']:
+        if not user or not user.is_authenticated:
+            return Application.objects.none()
+        if user.role in ['dean', 'faculty_admin', 'faculty_secretary']:
+            assigned_facs = get_user_assigned_faculties(user)
+            return Application.objects.filter(
+                models.Q(course__faculty__in=assigned_facs) | models.Q(student__faculty__in=assigned_facs)
+            ).distinct().order_by('-applied_at')
+        elif user.role in ['admin', 'dvc', 'vc', 'registrar']:
             return Application.objects.all().order_by('-applied_at')
         elif user.role == 'lecturer':
             return Application.objects.filter(course__units__lecturers=user).distinct().order_by('-applied_at')
@@ -998,7 +1061,14 @@ class ExamViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        if user.role == 'student':
+        if not user or not user.is_authenticated:
+            return Exam.objects.none()
+        if user.role in ['dean', 'faculty_admin', 'faculty_secretary']:
+            assigned_facs = get_user_assigned_faculties(user)
+            return Exam.objects.filter(
+                models.Q(course__faculty__in=assigned_facs) | models.Q(course_unit__course__faculty__in=assigned_facs)
+            ).distinct().order_by('-created_at')
+        elif user.role == 'student':
             if user.assigned_courses.exists():
                 student_courses = user.assigned_courses.all()
             else:
@@ -1013,16 +1083,6 @@ class ExamViewSet(viewsets.ModelViewSet):
             ).filter(
                 models.Q(year_of_study=student_year) | models.Q(year_of_study=0) | models.Q(course_unit__year_of_study=student_year)
             ).order_by('-created_at')
-        elif user.role == 'dean':
-            dean_faculty = user.faculty or (user.managed_faculties.first() if hasattr(user, 'managed_faculties') else None)
-            if dean_faculty:
-                return Exam.objects.filter(course__faculty=dean_faculty).order_by('-created_at')
-            return Exam.objects.all().order_by('-created_at')
-        elif user.role == 'faculty_admin':
-            sec_faculty = user.faculty or (user.administered_faculties.first() if hasattr(user, 'administered_faculties') else None)
-            if sec_faculty:
-                return Exam.objects.filter(course__faculty=sec_faculty).order_by('-created_at')
-            return Exam.objects.all().order_by('-created_at')
         elif user.role == 'lecturer':
             return Exam.objects.filter(
                 models.Q(lecturer=user) |
@@ -1228,7 +1288,16 @@ class ExamAttemptViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         user = self.request.user
         qs = ExamAttempt.objects.all().order_by('-started_at')
-        if user.role == 'student':
+        if not user or not user.is_authenticated:
+            return qs.none()
+        if user.role in ['dean', 'faculty_admin', 'faculty_secretary']:
+            assigned_facs = get_user_assigned_faculties(user)
+            qs = qs.filter(
+                models.Q(exam__course__faculty__in=assigned_facs) |
+                models.Q(exam__course_unit__course__faculty__in=assigned_facs) |
+                models.Q(student__faculty__in=assigned_facs)
+            ).distinct()
+        elif user.role == 'student':
             qs = qs.filter(student=user)
         elif user.role == 'lecturer':
             qs = qs.filter(exam__lecturer=user)
@@ -1315,7 +1384,14 @@ class TestViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        if user.role == 'student':
+        if not user or not user.is_authenticated:
+            return Test.objects.none()
+        if user.role in ['dean', 'faculty_admin', 'faculty_secretary']:
+            assigned_facs = get_user_assigned_faculties(user)
+            return Test.objects.filter(
+                models.Q(course__faculty__in=assigned_facs) | models.Q(course_unit__course__faculty__in=assigned_facs)
+            ).distinct().order_by('-created_at')
+        elif user.role == 'student':
             if user.assigned_courses.exists():
                 student_courses = user.assigned_courses.all()
             else:
@@ -1330,16 +1406,6 @@ class TestViewSet(viewsets.ModelViewSet):
             ).filter(
                 models.Q(year_of_study=student_year) | models.Q(year_of_study=0) | models.Q(course_unit__year_of_study=student_year)
             ).order_by('-created_at')
-        elif user.role == 'dean':
-            dean_faculty = user.faculty or (user.managed_faculties.first() if hasattr(user, 'managed_faculties') else None)
-            if dean_faculty:
-                return Test.objects.filter(course__faculty=dean_faculty).order_by('-created_at')
-            return Test.objects.all().order_by('-created_at')
-        elif user.role == 'faculty_admin':
-            sec_faculty = user.faculty or (user.administered_faculties.first() if hasattr(user, 'administered_faculties') else None)
-            if sec_faculty:
-                return Test.objects.filter(course__faculty=sec_faculty).order_by('-created_at')
-            return Test.objects.all().order_by('-created_at')
         elif user.role == 'lecturer':
             return Test.objects.filter(
                 models.Q(lecturer=user) |
@@ -1601,7 +1667,16 @@ class TestAttemptViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         user = self.request.user
         qs = TestAttempt.objects.all().order_by('-started_at')
-        if user.role == 'student':
+        if not user or not user.is_authenticated:
+            return qs.none()
+        if user.role in ['dean', 'faculty_admin', 'faculty_secretary']:
+            assigned_facs = get_user_assigned_faculties(user)
+            qs = qs.filter(
+                models.Q(test__course__faculty__in=assigned_facs) |
+                models.Q(test__course_unit__course__faculty__in=assigned_facs) |
+                models.Q(student__faculty__in=assigned_facs)
+            ).distinct()
+        elif user.role == 'student':
             qs = qs.filter(student=user)
         elif user.role == 'lecturer':
             qs = qs.filter(test__lecturer=user)
@@ -1758,24 +1833,57 @@ class ReportsViewSet(viewsets.ViewSet):
     def summary(self, request):
         user = request.user
         
-        # General stats
-        total_students = User.objects.filter(role='student').count()
-        total_lecturers = User.objects.filter(role='lecturer').count()
-        total_faculties = Faculty.objects.count()
-        total_courses = Course.objects.count()
-        total_course_units = CourseUnit.objects.count()
-        total_exams = Exam.objects.count()
-        approved_exams = Exam.objects.filter(is_approved_by_dean=True).count()
-        total_tests = Test.objects.count()
-        published_tests = Test.objects.filter(is_published=True).count()
-        total_class_timetables = ClassTimetable.objects.count()
-        total_exam_timetables = ExamTimetable.objects.count()
+        # Determine scoping for Dean and Faculty Admin/Secretary
+        if user.role in ['dean', 'faculty_admin', 'faculty_secretary']:
+            assigned_facs = get_user_assigned_faculties(user)
+            student_qs = User.objects.filter(role='student', faculty__in=assigned_facs)
+            lecturer_qs = User.objects.filter(
+                models.Q(faculty__in=assigned_facs) | models.Q(assigned_course_units__course__faculty__in=assigned_facs),
+                role='lecturer'
+            ).distinct()
+            total_students = student_qs.count()
+            total_lecturers = lecturer_qs.count()
+            total_faculties = assigned_facs.count()
+            total_courses = Course.objects.filter(faculty__in=assigned_facs).count()
+            total_course_units = CourseUnit.objects.filter(course__faculty__in=assigned_facs).count()
+            total_exams = Exam.objects.filter(course__faculty__in=assigned_facs).count()
+            approved_exams = Exam.objects.filter(course__faculty__in=assigned_facs, is_approved_by_dean=True).count()
+            total_tests = Test.objects.filter(course__faculty__in=assigned_facs).count()
+            published_tests = Test.objects.filter(course__faculty__in=assigned_facs, is_published=True).count()
+            total_class_timetables = ClassTimetable.objects.filter(
+                models.Q(faculty__in=assigned_facs) | models.Q(course__faculty__in=assigned_facs)
+            ).distinct().count()
+            total_exam_timetables = ExamTimetable.objects.filter(
+                models.Q(faculty__in=assigned_facs) | models.Q(course__faculty__in=assigned_facs)
+            ).distinct().count()
+        else:
+            student_qs = User.objects.filter(role='student')
+            total_students = student_qs.count()
+            total_lecturers = User.objects.filter(role='lecturer').count()
+            total_faculties = Faculty.objects.count()
+            total_courses = Course.objects.count()
+            total_course_units = CourseUnit.objects.count()
+            total_exams = Exam.objects.count()
+            approved_exams = Exam.objects.filter(is_approved_by_dean=True).count()
+            total_tests = Test.objects.count()
+            published_tests = Test.objects.filter(is_published=True).count()
+            total_class_timetables = ClassTimetable.objects.count()
+            total_exam_timetables = ExamTimetable.objects.count()
 
         faculty_param = request.query_params.get('faculty')
         course_param = request.query_params.get('course')
 
         exam_attempts = ExamAttempt.objects.filter(completed_at__isnull=False)
         test_attempts = TestAttempt.objects.filter(completed_at__isnull=False)
+
+        if user.role in ['dean', 'faculty_admin', 'faculty_secretary']:
+            assigned_facs = get_user_assigned_faculties(user)
+            exam_attempts = exam_attempts.filter(
+                models.Q(exam__course__faculty__in=assigned_facs) | models.Q(student__faculty__in=assigned_facs)
+            ).distinct()
+            test_attempts = test_attempts.filter(
+                models.Q(test__course__faculty__in=assigned_facs) | models.Q(student__faculty__in=assigned_facs)
+            ).distinct()
 
         if faculty_param:
             exam_attempts = exam_attempts.filter(models.Q(exam__course__faculty_id=faculty_param) | models.Q(student__faculty_id=faculty_param) | models.Q(exam__course__faculty__code__iexact=faculty_param))
@@ -1818,17 +1926,20 @@ class ReportsViewSet(viewsets.ViewSet):
             'total_exam_attempts': exam_attempts.count(),
             'total_test_attempts': test_attempts.count(),
             # Financial Clearance stats consuming CIU Cleared Students API
-            'students_100_tuition': sum(1 for s in User.objects.filter(role='student') if check_student_clearance(s)['is_exam_cleared']),
-            'students_50_tuition': sum(1 for s in User.objects.filter(role='student') if check_student_clearance(s)['is_test_cleared'] and not check_student_clearance(s)['is_exam_cleared']),
-            'students_below_50_tuition': sum(1 for s in User.objects.filter(role='student') if not check_student_clearance(s)['is_test_cleared']),
-            'total_api_cleared_students': sum(1 for s in User.objects.filter(role='student') if check_student_clearance(s)['is_api_cleared']),
+            'students_100_tuition': sum(1 for s in student_qs if check_student_clearance(s)['is_exam_cleared']),
+            'students_50_tuition': sum(1 for s in student_qs if check_student_clearance(s)['is_test_cleared'] and not check_student_clearance(s)['is_exam_cleared']),
+            'students_below_50_tuition': sum(1 for s in student_qs if not check_student_clearance(s)['is_test_cleared']),
+            'total_api_cleared_students': sum(1 for s in student_qs if check_student_clearance(s)['is_api_cleared']),
             'external_api_total_records': len(fetch_external_cleared_students()) if isinstance(fetch_external_cleared_students(), list) else 0,
         }
 
         # Role-specific additions
-        if user.role in ['dvc', 'vc', 'dean', 'admin', 'registrar', 'faculty_admin']:
+        if user.role in ['dvc', 'vc', 'dean', 'admin', 'registrar', 'faculty_admin', 'faculty_secretary']:
             faculty_submissions = []
-            faculties = Faculty.objects.all()
+            if user.role in ['dean', 'faculty_admin', 'faculty_secretary']:
+                faculties = get_user_assigned_faculties(user)
+            else:
+                faculties = Faculty.objects.all()
 
             for fac in faculties:
                 fac_students = User.objects.filter(role='student', faculty=fac)

@@ -213,6 +213,101 @@ def run_tests():
     assert p_coord.must_change_password is False, "must_change_password should revert to False after user changes password!"
     print("✓ Platform Coordinator successfully changed own password via self-service (must_change_password reset to False).")
 
+    # 6. Test Dean and Faculty Secretary Strict Faculty Scoping (Rule 7)
+    print("\n--- 6. Testing Dean & Faculty Secretary Strict Scoping ---")
+    from ciu_portal.models import ClassTimetable, ExamTimetable
+    from ciu_portal.views import FacultyViewSet, CourseViewSet, TestViewSet, ExamViewSet, ClassTimetableViewSet, ExamTimetableViewSet, ReportsViewSet
+
+    fac_sci, _ = Faculty.objects.get_or_create(code='FACS', defaults={'name': 'Faculty of Science'})
+    fac_nur, _ = Faculty.objects.get_or_create(code='FACN', defaults={'name': 'Faculty of Nursing'})
+
+    dean_sci, _ = User.objects.get_or_create(
+        username='dean_sci_test',
+        defaults={'role': 'dean', 'email': 'deansci@ciu.ac.ug', 'faculty': fac_sci}
+    )
+    dean_sci.faculty = fac_sci
+    dean_sci.save()
+
+    sec_sci, _ = User.objects.get_or_create(
+        username='sec_sci_test',
+        defaults={'role': 'faculty_secretary', 'email': 'secsci@ciu.ac.ug', 'faculty': fac_sci}
+    )
+    sec_sci.faculty = fac_sci
+    sec_sci.save()
+
+    course_sci, _ = Course.objects.get_or_create(code='CS101', defaults={'name': 'Computer Science 101', 'faculty': fac_sci})
+    course_nur, _ = Course.objects.get_or_create(code='NUR101', defaults={'name': 'Nursing Fundamentals', 'faculty': fac_nur})
+
+    from ciu_portal.models import Exam
+    test_sci, _ = Test.objects.get_or_create(title='Science Test', course=course_sci, defaults={'lecturer': lecturer, 'pass_percentage': 50})
+    test_nur, _ = Test.objects.get_or_create(title='Nursing Test', course=course_nur, defaults={'lecturer': lecturer, 'pass_percentage': 50})
+
+    exam_sci, _ = Exam.objects.get_or_create(title='Science Exam', course=course_sci, defaults={'lecturer': lecturer})
+    exam_nur, _ = Exam.objects.get_or_create(title='Nursing Exam', course=course_nur, defaults={'lecturer': lecturer})
+
+    # Faculty ViewSet Scoping for Dean
+    view_fac = FacultyViewSet.as_view({'get': 'list'})
+    req_f = factory.get('/api/faculties/')
+    force_authenticate(req_f, user=dean_sci)
+    resp_f = view_fac(req_f)
+    assert resp_f.status_code == 200, "Faculty list should return 200"
+    fac_ids = [f['id'] for f in resp_f.data]
+    assert fac_sci.id in fac_ids, "Dean of Science must see Faculty of Science!"
+    assert fac_nur.id not in fac_ids, "Dean of Science MUST NOT see Faculty of Nursing!"
+    print("✓ FacultyViewSet correctly restricted for Dean.")
+
+    # Course ViewSet Scoping for Dean
+    view_course = CourseViewSet.as_view({'get': 'list'})
+    req_c = factory.get('/api/courses/')
+    force_authenticate(req_c, user=dean_sci)
+    resp_c = view_course(req_c)
+    assert resp_c.status_code == 200, "Course list should return 200"
+    course_ids = [c['id'] for c in resp_c.data]
+    assert course_sci.id in course_ids, "Dean of Science must see CS101!"
+    assert course_nur.id not in course_ids, "Dean of Science MUST NOT see NUR101!"
+    print("✓ CourseViewSet correctly restricted for Dean.")
+
+    # Test ViewSet Scoping for Faculty Secretary
+    view_test = TestViewSet.as_view({'get': 'list'})
+    req_t = factory.get('/api/tests/')
+    force_authenticate(req_t, user=sec_sci)
+    resp_t = view_test(req_t)
+    assert resp_t.status_code == 200, "Test list should return 200"
+    test_ids = [t['id'] for t in resp_t.data]
+    assert test_sci.id in test_ids, "Faculty Secretary must see Science Test!"
+    assert test_nur.id not in test_ids, "Faculty Secretary MUST NOT see Nursing Test!"
+    print("✓ TestViewSet correctly restricted for Faculty Secretary.")
+
+    # Exam ViewSet Scoping for Dean
+    view_exam = ExamViewSet.as_view({'get': 'list'})
+    req_e = factory.get('/api/exams/')
+    force_authenticate(req_e, user=dean_sci)
+    resp_e = view_exam(req_e)
+    assert resp_e.status_code == 200, "Exam list should return 200"
+    exam_ids = [e['id'] for e in resp_e.data]
+    assert exam_sci.id in exam_ids, "Dean of Science must see Science Exam!"
+    assert exam_nur.id not in exam_ids, "Dean of Science MUST NOT see Nursing Exam!"
+    print("✓ ExamViewSet correctly restricted for Dean.")
+
+    # Reports ViewSet Summary Scoping for Dean
+    r_view = ReportsViewSet.as_view({'get': 'summary'})
+    req_r = factory.get('/api/reports/summary/')
+    force_authenticate(req_r, user=dean_sci)
+    resp_r = r_view(req_r)
+    assert resp_r.status_code == 200, "Reports summary should succeed for Dean!"
+    rep_data = resp_r.data
+    assert rep_data['total_faculties'] == 1, f"Dean should see exactly 1 assigned faculty in report, got {rep_data['total_faculties']}"
+    print("✓ ReportsViewSet.summary correctly scoped totals for Dean.")
+
+    # System Admin Unrestricted Check
+    req_admin = factory.get('/api/faculties/')
+    force_authenticate(req_admin, user=sys_admin)
+    resp_admin = view_fac(req_admin)
+    assert resp_admin.status_code == 200, "Admin faculty list should return 200"
+    admin_fac_ids = [f['id'] for f in resp_admin.data]
+    assert fac_sci.id in admin_fac_ids and fac_nur.id in admin_fac_ids, "System Admin must have unrestricted access to all faculties!"
+    print("✓ System Admin retains unrestricted access across all faculties.")
+
     print("\n==================================================")
     print("✅ ALL SYSTEM VERIFICATION CHECKS PASSED SUCCESSFULLY!")
     print("==================================================")

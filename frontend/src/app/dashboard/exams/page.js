@@ -571,8 +571,8 @@ export default function ExamsPage() {
             <div className="flex items-center space-x-1.5">
               <span className="text-[11px] font-extrabold text-slate-500 uppercase">Faculty:</span>
               <select
-                value={['lecturer', 'student', 'faculty_admin', 'dean'].includes(user?.role) && (user?.faculty_code || user?.faculty) ? (user.faculty_code || String(user.faculty)) : selectedFacultyFilter}
-                disabled={['lecturer', 'student', 'faculty_admin', 'dean'].includes(user?.role) && Boolean(user?.faculty_code || user?.faculty)}
+                value={['lecturer', 'student', 'faculty_admin', 'dean'].includes(user?.role) ? (user?.faculty_code || (typeof user?.faculty === 'object' ? user?.faculty?.code : (activeFacultiesList[0]?.code || selectedFacultyFilter))) : selectedFacultyFilter}
+                disabled={['lecturer', 'student', 'faculty_admin', 'dean'].includes(user?.role)}
                 onChange={(e) => setSelectedFacultyFilter(e.target.value)}
                 className="bg-slate-50 border border-slate-200 text-slate-800 text-xs font-bold rounded-lg px-2.5 py-1 focus:outline-none focus:ring-1 focus:ring-brand-light disabled:opacity-85"
               >
@@ -581,8 +581,8 @@ export default function ExamsPage() {
                   <option key={f.id} value={f.code}>[{f.code}] {f.name}</option>
                 ))}
               </select>
-              {['lecturer', 'student', 'faculty_admin', 'dean'].includes(user?.role) && (user?.faculty_code || user?.faculty) && (
-                <span className="text-[10px] text-amber-700 font-bold">🔒 Locked</span>
+              {['lecturer', 'student', 'faculty_admin', 'dean'].includes(user?.role) && (
+                <span className="text-[10px] text-amber-700 font-bold">🔒 Locked to Faculty</span>
               )}
             </div>
 
