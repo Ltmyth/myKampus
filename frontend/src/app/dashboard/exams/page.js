@@ -39,6 +39,8 @@ export default function ExamsPage() {
   // Form states (Lecturer create Exam)
   const [examTitle, setExamTitle] = useState('');
   const [selectedCourse, setSelectedCourse] = useState('');
+  const [targetCourseIds, setTargetCourseIds] = useState([]);
+  const [targetYears, setTargetYears] = useState([]);
   const [selectedCourseUnit, setSelectedCourseUnit] = useState('');
   const [duration, setDuration] = useState(60);
   const [examYearOfStudy, setExamYearOfStudy] = useState(0); // 0 = All Years, 1-4 = Year X
@@ -79,6 +81,7 @@ export default function ExamsPage() {
   const isExecutiveReadOnly = ['dvc', 'vc', 'dean'].includes(user?.role);
   const isStaff = ['lecturer', 'admin', 'faculty_admin', 'registrar', 'dean', 'dvc', 'vc'].includes(user?.role);
   const isLecturer = user?.role === 'lecturer';
+  const canBuildExam = ['lecturer', 'admin'].includes(user?.role) && !['faculty_admin', 'dean', 'registrar', 'dvc', 'vc'].includes(user?.role);
 
   useEffect(() => {
     loadExamData();
@@ -259,9 +262,10 @@ export default function ExamsPage() {
 
   const handleCreateExam = async (e) => {
     e.preventDefault();
-    if (isExecutiveReadOnly) return;
-    if (!examTitle || (!selectedCourse && !selectedCourseUnit)) {
-      setErrorMsg('Please enter an exam title, course unit, and course program.');
+    if (isExecutiveReadOnly || !canBuildExam) return;
+    const finalCourseIds = targetCourseIds.length > 0 ? targetCourseIds : (selectedCourse ? [parseInt(selectedCourse)] : []);
+    if (!examTitle || (finalCourseIds.length === 0 && !selectedCourseUnit)) {
+      setErrorMsg('Please enter an exam title, course unit, and course program(s).');
       return;
     }
     if (!isAdmin && examYearOfStudy === 0 && !selectedCourseUnit) {
@@ -275,24 +279,28 @@ export default function ExamsPage() {
     try {
       const payload = {
         title: examTitle,
-        course: parseInt(selectedCourse),
+        course: selectedCourse ? parseInt(selectedCourse) : (finalCourseIds[0] || null),
+        target_course_ids: finalCourseIds.map(id => parseInt(id)),
         course_unit: selectedCourseUnit ? parseInt(selectedCourseUnit) : null,
         duration_minutes: parseInt(duration),
         year_of_study: parseInt(examYearOfStudy),
+        target_years: targetYears.length > 0 ? targetYears.map(y => parseInt(y)) : [parseInt(examYearOfStudy || 1)],
         is_active: true,
         scheduled_start: getUgandanISOString(scheduledStart),
         due_date: getUgandanISOString(dueDate)
       };
 
       const created = await api.post('/exams/', payload);
-      setSuccessMsg('Exam paper saved successfully! Select questions below.');
+      setSuccessMsg('Exam paper(s) created successfully! Manage questions below.');
       setExamTitle('');
       setSelectedCourse('');
+      setTargetCourseIds([]);
+      setTargetYears([]);
       setSelectedCourseUnit('');
       setScheduledStart('');
       setDueDate('');
       loadExamData();
-      setSelectedExam(created);
+      if (created && !Array.isArray(created)) setSelectedExam(created);
     } catch (err) {
       setErrorMsg(err.message || 'Failed to create exam paper.');
     } finally {
@@ -515,7 +523,7 @@ export default function ExamsPage() {
           )}
 
           <div className="bg-emerald-50 border border-emerald-200 px-3 py-1.5 rounded-xl text-xs text-emerald-800 font-bold uppercase">
-            {user.role.replace('_', ' ')}
+            {user.role === 'faculty_admin' ? 'Faculty Secretary' : user.role.replace('_', ' ')}
           </div>
         </div>
       </div>
@@ -563,15 +571,19 @@ export default function ExamsPage() {
             <div className="flex items-center space-x-1.5">
               <span className="text-[11px] font-extrabold text-slate-500 uppercase">Faculty:</span>
               <select
-                value={selectedFacultyFilter}
+                value={['lecturer', 'student', 'faculty_admin', 'dean'].includes(user?.role) && (user?.faculty_code || user?.faculty) ? (user.faculty_code || String(user.faculty)) : selectedFacultyFilter}
+                disabled={['lecturer', 'student', 'faculty_admin', 'dean'].includes(user?.role) && Boolean(user?.faculty_code || user?.faculty)}
                 onChange={(e) => setSelectedFacultyFilter(e.target.value)}
-                className="bg-slate-50 border border-slate-200 text-slate-800 text-xs font-bold rounded-lg px-2.5 py-1 focus:outline-none focus:ring-1 focus:ring-brand-light"
+                className="bg-slate-50 border border-slate-200 text-slate-800 text-xs font-bold rounded-lg px-2.5 py-1 focus:outline-none focus:ring-1 focus:ring-brand-light disabled:opacity-85"
               >
                 <option value="All">All Faculties ({activeFacultiesList.length})</option>
                 {activeFacultiesList.map(f => (
                   <option key={f.id} value={f.code}>[{f.code}] {f.name}</option>
                 ))}
               </select>
+              {['lecturer', 'student', 'faculty_admin', 'dean'].includes(user?.role) && (user?.faculty_code || user?.faculty) && (
+                <span className="text-[10px] text-amber-700 font-bold">🔒 Locked</span>
+              )}
             </div>
 
             <div className="flex items-center space-x-1.5">
@@ -857,7 +869,7 @@ export default function ExamsPage() {
           {/* Right Column Form: Create Exam / Question Editor */}
           <div className="space-y-6">
             
-            {(isLecturer || isAdmin || user.role === 'faculty_admin') && !isExecutiveReadOnly && (
+            {canBuildExam && !isExecutiveReadOnly && (
               <div className="green-card rounded-2xl p-6 space-y-4">
                 <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">Draft New Examination</h3>
                 <form onSubmit={handleCreateExam} className="space-y-3">
@@ -876,38 +888,65 @@ export default function ExamsPage() {
                   </div>
 
                   <div>
-                    <label className="block text-slate-700 text-xs font-bold uppercase mb-1">Course Program *</label>
-                    <select
-                      value={selectedCourse}
-                      onChange={(e) => setSelectedCourse(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
-                      required
-                    >
-                      <option value="">Select Course Program...</option>
+                    <label className="block text-slate-700 text-xs font-bold uppercase mb-1">Target Course Program(s) *</label>
+                    <div className="max-h-36 overflow-y-auto border border-slate-200 rounded-lg p-2 bg-slate-50 space-y-1 text-xs">
                       {assignedCourses.map((c) => (
-                        <option key={c.id} value={c.id}>[{c.code}] {c.name}</option>
+                        <label key={c.id} className="flex items-center space-x-2 font-medium text-slate-800 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={targetCourseIds.includes(String(c.id)) || targetCourseIds.includes(c.id) || selectedCourse === String(c.id)}
+                            onChange={(e) => {
+                              const idStr = String(c.id);
+                              if (e.target.checked) {
+                                setTargetCourseIds(prev => [...prev.filter(i => String(i) !== idStr), idStr]);
+                                setSelectedCourse(idStr);
+                              } else {
+                                setTargetCourseIds(prev => prev.filter(i => String(i) !== idStr));
+                              }
+                            }}
+                            className="rounded text-brand-light focus:ring-brand-light"
+                          />
+                          <span>[{c.code}] {c.name}</span>
+                        </label>
                       ))}
-                    </select>
+                    </div>
                   </div>
 
                   <div>
-                    <label className="block text-slate-700 text-xs font-bold uppercase mb-1">Target Year of Study</label>
-                    <select
-                      value={examYearOfStudy}
-                      onChange={(e) => setExamYearOfStudy(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800"
-                    >
-                      {isAdmin && <option value={0}>🌐 All Years (Year 0 - System Admin Exclusive)</option>}
-                      <option value={1}>Year 1</option>
-                      <option value={2}>Year 2</option>
-                      <option value={3}>Year 3</option>
-                      <option value={4}>Year 4</option>
-                    </select>
+                    <label className="block text-slate-700 text-xs font-bold uppercase mb-1">Target Year(s) of Study (1-4)</label>
+                    <div className="flex flex-wrap items-center gap-3 bg-slate-50 p-2 border border-slate-200 rounded-lg text-xs font-bold text-slate-800">
+                      {[1, 2, 3, 4].map((yr) => (
+                        <label key={yr} className="flex items-center space-x-1 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={targetYears.includes(yr)}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setTargetYears(prev => [...prev, yr]);
+                                setExamYearOfStudy(yr);
+                              } else {
+                                setTargetYears(prev => prev.filter(y => y !== yr));
+                              }
+                            }}
+                            className="rounded text-brand-light focus:ring-brand-light"
+                          />
+                          <span>Year {yr}</span>
+                        </label>
+                      ))}
+                      {isAdmin && (
+                        <button
+                          type="button"
+                          onClick={() => { setTargetYears([1, 2, 3, 4]); setExamYearOfStudy(0); }}
+                          className="text-[10px] text-brand-medium hover:underline font-extrabold"
+                        >
+                          Select All Years
+                        </button>
+                      )}
+                    </div>
                   </div>
 
-
                   <div>
-                    <label className="block text-slate-700 text-xs font-bold uppercase mb-1">Exam Title</label>
+                    <label className="block text-slate-700 text-xs font-bold uppercase mb-1">Exam Title *</label>
                     <input
                       type="text"
                       value={examTitle}
@@ -1010,11 +1049,13 @@ export default function ExamsPage() {
               </div>
             )}
 
-            {/* Question Bank Viewer / Editor */}
+            {/* Question Bank Viewer & Scorecard Question Paper Preview */}
             {selectedExam && (
               <div className="green-card rounded-2xl p-6 space-y-4 animate-slide-up">
                 <div className="flex justify-between items-center border-b border-emerald-100 pb-2">
-                  <h3 className="text-xs font-bold text-slate-800 uppercase">Question Bank ({selectedExam.title})</h3>
+                  <h3 className="text-xs font-bold text-slate-800 uppercase flex items-center space-x-2">
+                    <span>📋 Exam Question Paper Scorecard Preview ({selectedExam.title})</span>
+                  </h3>
                   <div className="flex items-center space-x-2">
                     {!isExecutiveReadOnly && (
                       <button
@@ -1035,15 +1076,33 @@ export default function ExamsPage() {
                   </div>
                 )}
 
-                <div className="space-y-2 max-h-48 overflow-y-auto custom-scrollbar">
+                <div className="space-y-3 max-h-72 overflow-y-auto custom-scrollbar">
                   {questions.length === 0 ? (
                     <p className="text-slate-400 text-xs py-4 text-center">No questions in this paper yet.</p>
                   ) : (
                     questions.map((q, idx) => (
-                      <div key={q.id} className="p-2.5 bg-slate-50 rounded-xl border border-slate-150 text-xs space-y-1">
-                        <p className="font-bold text-slate-800">Q{idx + 1}: {q.question_text}</p>
-                        <p className="text-slate-500 text-[11px]">A: {q.option_a} | B: {q.option_b} | C: {q.option_c} | D: {q.option_d}</p>
-                        <p className="text-emerald-700 font-bold text-[10px]">Key: Option {q.correct_option}</p>
+                      <div key={q.id} className="p-3.5 bg-white rounded-xl border border-emerald-200/80 shadow-sm text-xs space-y-2">
+                        <div className="flex justify-between items-start border-b border-slate-100 pb-1.5">
+                          <span className="font-bold text-slate-850">Q{idx + 1}: {q.question_text}</span>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs pt-1">
+                          <div className={`p-2 rounded-xl border flex items-center justify-between ${q.correct_option === 'A' ? 'bg-emerald-50 border-emerald-300 text-emerald-950 font-bold' : 'bg-slate-50 border-slate-200 text-slate-700'}`}>
+                            <span><strong className="text-slate-900 mr-1.5">A:</strong> {q.option_a}</span>
+                            {q.correct_option === 'A' && <span className="text-[10px] text-emerald-700 font-extrabold bg-emerald-100 px-1.5 py-0.5 rounded">✓ Correct</span>}
+                          </div>
+                          <div className={`p-2 rounded-xl border flex items-center justify-between ${q.correct_option === 'B' ? 'bg-emerald-50 border-emerald-300 text-emerald-950 font-bold' : 'bg-slate-50 border-slate-200 text-slate-700'}`}>
+                            <span><strong className="text-slate-900 mr-1.5">B:</strong> {q.option_b}</span>
+                            {q.correct_option === 'B' && <span className="text-[10px] text-emerald-700 font-extrabold bg-emerald-100 px-1.5 py-0.5 rounded">✓ Correct</span>}
+                          </div>
+                          <div className={`p-2 rounded-xl border flex items-center justify-between ${q.correct_option === 'C' ? 'bg-emerald-50 border-emerald-300 text-emerald-950 font-bold' : 'bg-slate-50 border-slate-200 text-slate-700'}`}>
+                            <span><strong className="text-slate-900 mr-1.5">C:</strong> {q.option_c}</span>
+                            {q.correct_option === 'C' && <span className="text-[10px] text-emerald-700 font-extrabold bg-emerald-100 px-1.5 py-0.5 rounded">✓ Correct</span>}
+                          </div>
+                          <div className={`p-2 rounded-xl border flex items-center justify-between ${q.correct_option === 'D' ? 'bg-emerald-50 border-emerald-300 text-emerald-950 font-bold' : 'bg-slate-50 border-slate-200 text-slate-700'}`}>
+                            <span><strong className="text-slate-900 mr-1.5">D:</strong> {q.option_d}</span>
+                            {q.correct_option === 'D' && <span className="text-[10px] text-emerald-700 font-extrabold bg-emerald-100 px-1.5 py-0.5 rounded">✓ Correct</span>}
+                          </div>
+                        </div>
                       </div>
                     ))
                   )}

@@ -83,16 +83,22 @@ export default function ReportsDashboardPage() {
         <div className="flex flex-wrap items-center gap-2">
           {['admin', 'dvc', 'vc', 'dean', 'lecturer', 'registrar', 'faculty_admin'].includes(user.role) && (
             <>
-              <select
-                value={selectedFaculty}
-                onChange={(e) => setSelectedFaculty(e.target.value)}
-                className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700"
-              >
-                <option value="ALL">Filter: All Faculties</option>
-                {facultiesList.map(f => (
-                  <option key={f.id} value={f.id}>{f.code} - {f.name}</option>
-                ))}
-              </select>
+              <div className="flex items-center space-x-1">
+                <select
+                  value={['lecturer', 'student', 'faculty_admin', 'dean'].includes(user?.role) && (user?.faculty_code || user?.faculty) ? String(user?.faculty || user?.faculty_code) : selectedFaculty}
+                  disabled={['lecturer', 'student', 'faculty_admin', 'dean'].includes(user?.role) && Boolean(user?.faculty_code || user?.faculty)}
+                  onChange={(e) => setSelectedFaculty(e.target.value)}
+                  className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 disabled:opacity-85"
+                >
+                  <option value="ALL">Filter: All Faculties</option>
+                  {facultiesList.map(f => (
+                    <option key={f.id} value={f.id}>{f.code} - {f.name}</option>
+                  ))}
+                </select>
+                {['lecturer', 'student', 'faculty_admin', 'dean'].includes(user?.role) && (user?.faculty_code || user?.faculty) && (
+                  <span className="text-[10px] text-amber-700 font-bold">🔒 Locked</span>
+                )}
+              </div>
 
               <select
                 value={selectedCourse}
@@ -108,7 +114,7 @@ export default function ReportsDashboardPage() {
           )}
 
           <div className="bg-emerald-50 border border-emerald-200 px-3 py-1.5 rounded-xl text-xs text-emerald-800 font-bold uppercase tracking-wider">
-            {user.role.replace('_', ' ').toUpperCase()}
+            {user.role === 'faculty_admin' ? 'FACULTY SECRETARY' : user.role.replace('_', ' ').toUpperCase()}
           </div>
         </div>
       </div>

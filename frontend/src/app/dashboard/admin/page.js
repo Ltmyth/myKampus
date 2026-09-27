@@ -93,6 +93,7 @@ export default function AdminPage() {
   // Form state (Reset Password)
   const [resetUserObj, setResetUserObj] = useState(null);
   const [newPasswordInput, setNewPasswordInput] = useState('');
+  const [showResetPassVisibility, setShowResetPassVisibility] = useState(false);
 
   // Cleared Faculty Data
   const [clearedFacultyData, setClearedFacultyData] = useState(null);
@@ -907,15 +908,19 @@ export default function AdminPage() {
                 <div>
                   <label className="block text-slate-600 font-bold uppercase mb-1 text-[10px]">Filter Faculty</label>
                   <select
-                    value={userFacultyFilter}
+                    value={['lecturer', 'student', 'faculty_admin', 'dean'].includes(user?.role) && (user?.faculty_code || user?.faculty) ? (user.faculty_code || String(user.faculty)) : userFacultyFilter}
+                    disabled={['lecturer', 'student', 'faculty_admin', 'dean'].includes(user?.role) && Boolean(user?.faculty_code || user?.faculty)}
                     onChange={(e) => { setUserFacultyFilter(e.target.value); setCurrentPage(1); }}
-                    className="w-full px-2.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:bg-white"
+                    className="w-full px-2.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:bg-white disabled:opacity-85"
                   >
                     <option value="ALL">All Faculties</option>
                     {faculties.map(f => (
                       <option key={f.id} value={f.code}>{f.code} - {f.name}</option>
                     ))}
                   </select>
+                  {['lecturer', 'student', 'faculty_admin', 'dean'].includes(user?.role) && (user?.faculty_code || user?.faculty) && (
+                    <span className="text-[10px] text-amber-700 font-bold mt-0.5 block">🔒 Locked to assigned faculty</span>
+                  )}
                 </div>
 
                 {/* Course Filter Dropdown */}
@@ -1069,7 +1074,8 @@ export default function AdminPage() {
                             />
                           </td>
                           <td className="px-4 py-3 font-semibold text-slate-850">
-                            <div className="font-bold text-slate-900">{u.first_name || u.username} {u.last_name}</div>
+                            <div className="font-bold text-slate-900">{u.first_name ? `${u.first_name} ${u.last_name || ''}` : u.username}</div>
+                            <div className="text-[11px] text-brand-dark font-mono font-bold">Username: @{u.username}</div>
                             <div className="text-[11px] text-slate-500 font-medium">{u.email}</div>
                             {u.role === 'student' && (
                               <div className="flex flex-wrap items-center gap-1 mt-1">
@@ -1091,7 +1097,7 @@ export default function AdminPage() {
                           </td>
                           <td className="px-4 py-3">
                             <span className={`px-2.5 py-0.5 rounded text-[10px] font-extrabold uppercase border ${u.role === 'student' ? 'bg-emerald-50 text-emerald-800 border-emerald-200' : u.role === 'admin' ? 'bg-purple-50 text-purple-800 border-purple-200' : u.role === 'platform_coordinator' ? 'bg-purple-900 text-white border-purple-900 font-bold' : 'bg-blue-50 text-blue-800 border-blue-200'}`}>
-                              {u.role.replace('_', ' ')}
+                              {u.role === 'faculty_admin' ? 'Faculty Secretary' : u.role.replace('_', ' ')}
                             </span>
                           </td>
                           <td className="px-4 py-3 text-center">
@@ -1119,7 +1125,7 @@ export default function AdminPage() {
                                   Edit
                                 </button>
                                 <button
-                                  onClick={() => { setResetUserObj(u); setNewPasswordInput(''); }}
+                                  onClick={() => { setResetUserObj(u); setNewPasswordInput(''); setShowResetPassVisibility(false); }}
                                   className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 text-[11px] font-bold rounded-lg border border-amber-200 transition-all shadow-2xs"
                                 >
                                   Reset Pass
@@ -2197,14 +2203,50 @@ export default function AdminPage() {
             <form onSubmit={handleConfirmResetPassword} className="space-y-4 text-xs">
               <div>
                 <label className="block text-slate-700 font-bold uppercase mb-1">New User Password</label>
-                <input
-                  type="password"
-                  placeholder="Enter strong new password..."
-                  value={newPasswordInput}
-                  onChange={(e) => setNewPasswordInput(e.target.value)}
-                  className="w-full px-3 me-2 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono"
-                  required
-                />
+                <div className="relative flex items-center">
+                  <input
+                    type={showResetPassVisibility ? "text" : "password"}
+                    placeholder="Enter strong new password..."
+                    value={newPasswordInput}
+                    onChange={(e) => setNewPasswordInput(e.target.value)}
+                    className="w-full pl-3 pr-24 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-bold text-slate-900 focus:bg-white"
+                    required
+                  />
+                  <div className="absolute right-2 flex items-center space-x-1">
+                    <button
+                      type="button"
+                      onClick={() => setShowResetPassVisibility(!showResetPassVisibility)}
+                      className="px-2 py-1 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold rounded-lg text-[10px]"
+                      title="Preview Password"
+                    >
+                      {showResetPassVisibility ? '🙈 Hide' : '👁️ Preview'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const randPass = 'CIU' + Math.floor(100000 + Math.random() * 900000) + '!';
+                        setNewPasswordInput(randPass);
+                        setShowResetPassVisibility(true);
+                      }}
+                      className="px-2 py-1 bg-brand-light text-white font-bold rounded-lg text-[10px]"
+                      title="Generate Random Password"
+                    >
+                      🎲 Gen
+                    </button>
+                  </div>
+                </div>
+                {newPasswordInput && (
+                  <div className="mt-2 p-2 bg-emerald-50 border border-emerald-200 rounded-lg text-emerald-900 text-xs font-mono font-bold flex items-center justify-between">
+                    <span>Password Preview: <strong>{newPasswordInput}</strong></span>
+                    <button
+                      type="button"
+                      onClick={() => navigator.clipboard.writeText(newPasswordInput)}
+                      className="text-[10px] bg-emerald-700 text-white px-2 py-0.5 rounded font-bold hover:bg-emerald-800"
+                    >
+                      Copy
+                    </button>
+                  </div>
+                )}
               </div>
 
               <div className="flex items-center justify-end space-x-2 pt-2 border-t border-slate-100">

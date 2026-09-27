@@ -38,6 +38,8 @@ export default function TestPortalPage() {
   // Test Builder State
   const [title, setTitle] = useState('');
   const [selectedCourse, setSelectedCourse] = useState('');
+  const [targetCourseIds, setTargetCourseIds] = useState([]);
+  const [targetYears, setTargetYears] = useState([]);
   const [selectedCourseUnit, setSelectedCourseUnit] = useState('');
   const [category, setCategory] = useState('quiz');
   const [duration, setDuration] = useState(30);
@@ -79,7 +81,7 @@ export default function TestPortalPage() {
   const isExecutiveReadOnly = ['dvc', 'vc', 'dean'].includes(user?.role);
   const isStaff = ['lecturer', 'admin', 'faculty_admin', 'dean', 'registrar', 'dvc', 'vc'].includes(user?.role);
   const isLecturer = user?.role === 'lecturer';
-  const canBuildTest = ['lecturer', 'admin', 'faculty_admin'].includes(user?.role) && !isExecutiveReadOnly;
+  const canBuildTest = ['lecturer', 'admin'].includes(user?.role) && !['faculty_admin', 'dean', 'registrar', 'dvc', 'vc'].includes(user?.role);
 
   useEffect(() => {
     loadPortalData();
@@ -223,8 +225,9 @@ export default function TestPortalPage() {
   const handleCreateTest = async (e) => {
     e.preventDefault();
     if (isExecutiveReadOnly) return;
-    if (!title || (!selectedCourse && !selectedCourseUnit)) {
-      setErrorMsg('Please specify a test title, course unit, and course program.');
+    const finalCourseIds = targetCourseIds.length > 0 ? targetCourseIds : (selectedCourse ? [parseInt(selectedCourse)] : []);
+    if (!title || (finalCourseIds.length === 0 && !selectedCourseUnit)) {
+      setErrorMsg('Please specify a test title, course unit, and course program(s).');
       return;
     }
     if (!isAdmin && yearOfStudy === 0 && !selectedCourseUnit) {
@@ -238,13 +241,15 @@ export default function TestPortalPage() {
     try {
       const payload = {
         title,
-        course: parseInt(selectedCourse),
+        course: selectedCourse ? parseInt(selectedCourse) : (finalCourseIds[0] || null),
+        target_course_ids: finalCourseIds.map(id => parseInt(id)),
         course_unit: selectedCourseUnit ? parseInt(selectedCourseUnit) : null,
         category,
         duration_minutes: parseInt(duration),
         pass_percentage: parseFloat(passPercentage),
         allowed_attempts: parseInt(allowedAttempts),
         year_of_study: parseInt(yearOfStudy),
+        target_years: targetYears.length > 0 ? targetYears.map(y => parseInt(y)) : [parseInt(yearOfStudy || 1)],
         description,
         is_published: true,
         scheduled_start: getUgandanISOString(scheduledStart),
@@ -252,15 +257,17 @@ export default function TestPortalPage() {
       };
 
       const created = await api.post('/tests/', payload);
-      setSuccessMsg('Test paper saved successfully! You can add questions below.');
+      setSuccessMsg('Test paper(s) created successfully! You can manage questions below.');
       setTitle('');
       setSelectedCourse('');
+      setTargetCourseIds([]);
+      setTargetYears([]);
       setSelectedCourseUnit('');
       setDescription('');
       setScheduledStart('');
       setDueDate('');
       loadPortalData();
-      setSelectedTest(created);
+      if (created && !Array.isArray(created)) setSelectedTest(created);
     } catch (err) {
       setErrorMsg(err.message || 'Failed to create test paper.');
     } finally {
@@ -532,16 +539,22 @@ export default function TestPortalPage() {
 
           {/* Staff Faculty Filter */}
           {isStaff && (
-            <select
-              value={selectedFacultyFilter}
-              onChange={(e) => setSelectedFacultyFilter(e.target.value)}
-              className="px-3 py-1.5 bg-slate-50 border border-slate-200 text-slate-800 text-xs font-bold rounded-lg focus:outline-none focus:ring-1 focus:ring-brand-light"
-            >
-              <option value="All">All Faculties ({activeFacultiesList.length})</option>
-              {activeFacultiesList.map((f) => (
-                <option key={f.id} value={f.code}>[{f.code}] {f.name}</option>
-              ))}
-            </select>
+            <div className="flex items-center space-x-1">
+              <select
+                value={['lecturer', 'student', 'faculty_admin', 'dean'].includes(user?.role) && (user?.faculty_code || user?.faculty) ? (user.faculty_code || String(user.faculty)) : selectedFacultyFilter}
+                disabled={['lecturer', 'student', 'faculty_admin', 'dean'].includes(user?.role) && Boolean(user?.faculty_code || user?.faculty)}
+                onChange={(e) => setSelectedFacultyFilter(e.target.value)}
+                className="px-3 py-1.5 bg-slate-50 border border-slate-200 text-slate-800 text-xs font-bold rounded-lg focus:outline-none focus:ring-1 focus:ring-brand-light disabled:opacity-85"
+              >
+                <option value="All">All Faculties ({activeFacultiesList.length})</option>
+                {activeFacultiesList.map((f) => (
+                  <option key={f.id} value={f.code}>[{f.code}] {f.name}</option>
+                ))}
+              </select>
+              {['lecturer', 'student', 'faculty_admin', 'dean'].includes(user?.role) && (user?.faculty_code || user?.faculty) && (
+                <span className="text-[10px] text-amber-700 font-bold">🔒 Locked</span>
+              )}
+            </div>
           )}
 
           {/* Course filter */}
@@ -874,33 +887,61 @@ export default function TestPortalPage() {
               </div>
 
               <div>
-                <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Course Program *</label>
-                <select
-                  value={selectedCourse}
-                  onChange={(e) => setSelectedCourse(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-800 focus:ring-1 focus:ring-brand-light"
-                  required
-                >
-                  <option value="">Select Course Program...</option>
+                <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Target Course Program(s) *</label>
+                <div className="max-h-36 overflow-y-auto border border-slate-200 rounded-lg p-2 bg-slate-50 space-y-1 text-xs">
                   {assignedCourses.map((c) => (
-                    <option key={c.id} value={c.id}>[{c.code}] {c.name}</option>
+                    <label key={c.id} className="flex items-center space-x-2 font-medium text-slate-800 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={targetCourseIds.includes(String(c.id)) || targetCourseIds.includes(c.id) || selectedCourse === String(c.id)}
+                        onChange={(e) => {
+                          const idStr = String(c.id);
+                          if (e.target.checked) {
+                            setTargetCourseIds(prev => [...prev.filter(i => String(i) !== idStr), idStr]);
+                            setSelectedCourse(idStr);
+                          } else {
+                            setTargetCourseIds(prev => prev.filter(i => String(i) !== idStr));
+                          }
+                        }}
+                        className="rounded text-brand-light focus:ring-brand-light"
+                      />
+                      <span>[{c.code}] {c.name}</span>
+                    </label>
                   ))}
-                </select>
+                </div>
               </div>
 
               <div>
-                <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Target Year of Study</label>
-                <select
-                  value={yearOfStudy}
-                  onChange={(e) => setYearOfStudy(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800"
-                >
-                  {isAdmin && <option value={0}>🌐 All Years (Year 0 - System Admin Exclusive)</option>}
-                  <option value={1}>Year 1</option>
-                  <option value={2}>Year 2</option>
-                  <option value={3}>Year 3</option>
-                  <option value={4}>Year 4</option>
-                </select>
+                <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Target Year(s) of Study (1-4)</label>
+                <div className="flex flex-wrap items-center gap-3 bg-slate-50 p-2 border border-slate-200 rounded-lg text-xs font-bold text-slate-800">
+                  {[1, 2, 3, 4].map((yr) => (
+                    <label key={yr} className="flex items-center space-x-1 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={targetYears.includes(yr)}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setTargetYears(prev => [...prev, yr]);
+                            setYearOfStudy(yr);
+                          } else {
+                            setTargetYears(prev => prev.filter(y => y !== yr));
+                          }
+                        }}
+                        className="rounded text-brand-light focus:ring-brand-light"
+                      />
+                      <span>Year {yr}</span>
+                    </label>
+                  ))}
+                  {isAdmin && (
+                    <button
+                      type="button"
+                      onClick={() => { setTargetYears([1, 2, 3, 4]); setYearOfStudy(0); }}
+                      className="text-[10px] text-brand-medium hover:underline font-extrabold"
+                    >
+                      Select All Years
+                    </button>
+                  )}
+                </div>
               </div>
 
               <div>
@@ -1053,16 +1094,20 @@ export default function TestPortalPage() {
             </form>
           </div>
 
-          {/* Question Builder */}
+          {/* Question Builder & Question Paper Scorecard Preview */}
           <div className="lg:col-span-2 green-card rounded-2xl p-6 space-y-4">
             {selectedTest ? (
               <div className="space-y-4">
                 
-                {/* Header & Preset Seeder */}
+                {/* Scorecard Header */}
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-emerald-100 pb-3">
                   <div>
-                    <h3 className="text-sm font-bold text-slate-850">Managing Question Bank</h3>
-                    <p className="text-xs text-brand-medium font-semibold">Test: {selectedTest.title} ({selectedTest.course_code})</p>
+                    <h3 className="text-sm font-bold text-slate-850 flex items-center space-x-2">
+                      <span>📋 Question Paper Scorecard Preview & Editor</span>
+                    </h3>
+                    <p className="text-xs text-brand-medium font-semibold mt-0.5">
+                      Test: {selectedTest.title} ({selectedTest.course_code}) · Questions: {questions.length}
+                    </p>
                   </div>
 
                   <div className="flex items-center space-x-2">
@@ -1092,22 +1137,65 @@ export default function TestPortalPage() {
                   </div>
                 </div>
 
-                {/* Existing Questions List */}
-                <div className="space-y-2 max-h-56 overflow-y-auto custom-scrollbar pr-1">
+                {/* Scorecard Questions Preview */}
+                <div className="space-y-3 max-h-96 overflow-y-auto custom-scrollbar pr-1">
                   {questions.length === 0 ? (
-                    <div className="py-6 text-center text-slate-400 text-xs font-medium bg-slate-50 rounded-xl border border-dashed border-slate-200">
+                    <div className="py-8 text-center text-slate-400 text-xs font-medium bg-slate-50 rounded-xl border border-dashed border-slate-200">
                       No questions added to this test yet. Click "Seed Sample Package" or fill the form below.
                     </div>
                   ) : (
                     questions.map((q, idx) => (
-                      <div key={q.id} className="p-3 bg-slate-50 rounded-xl border border-slate-150 text-xs space-y-1">
-                        <div className="flex justify-between items-start">
-                          <span className="font-bold text-slate-800">Q{idx + 1} ({q.question_type.toUpperCase()} · {q.points} pt): {q.question_text}</span>
+                      <div key={q.id} className="p-4 bg-white rounded-2xl border border-emerald-200/80 shadow-sm space-y-2.5">
+                        <div className="flex justify-between items-start border-b border-slate-100 pb-2">
+                          <div className="flex items-center space-x-2">
+                            <span className="w-6 h-6 rounded-full bg-brand-light text-white font-extrabold text-xs flex items-center justify-center">
+                              {idx + 1}
+                            </span>
+                            <span className="font-bold text-slate-850 text-xs">{q.question_text}</span>
+                          </div>
+                          <div className="flex items-center space-x-2">
+                            <span className="px-2 py-0.5 rounded bg-emerald-50 text-emerald-800 text-[10px] font-extrabold border border-emerald-200 uppercase">
+                              {q.question_type.toUpperCase()} · {q.points} Points
+                            </span>
+                          </div>
                         </div>
+
+                        {/* Options A, B, C, D Scorecard Display */}
                         {q.question_type === 'mcq' && (
-                          <p className="text-slate-500 font-medium">A: {q.option_a} | B: {q.option_b} | C: {q.option_c} | D: {q.option_d}</p>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs pt-1">
+                            <div className={`p-2 rounded-xl border flex items-center justify-between ${q.correct_answer === 'A' ? 'bg-emerald-50 border-emerald-300 text-emerald-950 font-bold' : 'bg-slate-50 border-slate-200 text-slate-700'}`}>
+                              <span><strong className="text-slate-900 mr-1.5">A:</strong> {q.option_a}</span>
+                              {q.correct_answer === 'A' && <span className="text-[10px] text-emerald-700 font-extrabold bg-emerald-100 px-1.5 py-0.5 rounded">✓ Correct</span>}
+                            </div>
+
+                            <div className={`p-2 rounded-xl border flex items-center justify-between ${q.correct_answer === 'B' ? 'bg-emerald-50 border-emerald-300 text-emerald-950 font-bold' : 'bg-slate-50 border-slate-200 text-slate-700'}`}>
+                              <span><strong className="text-slate-900 mr-1.5">B:</strong> {q.option_b}</span>
+                              {q.correct_answer === 'B' && <span className="text-[10px] text-emerald-700 font-extrabold bg-emerald-100 px-1.5 py-0.5 rounded">✓ Correct</span>}
+                            </div>
+
+                            <div className={`p-2 rounded-xl border flex items-center justify-between ${q.correct_answer === 'C' ? 'bg-emerald-50 border-emerald-300 text-emerald-950 font-bold' : 'bg-slate-50 border-slate-200 text-slate-700'}`}>
+                              <span><strong className="text-slate-900 mr-1.5">C:</strong> {q.option_c}</span>
+                              {q.correct_answer === 'C' && <span className="text-[10px] text-emerald-700 font-extrabold bg-emerald-100 px-1.5 py-0.5 rounded">✓ Correct</span>}
+                            </div>
+
+                            <div className={`p-2 rounded-xl border flex items-center justify-between ${q.correct_answer === 'D' ? 'bg-emerald-50 border-emerald-300 text-emerald-950 font-bold' : 'bg-slate-50 border-slate-200 text-slate-700'}`}>
+                              <span><strong className="text-slate-900 mr-1.5">D:</strong> {q.option_d}</span>
+                              {q.correct_answer === 'D' && <span className="text-[10px] text-emerald-700 font-extrabold bg-emerald-100 px-1.5 py-0.5 rounded">✓ Correct</span>}
+                            </div>
+                          </div>
                         )}
-                        <p className="text-emerald-700 font-bold">Answer Key: {q.correct_answer}</p>
+
+                        {q.question_type !== 'mcq' && (
+                          <div className="p-2 bg-emerald-50 rounded-xl border border-emerald-200 text-xs font-bold text-emerald-900">
+                            Answer Key: {q.correct_answer}
+                          </div>
+                        )}
+
+                        {q.explanation && (
+                          <p className="text-[11px] text-slate-500 italic bg-slate-50 p-2 rounded-lg border border-slate-100">
+                            💡 Explanation: {q.explanation}
+                          </p>
+                        )}
                       </div>
                     ))
                   )}
@@ -1131,7 +1219,7 @@ export default function TestPortalPage() {
                     <div className="grid grid-cols-2 gap-2">
                       <div>
                         <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Question Type</label>
-                        <select value={qType} onChange={(e) => setQType(e.target.value)} className="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs">
+                        <select value={qType} onChange={(e) => setQType(e.target.value)} className="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs font-semibold">
                           <option value="mcq">Multiple Choice</option>
                           <option value="tf">True / False</option>
                           <option value="short">Short Answer</option>
@@ -1139,26 +1227,26 @@ export default function TestPortalPage() {
                       </div>
                       <div>
                         <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Points</label>
-                        <input type="number" step="0.5" value={points} onChange={(e) => setPoints(e.target.value)} className="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs" />
+                        <input type="number" step="0.5" value={points} onChange={(e) => setPoints(e.target.value)} className="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs font-semibold" />
                       </div>
                     </div>
 
                     {qType === 'mcq' && (
                       <div className="grid grid-cols-2 gap-2">
-                        <input type="text" placeholder="Option A" value={optA} onChange={(e) => setOptA(e.target.value)} className="px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs" required />
-                        <input type="text" placeholder="Option B" value={optB} onChange={(e) => setOptB(e.target.value)} className="px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs" required />
-                        <input type="text" placeholder="Option C" value={optC} onChange={(e) => setOptC(e.target.value)} className="px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs" required />
-                        <input type="text" placeholder="Option D" value={optD} onChange={(e) => setOptD(e.target.value)} className="px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs" required />
+                        <input type="text" placeholder="Option A" value={optA} onChange={(e) => setOptA(e.target.value)} className="px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs font-medium" required />
+                        <input type="text" placeholder="Option B" value={optB} onChange={(e) => setOptB(e.target.value)} className="px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs font-medium" required />
+                        <input type="text" placeholder="Option C" value={optC} onChange={(e) => setOptC(e.target.value)} className="px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs font-medium" required />
+                        <input type="text" placeholder="Option D" value={optD} onChange={(e) => setOptD(e.target.value)} className="px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs font-medium" required />
                       </div>
                     )}
 
                     <div>
                       <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Correct Answer / Key</label>
-                      <input type="text" placeholder="A, B, C, D, True, False, or short answer text" value={correctAnswer} onChange={(e) => setCorrectAnswer(e.target.value)} className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs" required />
+                      <input type="text" placeholder="A, B, C, D, True, False, or short answer text" value={correctAnswer} onChange={(e) => setCorrectAnswer(e.target.value)} className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold" required />
                     </div>
 
                     <button type="submit" disabled={submitting} className="w-full py-2 bg-brand-light text-white text-xs font-bold rounded-lg shadow-sm">
-                      Add Question to Test
+                      Add Question to Test Paper
                     </button>
                   </form>
                 )}

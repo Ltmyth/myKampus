@@ -105,7 +105,7 @@ export default function DashboardPage() {
         <div className="space-y-2 z-10">
           <h2 className="text-2xl md:text-3xl font-extrabold tracking-tight">Welcome, {user.first_name || user.username}!</h2>
           <p className="text-white/80 text-sm max-w-md font-light">
-            Logged in as <span className="font-semibold text-brand-emerald capitalize">{user.role.replace('_', ' ')}</span>. Manage academic timetables, course exams, tests, and attendance tracking.
+            Logged in as <span className="font-semibold text-brand-emerald capitalize">{user.role === 'faculty_admin' ? 'Faculty Secretary' : user.role.replace('_', ' ')}</span>. Manage academic timetables, course exams, and tests.
           </p>
         </div>
         
@@ -124,9 +124,6 @@ export default function DashboardPage() {
             <>
               <button onClick={() => router.push('/dashboard/exams')} className="px-5 py-2.5 bg-brand-emerald hover:bg-brand-emerald/90 text-brand-dark rounded-xl font-bold text-sm shadow-md transition-all active:scale-[0.98]">
                 Create Exam / Test
-              </button>
-              <button onClick={() => router.push('/dashboard/classes')} className="px-5 py-2.5 bg-white/10 hover:bg-white/20 text-white rounded-xl font-semibold text-sm border border-white/15 transition-all">
-                Open Class Attendance
               </button>
             </>
           )}
@@ -323,9 +320,6 @@ export default function DashboardPage() {
               )}
               {user.role === 'lecturer' && (
                 <>
-                  <button onClick={() => router.push('/dashboard/classes')} className="w-full text-left px-4 py-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 transition-all">
-                    🕒 Open Class Attendance Window
-                  </button>
                   <button onClick={() => router.push('/dashboard/exams')} className="w-full text-left px-4 py-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 transition-all">
                     ✏️ Set Exam / Test Questions
                   </button>

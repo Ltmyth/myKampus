@@ -113,8 +113,8 @@ class ChangePasswordView(generics.GenericAPIView):
 
     def post(self, request):
         user = request.user
-        current_password = request.data.get('current_password')
-        new_password = request.data.get('new_password')
+        current_password = request.data.get('current_password') or request.data.get('old_password')
+        new_password = request.data.get('new_password') or request.data.get('password')
 
         if not current_password or not new_password:
             return Response({'detail': 'Both current password and new password are required.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -126,7 +126,7 @@ class ChangePasswordView(generics.GenericAPIView):
         user.must_change_password = False
         user.save()
 
-        log_system_event(user, "STUDENT_PASSWORD_CHANGED", level="AUDIT", details=f"User {user.username} updated one-time password.")
+        log_system_event(user, "USER_PASSWORD_CHANGED", level="AUDIT", details=f"User {user.username} updated password successfully.")
         
         serializer = UserSerializer(user)
         return Response({
@@ -141,6 +141,8 @@ class AdminUserViewSet(viewsets.ModelViewSet):
     def get_permissions(self):
         if self.action in ['list', 'retrieve']:
             return [permissions.IsAuthenticated()]
+        if self.action in ['promote_class']:
+            return [permissions.IsAuthenticated(), (IsAdmin | IsFacultyAdmin)()]
         return [permissions.IsAuthenticated(), IsAdmin()]
 
     def get_queryset(self):
@@ -161,6 +163,21 @@ class AdminUserViewSet(viewsets.ModelViewSet):
                 assigned_course_units__course__in=student_courses
             ).distinct().order_by('-date_joined')
         return qs
+
+    def perform_create(self, serializer):
+        user_obj = serializer.save()
+        raw_pass = self.request.data.get('password') or self.request.data.get('new_password')
+        if raw_pass:
+            user_obj.set_password(str(raw_pass).strip())
+            user_obj.must_change_password = True
+            user_obj.save()
+
+    def perform_update(self, serializer):
+        user_obj = serializer.save()
+        raw_pass = self.request.data.get('password') or self.request.data.get('new_password')
+        if raw_pass:
+            user_obj.set_password(str(raw_pass).strip())
+            user_obj.save()
 
     @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsAdmin])
     def sync_clearance(self, request):
@@ -217,13 +234,18 @@ class AdminUserViewSet(viewsets.ModelViewSet):
         user_obj = self.get_object()
         if request.user.role == 'platform_coordinator' and user_obj.role == 'admin':
             return Response({'detail': 'Platform Coordinator cannot reset System Admin password.'}, status=status.HTTP_403_FORBIDDEN)
-        new_password = request.data.get('new_password')
+        new_password = (request.data.get('new_password') or request.data.get('password') or '').strip()
         if not new_password:
             return Response({'detail': 'New password parameter is required.'}, status=status.HTTP_400_BAD_REQUEST)
         user_obj.set_password(new_password)
+        user_obj.must_change_password = True
         user_obj.save()
         log_system_event(request.user, f"Admin Password Reset for user: {user_obj.username} ({user_obj.role})", level="INFO")
-        return Response({'detail': f"Password for {user_obj.username} has been reset successfully."})
+        return Response({
+            'detail': f"Password for {user_obj.username} has been reset successfully.",
+            'username': user_obj.username,
+            'new_password': new_password
+        })
 
     @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsAdmin])
     def bulk_delete(self, request):
@@ -245,7 +267,7 @@ class AdminUserViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsAdmin])
     def bulk_reset_passwords(self, request):
         user_ids = request.data.get('user_ids', [])
-        new_password = request.data.get('new_password', '').strip()
+        new_password = (request.data.get('new_password') or request.data.get('password') or '').strip()
         if not user_ids or not isinstance(user_ids, list):
             return Response({'detail': 'Please provide a non-empty list of user_ids.'}, status=status.HTTP_400_BAD_REQUEST)
         if not new_password:
@@ -266,7 +288,8 @@ class AdminUserViewSet(viewsets.ModelViewSet):
         log_system_event(request.user, "BULK_PASSWORD_RESET_SUCCESS", level="AUDIT", details=msg)
         return Response({
             'detail': msg,
-            'count': updated_count
+            'count': updated_count,
+            'new_password': new_password
         })
 
     @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsAdmin | IsFacultyAdmin])
@@ -310,6 +333,49 @@ class AdminUserViewSet(viewsets.ModelViewSet):
         return Response({
             'detail': msg,
             'count': updated_count
+        })
+
+    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsAdmin | IsFacultyAdmin])
+    def promote_class(self, request):
+        user = request.user
+        faculty_id = request.data.get('faculty_id')
+        course_id = request.data.get('course_id')
+        current_year = request.data.get('current_year')
+        student_updates = request.data.get('students', [])
+
+        if not student_updates or not isinstance(student_updates, list):
+            return Response({'detail': 'Please select students to promote.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        updated_count = 0
+        updated_students = []
+
+        for item in student_updates:
+            s_id = item.get('id')
+            if not s_id or not item.get('selected', True):
+                continue
+            try:
+                st = User.objects.get(id=s_id, role='student')
+                if user.role in ['faculty_admin', 'dean']:
+                    sec_faculty = user.faculty or (user.administered_faculties.first() if hasattr(user, 'administered_faculties') else None)
+                    if sec_faculty and st.faculty != sec_faculty:
+                        continue
+
+                new_year = item.get('target_year') or (st.year_of_study + 1)
+                st.year_of_study = int(new_year)
+                if item.get('reg_number'):
+                    st.reg_number = item.get('reg_number')
+                st.save()
+                updated_count += 1
+                updated_students.append(st)
+            except User.DoesNotExist:
+                continue
+
+        msg = f"Class Promotion Executed: Promoted {updated_count} student(s) to their next academic year."
+        log_system_event(user, f"CLASS_PROMOTION_SUCCESS: {msg}", level="INFO")
+        return Response({
+            'detail': msg,
+            'count': updated_count,
+            'students': AdminUserSerializer(updated_students, many=True).data
         })
 
     @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsAdmin])
@@ -967,11 +1033,13 @@ class ExamViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         user = self.request.user
-        if user.role in ['dvc', 'vc', 'dean']:
-            raise serializers.ValidationError({"detail": "Permission Denied: DVC, VC, and Deans have read-only access and cannot create, update, or delete data."})
+        if user.role in ['faculty_admin', 'dean', 'registrar', 'dvc', 'vc']:
+            raise serializers.ValidationError({"detail": "Permission Denied: Faculty Secretaries, Deans, Academic Registrars, DVC, and VC are restricted from setting exams. Only Lecturers and System Administrators can set exams."})
         
         course_unit = serializer.validated_data.get('course_unit')
         year_of_study = serializer.validated_data.get('year_of_study', 0)
+        target_course_ids = self.request.data.get('target_course_ids', [])
+        target_years = self.request.data.get('target_years', [])
 
         # Only System Admin can set an exam for All Course Units & All Years (Year 0)
         if user.role != 'admin' and year_of_study == 0 and not course_unit:
@@ -992,10 +1060,33 @@ class ExamViewSet(viewsets.ModelViewSet):
         exam = serializer.save(lecturer=user)
         log_system_event(user, f"Exam Created: {exam.title} ({exam.course.code})", level="INFO")
 
+        # Handle multi-course / multi-program and multi-year exam scoping
+        if (target_course_ids and len(target_course_ids) > 1) or (target_years and len(target_years) > 1):
+            courses_to_create = Course.objects.filter(id__in=target_course_ids) if target_course_ids else [exam.course]
+            years_to_create = target_years if target_years else [exam.year_of_study]
+
+            for c in courses_to_create:
+                for y in years_to_create:
+                    if c.id == exam.course.id and int(y) == exam.year_of_study:
+                        continue
+                    Exam.objects.create(
+                        course=c,
+                        course_unit=exam.course_unit,
+                        lecturer=user,
+                        title=exam.title,
+                        duration_minutes=exam.duration_minutes,
+                        scheduled_start=exam.scheduled_start,
+                        year_of_study=int(y),
+                        due_date=exam.due_date,
+                        is_active=exam.is_active,
+                        is_approved_by_dean=exam.is_approved_by_dean,
+                        is_results_released=exam.is_results_released
+                    )
+
     def perform_update(self, serializer):
         user = self.request.user
-        if user.role in ['dvc', 'vc', 'dean']:
-            raise serializers.ValidationError({"detail": "Permission Denied: DVC, VC, and Deans have read-only access and cannot create, update, or delete data."})
+        if user.role in ['faculty_admin', 'dean', 'registrar', 'dvc', 'vc']:
+            raise serializers.ValidationError({"detail": "Permission Denied: Faculty Secretaries, Deans, Academic Registrars, DVC, and VC are restricted from editing exams."})
         if user.role == 'lecturer':
             if serializer.instance.lecturer != user:
                 raise serializers.ValidationError({"detail": "Permission Denied: You can only update your own created exams."})
@@ -1005,8 +1096,8 @@ class ExamViewSet(viewsets.ModelViewSet):
 
     def perform_destroy(self, instance):
         user = self.request.user
-        if user.role in ['dvc', 'vc', 'dean']:
-            raise serializers.ValidationError({"detail": "Permission Denied: DVC, VC, and Deans have read-only access and cannot create, update, or delete data."})
+        if user.role in ['faculty_admin', 'dean', 'registrar', 'dvc', 'vc']:
+            raise serializers.ValidationError({"detail": "Permission Denied: Faculty Secretaries, Deans, Academic Registrars, DVC, and VC are restricted from deleting exams."})
         if user.role == 'lecturer':
             if instance.lecturer != user:
                 raise serializers.ValidationError({"detail": "Permission Denied: You can only delete your own created exams."})
@@ -1259,11 +1350,13 @@ class TestViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         user = self.request.user
-        if user.role in ['dvc', 'vc', 'dean']:
-            raise serializers.ValidationError({"detail": "Permission Denied: DVC, VC, and Deans have read-only access and cannot create, update, or delete data."})
+        if user.role in ['faculty_admin', 'dean', 'registrar', 'dvc', 'vc']:
+            raise serializers.ValidationError({"detail": "Permission Denied: Faculty Secretaries, Deans, Academic Registrars, DVC, and VC are restricted from setting tests. Only Lecturers and System Administrators can set tests."})
         
         course_unit = serializer.validated_data.get('course_unit')
         year_of_study = serializer.validated_data.get('year_of_study', 0)
+        target_course_ids = self.request.data.get('target_course_ids', [])
+        target_years = self.request.data.get('target_years', [])
 
         # Only System Admin can set a test for All Course Units & All Years (Year 0)
         if user.role != 'admin' and year_of_study == 0 and not course_unit:
@@ -1284,10 +1377,37 @@ class TestViewSet(viewsets.ModelViewSet):
         test = serializer.save(lecturer=user)
         log_system_event(user, f"Test Created: {test.title} ({test.course.code})", level="INFO")
 
+        # Handle multi-course / multi-program and multi-year test scoping
+        if (target_course_ids and len(target_course_ids) > 1) or (target_years and len(target_years) > 1):
+            courses_to_create = Course.objects.filter(id__in=target_course_ids) if target_course_ids else [test.course]
+            years_to_create = target_years if target_years else [test.year_of_study]
+
+            for c in courses_to_create:
+                for y in years_to_create:
+                    if c.id == test.course.id and int(y) == test.year_of_study:
+                        continue
+                    Test.objects.create(
+                        course=c,
+                        course_unit=test.course_unit,
+                        lecturer=user,
+                        title=test.title,
+                        description=test.description,
+                        category=test.category,
+                        duration_minutes=test.duration_minutes,
+                        scheduled_start=test.scheduled_start,
+                        total_marks=test.total_marks,
+                        pass_percentage=test.pass_percentage,
+                        allowed_attempts=test.allowed_attempts,
+                        is_published=test.is_published,
+                        is_results_released=test.is_results_released,
+                        year_of_study=int(y),
+                        due_date=test.due_date
+                    )
+
     def perform_update(self, serializer):
         user = self.request.user
-        if user.role in ['dvc', 'vc', 'dean']:
-            raise serializers.ValidationError({"detail": "Permission Denied: DVC, VC, and Deans have read-only access and cannot create, update, or delete data."})
+        if user.role in ['faculty_admin', 'dean', 'registrar', 'dvc', 'vc']:
+            raise serializers.ValidationError({"detail": "Permission Denied: Faculty Secretaries, Deans, Academic Registrars, DVC, and VC are restricted from editing tests."})
         if user.role == 'lecturer':
             if serializer.instance.lecturer != user:
                 raise serializers.ValidationError({"detail": "Permission Denied: You can only update your own created tests."})
@@ -1295,8 +1415,8 @@ class TestViewSet(viewsets.ModelViewSet):
 
     def perform_destroy(self, instance):
         user = self.request.user
-        if user.role in ['dvc', 'vc', 'dean']:
-            raise serializers.ValidationError({"detail": "Permission Denied: DVC, VC, and Deans have read-only access and cannot create, update, or delete data."})
+        if user.role in ['faculty_admin', 'dean', 'registrar', 'dvc', 'vc']:
+            raise serializers.ValidationError({"detail": "Permission Denied: Faculty Secretaries, Deans, Academic Registrars, DVC, and VC are restricted from deleting tests."})
         if user.role == 'lecturer':
             if instance.lecturer != user:
                 raise serializers.ValidationError({"detail": "Permission Denied: You can only delete your own created tests."})

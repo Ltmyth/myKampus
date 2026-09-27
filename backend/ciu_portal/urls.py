@@ -39,6 +39,9 @@ urlpatterns = [
     path('auth/register/', RegisterView.as_view(), name='auth_register'),
     path('auth/profile/', ProfileView.as_view(), name='auth_profile'),
     path('auth/change_password/', ChangePasswordView.as_view(), name='auth_change_password'),
+    path('auth/change-password/', ChangePasswordView.as_view()),
+    path('change-password/', ChangePasswordView.as_view()),
+    path('change_password/', ChangePasswordView.as_view()),
     path('', include(router.urls)),
 ]
 

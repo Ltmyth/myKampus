@@ -40,6 +40,7 @@ class UserSerializer(serializers.ModelSerializer):
         return check_student_clearance(obj)['source']
 
 class AdminUserSerializer(serializers.ModelSerializer):
+    password = serializers.CharField(write_only=True, required=False, allow_blank=True, allow_null=True)
     faculty_name = serializers.CharField(source='faculty.name', read_only=True, allow_null=True)
     faculty_code = serializers.CharField(source='faculty.code', read_only=True, allow_null=True)
     registration_number = serializers.ReadOnlyField()
@@ -50,7 +51,24 @@ class AdminUserSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ('id', 'username', 'email', 'first_name', 'last_name', 'role', 'phone', 'tuition_paid_percentage', 'faculty', 'faculty_name', 'faculty_code', 'assigned_courses', 'assigned_course_codes', 'reg_number', 'registration_number', 'year_of_study', 'must_change_password', 'is_test_cleared', 'is_exam_cleared', 'clearance_source')
+        fields = ('id', 'username', 'email', 'password', 'first_name', 'last_name', 'role', 'phone', 'tuition_paid_percentage', 'faculty', 'faculty_name', 'faculty_code', 'assigned_courses', 'assigned_course_codes', 'reg_number', 'registration_number', 'year_of_study', 'must_change_password', 'is_test_cleared', 'is_exam_cleared', 'clearance_source')
+
+    def create(self, validated_data):
+        password = validated_data.pop('password', None)
+        user = super().create(validated_data)
+        if password:
+            user.set_password(password)
+            user.must_change_password = True
+            user.save()
+        return user
+
+    def update(self, instance, validated_data):
+        password = validated_data.pop('password', None)
+        user = super().update(instance, validated_data)
+        if password:
+            user.set_password(password)
+            user.save()
+        return user
 
     def get_assigned_course_codes(self, obj):
         return [c.code for c in obj.assigned_courses.all()]
@@ -69,6 +87,7 @@ class AdminUserSerializer(serializers.ModelSerializer):
         if obj.role != 'student': return 'Staff'
         from .clearance import check_student_clearance
         return check_student_clearance(obj)['source']
+
 
 class UserCreateSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True)

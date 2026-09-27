@@ -8,7 +8,7 @@ class User(AbstractUser):
         ('student', 'Student'),
         ('lecturer', 'Lecturer'),
         ('dean', 'Faculty Dean'),
-        ('faculty_admin', 'Faculty Secretary (Admin)'),
+        ('faculty_admin', 'Faculty Secretary'),
         ('registrar', 'Academic Registrar'),
         ('dvc', 'Chancellor (DVC)'),
         ('vc', 'Vice-Chancellor (VC)'),

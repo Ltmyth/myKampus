@@ -36,6 +36,15 @@ export default function FacultyManagementPage() {
   const [bulkAllocYearOfStudy, setBulkAllocYearOfStudy] = useState(1);
   const [bulkAllocCourseIds, setBulkAllocCourseIds] = useState([]);
 
+  // Class Promotion State
+  const [showPromotionModal, setShowPromotionModal] = useState(false);
+  const [promotionFacultyId, setPromotionFacultyId] = useState('');
+  const [promotionCourseId, setPromotionCourseId] = useState('');
+  const [promotionCurrentYear, setPromotionCurrentYear] = useState(1);
+  const [promotionTargetYear, setPromotionTargetYear] = useState(2);
+  const [selectedStudentPromotionIds, setSelectedStudentPromotionIds] = useState([]);
+  const [studentOverrides, setStudentOverrides] = useState({});
+
   // Student Directory Filter & Pagination State
   const [studentSearch, setStudentSearch] = useState('');
   const [studentFacultyFilter, setStudentFacultyFilter] = useState('All');
@@ -205,6 +214,34 @@ export default function FacultyManagementPage() {
       loadFacultyData();
     } catch (err) {
       setErrorMsg(err.message || 'Failed to apply bulk student allocation.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleExecutePromotion = async (e) => {
+    e.preventDefault();
+    if (selectedStudentPromotionIds.length === 0) {
+      setErrorMsg('Please select at least one student account for class promotion.');
+      return;
+    }
+    setErrorMsg('');
+    setSuccessMsg('');
+    setSubmitting(true);
+
+    try {
+      const res = await api.post('/admin/users/promote_class/', {
+        target_year: parseInt(promotionTargetYear),
+        student_ids: selectedStudentPromotionIds.map(id => parseInt(id)),
+        overrides: studentOverrides
+      });
+      setSuccessMsg(res.detail || `Class promotion executed successfully for ${selectedStudentPromotionIds.length} students!`);
+      setShowPromotionModal(false);
+      setSelectedStudentPromotionIds([]);
+      setStudentOverrides({});
+      loadFacultyData();
+    } catch (err) {
+      setErrorMsg(err.message || 'Failed to execute class promotion.');
     } finally {
       setSubmitting(false);
     }
@@ -709,7 +746,7 @@ export default function FacultyManagementPage() {
             </button>
           )}
           <div className="bg-indigo-50 border border-indigo-200 px-3 py-1.5 rounded-xl text-xs text-indigo-800 font-bold uppercase">
-            {user.role.replace('_', ' ')}
+            {user.role === 'faculty_admin' ? 'Faculty Secretary' : user.role.replace('_', ' ')}
           </div>
         </div>
       </div>
@@ -1278,6 +1315,18 @@ export default function FacultyManagementPage() {
                         className="px-3.5 py-1.5 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-xl shadow-sm transition-all flex items-center space-x-1.5"
                       >
                         <span>🎓 + Allocate Student Profile</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const targetSts = filteredStudents.length > 0 ? filteredStudents : students;
+                          setSelectedStudentPromotionIds(targetSts.map(s => s.id));
+                          setShowPromotionModal(true);
+                        }}
+                        className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl shadow-sm transition-all flex items-center space-x-1.5"
+                      >
+                        <span>🚀 Class Promotion Manager</span>
                       </button>
 
                       {selectedStudentAllocIds.length > 0 && (
@@ -2367,6 +2416,145 @@ export default function FacultyManagementPage() {
                   className="px-5 py-2 bg-teal-600 hover:bg-teal-700 text-white font-bold rounded-xl shadow-md"
                 >
                   {submitting ? 'Saving...' : editingCourseUnit ? 'Save Changes' : 'Create Course Unit'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: CLASS PROMOTION MANAGER */}
+      {showPromotionModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fade-in">
+          <div className="bg-white rounded-3xl max-w-2xl w-full p-6 space-y-5 shadow-2xl border border-indigo-200">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <div>
+                <h3 className="text-base font-extrabold text-slate-850 flex items-center space-x-2">
+                  <span>🚀 Class Promotion Manager</span>
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Advance class cohorts to the next semester/year with individual student overrides.
+                </p>
+              </div>
+              <button
+                onClick={() => setShowPromotionModal(false)}
+                className="text-slate-400 hover:text-slate-600 font-bold text-lg"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleExecutePromotion} className="space-y-4 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-indigo-50/60 p-3.5 rounded-2xl border border-indigo-100">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
+                    Global Default Target Academic Year *
+                  </label>
+                  <select
+                    value={promotionTargetYear}
+                    onChange={(e) => setPromotionTargetYear(Number(e.target.value))}
+                    className="w-full bg-white border border-slate-200 font-bold text-slate-800 rounded-xl px-3 py-2"
+                  >
+                    <option value={2}>Promote to Year 2</option>
+                    <option value={3}>Promote to Year 3</option>
+                    <option value={4}>Promote to Year 4</option>
+                    <option value={5}>🎓 Graduate Class (Alumni Status)</option>
+                  </select>
+                </div>
+
+                <div className="flex flex-col justify-center text-[11px] text-slate-600 font-medium">
+                  <p>Selected Students: <strong className="text-indigo-900 font-extrabold">{selectedStudentPromotionIds.length} accounts</strong></p>
+                  <p className="text-slate-500 mt-0.5">Use the table below to uncheck or set custom individual target years for repeaters or skipped terms.</p>
+                </div>
+              </div>
+
+              {/* Roster Table with Overrides */}
+              <div className="max-h-64 overflow-y-auto custom-scrollbar border border-slate-200 rounded-xl">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 uppercase font-semibold">
+                      <th className="px-3 py-2 w-8 text-center">
+                        <input
+                          type="checkbox"
+                          checked={selectedStudentPromotionIds.length === students.length && students.length > 0}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedStudentPromotionIds(students.map(s => s.id));
+                            } else {
+                              setSelectedStudentPromotionIds([]);
+                            }
+                          }}
+                          className="rounded text-indigo-600 focus:ring-indigo-500"
+                        />
+                      </th>
+                      <th className="px-3 py-2">Student Name & Reg No</th>
+                      <th className="px-3 py-2 text-center">Current Year</th>
+                      <th className="px-3 py-2">Target Year Override</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-slate-700">
+                    {students.map((st) => {
+                      const isSelected = selectedStudentPromotionIds.includes(st.id);
+                      const currentYr = st.year_of_study || 1;
+                      const customTarget = studentOverrides[st.id] !== undefined ? studentOverrides[st.id] : promotionTargetYear;
+
+                      return (
+                        <tr key={st.id} className={isSelected ? 'bg-indigo-50/30' : 'opacity-60'}>
+                          <td className="px-3 py-2 text-center">
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setSelectedStudentPromotionIds(prev => [...prev, st.id]);
+                                } else {
+                                  setSelectedStudentPromotionIds(prev => prev.filter(id => id !== st.id));
+                                }
+                              }}
+                              className="rounded text-indigo-600 focus:ring-indigo-500"
+                            />
+                          </td>
+                          <td className="px-3 py-2">
+                            <p className="font-bold text-slate-850">{st.first_name || st.username} {st.last_name}</p>
+                            <span className="text-[10px] text-slate-500 font-mono font-bold">{st.reg_number || st.registration_number || `@${st.username}`}</span>
+                          </td>
+                          <td className="px-3 py-2 text-center font-extrabold text-slate-700">
+                            Year {currentYr}
+                          </td>
+                          <td className="px-3 py-2">
+                            <select
+                              value={customTarget}
+                              onChange={(e) => setStudentOverrides(prev => ({ ...prev, [st.id]: Number(e.target.value) }))}
+                              className="bg-white border border-slate-200 text-slate-800 font-bold rounded-lg px-2 py-1 text-xs"
+                            >
+                              <option value={1}>Repeat Year 1</option>
+                              <option value={2}>Advance to Year 2</option>
+                              <option value={3}>Advance to Year 3</option>
+                              <option value={4}>Advance to Year 4</option>
+                              <option value={5}>🎓 Graduate (Alumni)</option>
+                            </select>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="flex justify-end space-x-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setShowPromotionModal(false)}
+                  className="px-4 py-2 bg-slate-100 text-slate-600 text-xs font-bold rounded-xl hover:bg-slate-200"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={submitting || selectedStudentPromotionIds.length === 0}
+                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-extrabold rounded-xl shadow-md transition-all disabled:opacity-50"
+                >
+                  {submitting ? 'Executing Promotion...' : `🚀 Execute Class Promotion (${selectedStudentPromotionIds.length})`}
                 </button>
               </div>
             </form>

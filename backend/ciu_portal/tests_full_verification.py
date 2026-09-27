@@ -150,7 +150,8 @@ def run_tests():
     assert resp.status_code == 200, f"Platform Coordinator should be able to reset lecturer password, got {resp.status_code}"
     lecturer_user.refresh_from_db()
     assert lecturer_user.check_password('newlecturerpass123'), "Lecturer password should be updated!"
-    print("✓ Platform Coordinator successfully reset Lecturer password.")
+    assert lecturer_user.must_change_password is True, "must_change_password should be True after admin password reset!"
+    print("✓ Platform Coordinator successfully reset Lecturer password (must_change_password set to True).")
 
     # Rule B: Platform Coordinator CANNOT reset System Admin password (HTTP 403 Forbidden)
     req_bad = factory.post(f'/api/admin/users/{sys_admin.id}/reset_password/', {'new_password': 'hackedadminpass'}, format='json')
@@ -168,9 +169,40 @@ def run_tests():
     assert resp_admin_reset.status_code == 200, "System Admin should be able to reset Platform Coordinator password!"
     p_coord.refresh_from_db()
     assert p_coord.check_password('newcoordpass123'), "Platform Coordinator password should be updated by Admin!"
+    assert p_coord.must_change_password is True, "must_change_password should be True!"
     print("✓ System Admin successfully reset Platform Coordinator password.")
 
-    # Rule D: Self password change for all users
+    # Rule D: Bulk Password Reset
+    view_bulk_reset = AdminUserViewSet.as_view({'post': 'bulk_reset_passwords'})
+    req_bulk = factory.post('/api/admin/users/bulk_reset_passwords/', {'user_ids': [lecturer_user.id], 'new_password': 'bulkpass12345'}, format='json')
+    force_authenticate(req_bulk, user=sys_admin)
+    resp_bulk = view_bulk_reset(req_bulk)
+    assert resp_bulk.status_code == 200, "Bulk password reset should succeed!"
+    lecturer_user.refresh_from_db()
+    assert lecturer_user.check_password('bulkpass12345'), "Lecturer password should be updated by bulk reset!"
+    assert lecturer_user.must_change_password is True, "must_change_password should be True after bulk reset!"
+    print("✓ Bulk password reset successfully updated target users.")
+
+    # Rule E: Admin user creation with password parameter
+    User.objects.filter(username='created_by_admin').delete()
+    view_user_create = AdminUserViewSet.as_view({'post': 'create'})
+    req_create = factory.post('/api/admin/users/', {
+        'username': 'created_by_admin',
+        'email': 'created_admin@ciu.ac.ug',
+        'first_name': 'AdminCreated',
+        'last_name': 'User',
+        'role': 'lecturer',
+        'password': 'initialadmincreatedpass'
+    }, format='json')
+    force_authenticate(req_create, user=sys_admin)
+    resp_create = view_user_create(req_create)
+    assert resp_create.status_code == 201, f"Admin user creation failed with status {resp_create.status_code}: {resp_create.data}"
+    created_u = User.objects.get(username='created_by_admin')
+    assert created_u.check_password('initialadmincreatedpass'), "User created by admin should have properly hashed password!"
+    assert created_u.must_change_password is True, "User created by admin should have must_change_password=True!"
+    print("✓ User created via Admin API has correctly hashed initial password.")
+
+    # Rule F: Self password change for all users
     change_view = ChangePasswordView.as_view()
     req_change = factory.post('/api/change-password/', {'current_password': 'newcoordpass123', 'new_password': 'selfcoordpass456'}, format='json')
     force_authenticate(req_change, user=p_coord)
@@ -178,7 +210,8 @@ def run_tests():
     assert resp_change.status_code == 200, "Platform Coordinator should be able to change their own password!"
     p_coord.refresh_from_db()
     assert p_coord.check_password('selfcoordpass456'), "Platform Coordinator password changed successfully via self-service!"
-    print("✓ Platform Coordinator successfully changed own password via self-service.")
+    assert p_coord.must_change_password is False, "must_change_password should revert to False after user changes password!"
+    print("✓ Platform Coordinator successfully changed own password via self-service (must_change_password reset to False).")
 
     print("\n==================================================")
     print("✅ ALL SYSTEM VERIFICATION CHECKS PASSED SUCCESSFULLY!")
