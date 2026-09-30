@@ -77,6 +77,23 @@ export default function TestPortalPage() {
   const [successMsg, setSuccessMsg] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
+  // Scorecard Preview Modal State
+  const [scorecardPreviewData, setScorecardPreviewData] = useState(null);
+  const [loadingScorecardPreview, setLoadingScorecardPreview] = useState(false);
+  const [editingQId, setEditingQId] = useState(null);
+  const [showScorecardAddQ, setShowScorecardAddQ] = useState(false);
+  const [qEditForm, setQEditForm] = useState({
+    question_text: '',
+    question_type: 'mcq',
+    option_a: '',
+    option_b: '',
+    option_c: '',
+    option_d: '',
+    correct_answer: 'A',
+    points: 1.0,
+    explanation: ''
+  });
+
   const isAdmin = user?.role === 'admin' || user?.role === 'platform_coordinator';
   const isExecutiveReadOnly = ['dvc', 'vc', 'dean'].includes(user?.role);
   const isStaff = ['lecturer', 'admin', 'faculty_admin', 'dean', 'registrar', 'dvc', 'vc'].includes(user?.role);
@@ -285,6 +302,52 @@ export default function TestPortalPage() {
       loadPortalData();
     } catch (err) {
       setErrorMsg(err.message || 'Publication status toggle failed.');
+    }
+  };
+
+  const handlePreviewScorecard = async (testItem) => {
+    try {
+      setLoadingScorecardPreview(true);
+      const data = await api.get(`/tests/${testItem.id}/preview_scorecard/`);
+      setScorecardPreviewData(data);
+      setEditingQId(null);
+      setShowScorecardAddQ(false);
+    } catch (err) {
+      setErrorMsg(err.message || 'Failed to load scorecard preview.');
+    } finally {
+      setLoadingScorecardPreview(false);
+    }
+  };
+
+  const handleSaveScorecardQuestion = async (testId, qId = null) => {
+    try {
+      if (qId) {
+        await api.patch(`/test-questions/${qId}/`, qEditForm);
+        setSuccessMsg('Question updated successfully inside scorecard!');
+      } else {
+        await api.post(`/tests/${testId}/questions/`, qEditForm);
+        setSuccessMsg('New question added to scorecard!');
+      }
+      setEditingQId(null);
+      setShowScorecardAddQ(false);
+      const updated = await api.get(`/tests/${testId}/preview_scorecard/`);
+      setScorecardPreviewData(updated);
+      loadPortalData();
+    } catch (err) {
+      setErrorMsg(err.message || 'Failed to save question.');
+    }
+  };
+
+  const handleDeleteScorecardQuestion = async (testId, qId) => {
+    if (!confirm('Are you sure you want to delete this question from the scorecard?')) return;
+    try {
+      await api.delete(`/test-questions/${qId}/`);
+      setSuccessMsg('Question deleted from scorecard.');
+      const updated = await api.get(`/tests/${testId}/preview_scorecard/`);
+      setScorecardPreviewData(updated);
+      loadPortalData();
+    } catch (err) {
+      setErrorMsg(err.message || 'Failed to delete question.');
     }
   };
 
@@ -781,6 +844,14 @@ export default function TestPortalPage() {
                                 title="Filter student submissions and view scorecards for this test"
                               >
                                 📊 Submissions ({attempts.filter(a => a.test === testItem.id).length})
+                              </button>
+
+                              <button
+                                onClick={() => handlePreviewScorecard(testItem)}
+                                className="px-2 py-1 bg-purple-50 hover:bg-purple-100 text-purple-800 border border-purple-200 text-xs font-bold rounded-lg transition-all"
+                                title="Preview and edit questions/answers for this set test using the score card layout"
+                              >
+                                👁️ Preview
                               </button>
                               
                               {!isExecutiveReadOnly && (
@@ -1599,6 +1670,399 @@ export default function TestPortalPage() {
             >
               Understand & Acknowledge
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* SCORE CARD LAYOUT PREVIEW MODAL */}
+      {scorecardPreviewData && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto animate-fade-in">
+          <div className="bg-white rounded-3xl max-w-3xl w-full p-6 md:p-8 space-y-6 shadow-2xl border border-slate-200 max-h-[90vh] overflow-y-auto custom-scrollbar">
+            
+            {/* Header Banner */}
+            <div className="flex items-start justify-between border-b border-slate-100 pb-4">
+              <div>
+                <span className="text-[10px] font-extrabold uppercase tracking-wider bg-purple-100 text-purple-800 border border-purple-200 px-3 py-1 rounded-full">
+                  📋 Score Card Layout Preview (Lecturer / Admin Draft View)
+                </span>
+                <h3 className="text-xl font-black text-slate-850 mt-2">{scorecardPreviewData.title}</h3>
+                <p className="text-xs text-slate-500 font-medium mt-0.5">
+                  Course: {scorecardPreviewData.course_code} ({scorecardPreviewData.course_name}) · Category: {scorecardPreviewData.category_display}
+                </p>
+              </div>
+              <button
+                onClick={() => setScorecardPreviewData(null)}
+                className="text-slate-400 hover:text-slate-600 font-extrabold text-xl p-1"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Scorecard Header Card Simulation */}
+            <div className={`rounded-2xl p-6 text-white text-center space-y-3 ${scorecardPreviewData.is_published ? 'bg-gradient-to-r from-emerald-900 to-slate-900' : 'bg-gradient-to-r from-amber-950 to-slate-900'}`}>
+              <div className="flex items-center justify-center space-x-2">
+                <span className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider border ${scorecardPreviewData.is_published ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' : 'bg-amber-500/20 text-amber-300 border-amber-500/30'}`}>
+                  {scorecardPreviewData.is_published ? '🟢 PUBLISHED (Visible to Students)' : '🟡 DRAFT (Unpublished - Hidden from Students)'}
+                </span>
+              </div>
+              
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-black/20 p-4 rounded-xl border border-white/10 text-xs mt-4">
+                <div>
+                  <span className="text-white/60 text-[10px] uppercase font-bold block">Pass Target</span>
+                  <span className="font-extrabold text-emerald-300">{scorecardPreviewData.pass_percentage}%</span>
+                </div>
+                <div>
+                  <span className="text-white/60 text-[10px] uppercase font-bold block">Duration</span>
+                  <span className="font-extrabold text-white">{scorecardPreviewData.duration_minutes} Mins</span>
+                </div>
+                <div>
+                  <span className="text-white/60 text-[10px] uppercase font-bold block">Questions</span>
+                  <span className="font-extrabold text-white">{scorecardPreviewData.total_questions} Questions</span>
+                </div>
+                <div>
+                  <span className="text-white/60 text-[10px] uppercase font-bold block">Target Year</span>
+                  <span className="font-extrabold text-amber-300">{scorecardPreviewData.year_of_study === 0 ? 'All Years' : `Year ${scorecardPreviewData.year_of_study}`}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Questions Breakdown & Editing */}
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h4 className="text-xs font-extrabold text-slate-800 uppercase tracking-wider">Scorecard Answer Key & Questions Editor</h4>
+                
+                {!isExecutiveReadOnly && canBuildTest && (
+                  <button
+                    onClick={() => {
+                      setEditingQId(null);
+                      setQEditForm({
+                        question_text: '',
+                        question_type: 'mcq',
+                        option_a: '',
+                        option_b: '',
+                        option_c: '',
+                        option_d: '',
+                        correct_answer: 'A',
+                        points: 1.0,
+                        explanation: ''
+                      });
+                      setShowScorecardAddQ(true);
+                    }}
+                    className="px-3 py-1.5 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-xl shadow-sm transition-all"
+                  >
+                    ➕ Add Question to Score Card
+                  </button>
+                )}
+              </div>
+
+              {/* Add New Question Form */}
+              {showScorecardAddQ && (
+                <div className="p-4 bg-purple-50/70 border-2 border-purple-200 rounded-2xl space-y-3 animate-fade-in text-xs">
+                  <h5 className="font-extrabold text-purple-950 uppercase text-xs">Add New Question to Score Card</h5>
+                  
+                  <textarea
+                    placeholder="Type question text..."
+                    value={qEditForm.question_text}
+                    onChange={(e) => setQEditForm({ ...qEditForm, question_text: e.target.value })}
+                    className="w-full px-3 py-2 bg-white border border-purple-200 rounded-xl"
+                    rows={2}
+                  />
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <input
+                      type="text"
+                      placeholder="Option A"
+                      value={qEditForm.option_a}
+                      onChange={(e) => setQEditForm({ ...qEditForm, option_a: e.target.value })}
+                      className="px-3 py-1.5 bg-white border border-purple-200 rounded-xl"
+                    />
+                    <input
+                      type="text"
+                      placeholder="Option B"
+                      value={qEditForm.option_b}
+                      onChange={(e) => setQEditForm({ ...qEditForm, option_b: e.target.value })}
+                      className="px-3 py-1.5 bg-white border border-purple-200 rounded-xl"
+                    />
+                    <input
+                      type="text"
+                      placeholder="Option C"
+                      value={qEditForm.option_c}
+                      onChange={(e) => setQEditForm({ ...qEditForm, option_c: e.target.value })}
+                      className="px-3 py-1.5 bg-white border border-purple-200 rounded-xl"
+                    />
+                    <input
+                      type="text"
+                      placeholder="Option D"
+                      value={qEditForm.option_d}
+                      onChange={(e) => setQEditForm({ ...qEditForm, option_d: e.target.value })}
+                      className="px-3 py-1.5 bg-white border border-purple-200 rounded-xl"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                    <div>
+                      <label className="block font-bold text-[10px] text-purple-900 uppercase mb-0.5">Correct Option</label>
+                      <select
+                        value={qEditForm.correct_answer}
+                        onChange={(e) => setQEditForm({ ...qEditForm, correct_answer: e.target.value })}
+                        className="w-full px-3 py-1.5 bg-white border border-purple-200 rounded-xl font-bold"
+                      >
+                        <option value="A">Option A</option>
+                        <option value="B">Option B</option>
+                        <option value="C">Option C</option>
+                        <option value="D">Option D</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block font-bold text-[10px] text-purple-900 uppercase mb-0.5">Points</label>
+                      <input
+                        type="number"
+                        step="0.5"
+                        value={qEditForm.points}
+                        onChange={(e) => setQEditForm({ ...qEditForm, points: parseFloat(e.target.value) })}
+                        className="w-full px-3 py-1.5 bg-white border border-purple-200 rounded-xl font-bold"
+                      />
+                    </div>
+                  </div>
+
+                  <textarea
+                    placeholder="Lecturer explanation (optional)..."
+                    value={qEditForm.explanation}
+                    onChange={(e) => setQEditForm({ ...qEditForm, explanation: e.target.value })}
+                    className="w-full px-3 py-1.5 bg-white border border-purple-200 rounded-xl"
+                    rows={1}
+                  />
+
+                  <div className="flex space-x-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => handleSaveScorecardQuestion(scorecardPreviewData.id)}
+                      className="px-4 py-1.5 bg-brand-light text-white font-bold rounded-xl text-xs"
+                    >
+                      💾 Save Question
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowScorecardAddQ(false)}
+                      className="px-3 py-1.5 bg-slate-200 text-slate-700 font-bold rounded-xl text-xs"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+              
+              {(!scorecardPreviewData.questions || scorecardPreviewData.questions.length === 0) ? (
+                <div className="p-8 text-center bg-slate-50 border border-dashed border-slate-300 rounded-2xl text-slate-500 text-xs italic">
+                  No questions added to this test yet. Click "Add Question to Score Card" above to set questions.
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {scorecardPreviewData.questions.map((q, idx) => {
+                    const isEditing = editingQId === q.id;
+
+                    if (isEditing) {
+                      return (
+                        <div key={q.id} className="p-4 bg-amber-50/80 border-2 border-amber-300 rounded-2xl space-y-3 text-xs animate-fade-in">
+                          <div className="flex items-center justify-between font-extrabold text-amber-950">
+                            <span>Editing Q{idx + 1}</span>
+                            <button onClick={() => setEditingQId(null)} className="text-slate-500 hover:text-slate-800">✕</button>
+                          </div>
+
+                          <textarea
+                            value={qEditForm.question_text}
+                            onChange={(e) => setQEditForm({ ...qEditForm, question_text: e.target.value })}
+                            className="w-full px-3 py-2 bg-white border border-amber-300 rounded-xl font-bold"
+                            rows={2}
+                          />
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            <input
+                              type="text"
+                              placeholder="Option A"
+                              value={qEditForm.option_a}
+                              onChange={(e) => setQEditForm({ ...qEditForm, option_a: e.target.value })}
+                              className="px-3 py-1.5 bg-white border border-amber-200 rounded-xl"
+                            />
+                            <input
+                              type="text"
+                              placeholder="Option B"
+                              value={qEditForm.option_b}
+                              onChange={(e) => setQEditForm({ ...qEditForm, option_b: e.target.value })}
+                              className="px-3 py-1.5 bg-white border border-amber-200 rounded-xl"
+                            />
+                            <input
+                              type="text"
+                              placeholder="Option C"
+                              value={qEditForm.option_c}
+                              onChange={(e) => setQEditForm({ ...qEditForm, option_c: e.target.value })}
+                              className="px-3 py-1.5 bg-white border border-amber-200 rounded-xl"
+                            />
+                            <input
+                              type="text"
+                              placeholder="Option D"
+                              value={qEditForm.option_d}
+                              onChange={(e) => setQEditForm({ ...qEditForm, option_d: e.target.value })}
+                              className="px-3 py-1.5 bg-white border border-amber-200 rounded-xl"
+                            />
+                          </div>
+
+                          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                            <div>
+                              <label className="block font-bold text-[10px] text-amber-900 uppercase mb-0.5">Correct Option</label>
+                              <select
+                                value={qEditForm.correct_answer}
+                                onChange={(e) => setQEditForm({ ...qEditForm, correct_answer: e.target.value })}
+                                className="w-full px-3 py-1.5 bg-white border border-amber-300 rounded-xl font-bold"
+                              >
+                                <option value="A">Option A</option>
+                                <option value="B">Option B</option>
+                                <option value="C">Option C</option>
+                                <option value="D">Option D</option>
+                              </select>
+                            </div>
+
+                            <div>
+                              <label className="block font-bold text-[10px] text-amber-900 uppercase mb-0.5">Points</label>
+                              <input
+                                type="number"
+                                step="0.5"
+                                value={qEditForm.points}
+                                onChange={(e) => setQEditForm({ ...qEditForm, points: parseFloat(e.target.value) })}
+                                className="w-full px-3 py-1.5 bg-white border border-amber-300 rounded-xl font-bold"
+                              />
+                            </div>
+                          </div>
+
+                          <textarea
+                            placeholder="Lecturer explanation..."
+                            value={qEditForm.explanation}
+                            onChange={(e) => setQEditForm({ ...qEditForm, explanation: e.target.value })}
+                            className="w-full px-3 py-1.5 bg-white border border-amber-200 rounded-xl"
+                            rows={1}
+                          />
+
+                          <div className="flex items-center justify-between pt-1">
+                            <div className="flex space-x-2">
+                              <button
+                                type="button"
+                                onClick={() => handleSaveScorecardQuestion(scorecardPreviewData.id, q.id)}
+                                className="px-4 py-1.5 bg-emerald-600 text-white font-bold rounded-xl text-xs"
+                              >
+                                💾 Save Changes
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setEditingQId(null)}
+                                className="px-3 py-1.5 bg-slate-200 text-slate-700 font-bold rounded-xl text-xs"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteScorecardQuestion(scorecardPreviewData.id, q.id)}
+                              className="px-3 py-1.5 bg-red-100 text-red-700 hover:bg-red-200 font-bold rounded-xl text-xs"
+                            >
+                              🗑️ Delete Question
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div key={q.id || idx} className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <span className="font-bold text-slate-800 text-xs">
+                            Q{idx + 1}: {q.question_text}
+                          </span>
+                          
+                          <div className="flex items-center space-x-2 shrink-0">
+                            <span className="text-[10px] font-bold bg-white text-slate-600 px-2 py-0.5 rounded border border-slate-200">
+                              {q.points || 1} Point(s)
+                            </span>
+
+                            {!isExecutiveReadOnly && canBuildTest && (
+                              <button
+                                onClick={() => {
+                                  setEditingQId(q.id);
+                                  setShowScorecardAddQ(false);
+                                  setQEditForm({
+                                    question_text: q.question_text || '',
+                                    question_type: q.question_type || 'mcq',
+                                    option_a: q.option_a || '',
+                                    option_b: q.option_b || '',
+                                    option_c: q.option_c || '',
+                                    option_d: q.option_d || '',
+                                    correct_answer: q.correct_answer || 'A',
+                                    points: q.points || 1.0,
+                                    explanation: q.explanation || ''
+                                  });
+                                }}
+                                className="px-2 py-0.5 bg-amber-100 text-amber-800 hover:bg-amber-200 text-[10px] font-extrabold rounded border border-amber-300"
+                              >
+                                ✏️ Edit
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        {q.question_type === 'mcq' && (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs font-medium">
+                            {['A', 'B', 'C', 'D'].map((optKey) => {
+                              const optText = q[`option_${optKey.toLowerCase()}`];
+                              const isCorrect = String(q.correct_answer).toUpperCase() === optKey;
+                              if (!optText) return null;
+                              return (
+                                <div key={optKey} className={`p-2.5 rounded-xl border flex items-center space-x-2 ${isCorrect ? 'bg-emerald-100/80 border-emerald-300 text-emerald-950 font-bold' : 'bg-white border-slate-200 text-slate-700'}`}>
+                                  <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-extrabold ${isCorrect ? 'bg-emerald-600 text-white' : 'bg-slate-200 text-slate-600'}`}>
+                                    {optKey}
+                                  </span>
+                                  <span>{optText}</span>
+                                  {isCorrect && <span className="ml-auto text-xs text-emerald-700 font-bold">✓ Official Key</span>}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        {q.explanation && (
+                          <p className="text-[11px] text-slate-600 italic bg-white p-2.5 rounded-xl border border-slate-200">
+                            💡 <strong>Lecturer Explanation:</strong> {q.explanation}
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer Actions */}
+            <div className="flex items-center justify-between pt-4 border-t border-slate-100">
+              <button
+                onClick={() => setScorecardPreviewData(null)}
+                className="px-5 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 text-xs font-bold rounded-xl transition-all"
+              >
+                Close Preview
+              </button>
+
+              {!isExecutiveReadOnly && (
+                <button
+                  onClick={async () => {
+                    await handleTogglePublish(scorecardPreviewData);
+                    const updated = await api.get(`/tests/${scorecardPreviewData.id}/preview_scorecard/`);
+                    setScorecardPreviewData(updated);
+                  }}
+                  className={`px-5 py-2 text-xs font-bold rounded-xl transition-all shadow-sm ${scorecardPreviewData.is_published ? 'bg-amber-600 hover:bg-amber-700 text-white' : 'bg-emerald-600 hover:bg-emerald-700 text-white'}`}
+                >
+                  {scorecardPreviewData.is_published ? 'Unpublish Test' : 'Publish Test Now'}
+                </button>
+              )}
+            </div>
+
           </div>
         </div>
       )}

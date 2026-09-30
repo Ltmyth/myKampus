@@ -28,6 +28,11 @@ class User(AbstractUser):
         (4, 'Year 4'),
     )
     year_of_study = models.IntegerField(choices=YEAR_OF_STUDY_CHOICES, default=1, help_text="Academic Year of Study for students (1-4)")
+    SEMESTER_CHOICES = (
+        (1, 'Semester 1'),
+        (2, 'Semester 2'),
+    )
+    semester = models.IntegerField(choices=SEMESTER_CHOICES, default=1, help_text="Current Semester of Study for students (1 or 2)")
     must_change_password = models.BooleanField(default=False, help_text="Flag indicating student must change one-time password on login")
 
     @property
@@ -133,6 +138,7 @@ class Exam(models.Model):
     year_of_study = models.IntegerField(choices=YEAR_SCOPING_CHOICES, default=0, help_text="Target academic year of study (0 for All Years, 1-4 for specific year)")
     due_date = models.DateTimeField(null=True, blank=True)
     is_active = models.BooleanField(default=False, db_index=True)
+    is_published = models.BooleanField(default=False, db_index=True)
     is_approved_by_dean = models.BooleanField(default=False)
     is_results_released = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -275,6 +281,7 @@ class ClassTimetable(models.Model):
         ('Thursday', 'Thursday'),
         ('Friday', 'Friday'),
         ('Saturday', 'Saturday'),
+        ('Sunday', 'Sunday'),
     )
     CLASS_TYPE_CHOICES = (
         ('lecture', 'Lecture'),

@@ -18,7 +18,7 @@ class UserSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ('id', 'username', 'email', 'first_name', 'last_name', 'role', 'phone', 'tuition_paid_percentage', 'faculty', 'faculty_name', 'faculty_code', 'assigned_courses', 'assigned_course_codes', 'reg_number', 'registration_number', 'year_of_study', 'must_change_password', 'is_test_cleared', 'is_exam_cleared', 'clearance_source')
+        fields = ('id', 'username', 'email', 'first_name', 'last_name', 'role', 'phone', 'tuition_paid_percentage', 'faculty', 'faculty_name', 'faculty_code', 'assigned_courses', 'assigned_course_codes', 'reg_number', 'registration_number', 'year_of_study', 'semester', 'must_change_password', 'is_test_cleared', 'is_exam_cleared', 'clearance_source')
         read_only_fields = ('role', 'registration_number')
 
     def get_assigned_course_codes(self, obj):
@@ -51,7 +51,7 @@ class AdminUserSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ('id', 'username', 'email', 'password', 'first_name', 'last_name', 'role', 'phone', 'tuition_paid_percentage', 'faculty', 'faculty_name', 'faculty_code', 'assigned_courses', 'assigned_course_codes', 'reg_number', 'registration_number', 'year_of_study', 'must_change_password', 'is_test_cleared', 'is_exam_cleared', 'clearance_source')
+        fields = ('id', 'username', 'email', 'password', 'first_name', 'last_name', 'role', 'phone', 'tuition_paid_percentage', 'faculty', 'faculty_name', 'faculty_code', 'assigned_courses', 'assigned_course_codes', 'reg_number', 'registration_number', 'year_of_study', 'semester', 'must_change_password', 'is_test_cleared', 'is_exam_cleared', 'clearance_source')
 
     def create(self, validated_data):
         password = validated_data.pop('password', None)

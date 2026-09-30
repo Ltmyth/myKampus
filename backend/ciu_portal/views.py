@@ -25,7 +25,7 @@ from .serializers import (
     TemporaryClearanceSerializer, QuestionBankSerializer, QuestionBankItemSerializer, ProctorSnapshotSerializer
 )
 
-from .permissions import IsAdmin, IsDVC, IsDean, IsFacultyAdmin, IsRegistrar, IsLecturer, IsStudent, IsStaffUser, IsExecutiveReadOnly
+from .permissions import IsAdmin, IsPlatformCoordinator, IsDVC, IsDean, IsFacultyAdmin, IsRegistrar, IsLecturer, IsStudent, IsStaffUser, IsExecutiveReadOnly
 from .clearance import fetch_external_cleared_students, check_student_clearance
 
 def authenticate_token_param(request):
@@ -158,8 +158,8 @@ class AdminUserViewSet(viewsets.ModelViewSet):
     def get_permissions(self):
         if self.action in ['list', 'retrieve']:
             return [permissions.IsAuthenticated()]
-        if self.action in ['promote_class']:
-            return [permissions.IsAuthenticated(), (IsAdmin | IsFacultyAdmin)()]
+        if self.action in ['promote_class', 'promote_students']:
+            return [permissions.IsAuthenticated(), (IsAdmin | IsPlatformCoordinator | IsLecturer | IsFacultyAdmin | IsDean)()]
         return [permissions.IsAuthenticated(), IsAdmin()]
 
     def get_queryset(self):
@@ -359,16 +359,36 @@ class AdminUserViewSet(viewsets.ModelViewSet):
             'count': updated_count
         })
 
-    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsAdmin | IsFacultyAdmin])
+    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsAdmin | IsPlatformCoordinator | IsLecturer | IsFacultyAdmin | IsDean])
     def promote_class(self, request):
         user = request.user
         faculty_id = request.data.get('faculty_id')
         course_id = request.data.get('course_id')
         current_year = request.data.get('current_year')
+        current_semester = request.data.get('current_semester')
+        promotion_target = request.data.get('promotion_target') or request.data.get('promotion_mode') or 'next_year'
+        target_year = request.data.get('target_year')
+        target_semester = request.data.get('target_semester')
         student_updates = request.data.get('students', [])
+        student_ids = request.data.get('student_ids', [])
+
+        if not student_updates and student_ids:
+            student_updates = [{'id': sid, 'selected': True} for sid in student_ids]
 
         if not student_updates or not isinstance(student_updates, list):
-            return Response({'detail': 'Please select students to promote.'}, status=status.HTTP_400_BAD_REQUEST)
+            qs = User.objects.filter(role='student')
+            if faculty_id:
+                qs = qs.filter(faculty_id=int(faculty_id))
+            if course_id:
+                qs = qs.filter(models.Q(assigned_courses__id=int(course_id)) | models.Q(course_applications__course_id=int(course_id), course_applications__status='approved')).distinct()
+            if current_year:
+                qs = qs.filter(year_of_study=int(current_year))
+            if current_semester:
+                qs = qs.filter(semester=int(current_semester))
+            student_updates = [{'id': st.id, 'selected': True} for st in qs]
+
+        if not student_updates:
+            return Response({'detail': 'No eligible student accounts found to promote.'}, status=status.HTTP_400_BAD_REQUEST)
 
         updated_count = 0
         updated_students = []
@@ -384,8 +404,28 @@ class AdminUserViewSet(viewsets.ModelViewSet):
                     if sec_faculty and st.faculty != sec_faculty:
                         continue
 
-                new_year = item.get('target_year') or (st.year_of_study + 1)
-                st.year_of_study = int(new_year)
+                cust_year = item.get('target_year')
+                cust_sem = item.get('target_semester')
+
+                if cust_year:
+                    st.year_of_study = int(cust_year)
+                elif promotion_target == 'next_semester':
+                    if st.semester == 1:
+                        st.semester = 2
+                    else:
+                        st.semester = 1
+                        st.year_of_study = min(4, st.year_of_study + 1)
+                elif promotion_target == 'next_year' or target_year:
+                    st.year_of_study = int(target_year) if target_year else min(4, st.year_of_study + 1)
+                    st.semester = 1
+                else:
+                    st.year_of_study = min(4, st.year_of_study + 1)
+
+                if cust_sem:
+                    st.semester = int(cust_sem)
+                elif target_semester:
+                    st.semester = int(target_semester)
+
                 if item.get('reg_number'):
                     st.reg_number = item.get('reg_number')
                 st.save()
@@ -394,8 +434,8 @@ class AdminUserViewSet(viewsets.ModelViewSet):
             except User.DoesNotExist:
                 continue
 
-        msg = f"Class Promotion Executed: Promoted {updated_count} student(s) to their next academic year."
-        log_system_event(user, f"CLASS_PROMOTION_SUCCESS: {msg}", level="INFO")
+        msg = f"Promotion Executed: Successfully promoted {updated_count} student(s) to Year {updated_students[0].year_of_study if updated_students else ''} (Semester {updated_students[0].semester if updated_students else ''})."
+        log_system_event(user, f"STUDENT_PROMOTION_SUCCESS: {msg}", level="INFO")
         return Response({
             'detail': msg,
             'count': updated_count,
@@ -1078,7 +1118,7 @@ class ExamViewSet(viewsets.ModelViewSet):
                 ).distinct()
             student_year = getattr(user, 'year_of_study', 1) or 1
             return Exam.objects.filter(
-                is_active=True,
+                models.Q(is_active=True) | models.Q(is_published=True),
                 course__in=student_courses
             ).filter(
                 models.Q(year_of_study=student_year) | models.Q(year_of_study=0) | models.Q(course_unit__year_of_study=student_year)
@@ -1213,6 +1253,50 @@ class ExamViewSet(viewsets.ModelViewSet):
             serializer.is_valid(raise_exception=True)
             serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsLecturer | IsAdmin | IsPlatformCoordinator])
+    def publish(self, request, pk=None):
+        exam = self.get_object()
+        user = request.user
+        if user.role == 'lecturer' and exam.lecturer != user:
+            if not (exam.course_unit and exam.course_unit.lecturers.filter(id=user.id).exists()):
+                raise serializers.ValidationError({"detail": "Permission Denied: Only the user who set the exam (or admin/coordinator) can publish or unpublish it."})
+        exam.is_active = not exam.is_active
+        exam.is_published = exam.is_active
+        exam.save()
+        log_system_event(user, f"Exam Publication Status set to {exam.is_published} for {exam.title}", level="INFO")
+        return Response({
+            'detail': f"Exam publication status set to {'PUBLISHED' if exam.is_published else 'DRAFT'}.",
+            'is_published': exam.is_published,
+            'is_active': exam.is_active
+        })
+
+    @action(detail=True, methods=['get'], permission_classes=[permissions.IsAuthenticated, IsLecturer | IsAdmin | IsPlatformCoordinator | IsFacultyAdmin | IsDean])
+    def preview_scorecard(self, request, pk=None):
+        exam = self.get_object()
+        questions = exam.questions.all()
+        questions_data = QuestionLecturerSerializer(questions, many=True).data
+        return Response({
+            'id': exam.id,
+            'title': exam.title,
+            'course_code': exam.course.code,
+            'course_name': exam.course.name,
+            'course_unit_code': exam.course_unit.code if exam.course_unit else None,
+            'course_unit_name': exam.course_unit.name if exam.course_unit else None,
+            'lecturer_name': exam.lecturer.get_full_name() or exam.lecturer.username,
+            'duration_minutes': exam.duration_minutes,
+            'scheduled_start': exam.scheduled_start,
+            'due_date': exam.due_date,
+            'year_of_study': exam.year_of_study,
+            'is_published': exam.is_published or exam.is_active,
+            'is_approved_by_dean': exam.is_approved_by_dean,
+            'is_results_released': exam.is_results_released,
+            'total_questions': questions.count(),
+            'pass_percentage': 50.0,
+            'questions': questions_data,
+            'preview_mode': True,
+            'card_type': 'exam_scorecard'
+        })
 
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsStudent])
     def start_attempt(self, request, pk=None):
@@ -1488,15 +1572,49 @@ class TestViewSet(viewsets.ModelViewSet):
                 raise serializers.ValidationError({"detail": "Permission Denied: You can only delete your own created tests."})
         instance.delete()
 
-    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsLecturer | IsAdmin])
+    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsLecturer | IsAdmin | IsPlatformCoordinator])
     def publish(self, request, pk=None):
         test_obj = self.get_object()
+        user = request.user
+        if user.role == 'lecturer' and test_obj.lecturer != user:
+            if not (test_obj.course_unit and test_obj.course_unit.lecturers.filter(id=user.id).exists()):
+                raise serializers.ValidationError({"detail": "Permission Denied: Only the user who set the test (or admin/coordinator) can publish or unpublish it."})
         test_obj.is_published = not test_obj.is_published
         test_obj.save()
-        log_system_event(request.user, f"Test Publication Status set to {test_obj.is_published} for {test_obj.title}", level="INFO")
+        log_system_event(user, f"Test Publication Status set to {test_obj.is_published} for {test_obj.title}", level="INFO")
         return Response({
             'detail': f"Test publication status set to {'PUBLISHED' if test_obj.is_published else 'DRAFT'}.",
             'is_published': test_obj.is_published
+        })
+
+    @action(detail=True, methods=['get'], permission_classes=[permissions.IsAuthenticated, IsLecturer | IsAdmin | IsPlatformCoordinator | IsFacultyAdmin | IsDean])
+    def preview_scorecard(self, request, pk=None):
+        test_obj = self.get_object()
+        questions = test_obj.questions.all()
+        questions_data = TestQuestionLecturerSerializer(questions, many=True).data
+        return Response({
+            'id': test_obj.id,
+            'title': test_obj.title,
+            'category': test_obj.category,
+            'category_display': test_obj.get_category_display(),
+            'course_code': test_obj.course.code,
+            'course_name': test_obj.course.name,
+            'course_unit_code': test_obj.course_unit.code if test_obj.course_unit else None,
+            'course_unit_name': test_obj.course_unit.name if test_obj.course_unit else None,
+            'lecturer_name': test_obj.lecturer.get_full_name() or test_obj.lecturer.username,
+            'duration_minutes': test_obj.duration_minutes,
+            'total_marks': test_obj.total_marks,
+            'pass_percentage': test_obj.pass_percentage,
+            'allowed_attempts': test_obj.allowed_attempts,
+            'is_published': test_obj.is_published,
+            'is_results_released': test_obj.is_results_released,
+            'year_of_study': test_obj.year_of_study,
+            'scheduled_start': test_obj.scheduled_start,
+            'due_date': test_obj.due_date,
+            'total_questions': questions.count(),
+            'questions': questions_data,
+            'preview_mode': True,
+            'card_type': 'test_scorecard'
         })
 
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsLecturer | IsAdmin])
@@ -2563,4 +2681,56 @@ class ProctoringMonitorViewSet(viewsets.ModelViewSet):
                 return Response({'detail': f'Warning issued to candidate {student.username}.', 'action': 'warning'})
         except User.DoesNotExist:
             return Response({'detail': 'Student not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+
+# 20. Question CRUD ViewSets for Scorecard Layout Editing
+class TestQuestionViewSet(viewsets.ModelViewSet):
+    queryset = TestQuestion.objects.all()
+    serializer_class = TestQuestionLecturerSerializer
+    permission_classes = [permissions.IsAuthenticated, IsLecturer | IsAdmin | IsPlatformCoordinator | IsFacultyAdmin]
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        test_obj = serializer.validated_data.get('test')
+        if user.role == 'lecturer' and test_obj and test_obj.lecturer != user:
+            raise serializers.ValidationError({"detail": "Permission Denied: You can only add questions to your own tests."})
+        serializer.save()
+
+    def perform_update(self, serializer):
+        user = self.request.user
+        if user.role == 'lecturer' and serializer.instance.test.lecturer != user:
+            raise serializers.ValidationError({"detail": "Permission Denied: You can only edit questions on your own tests."})
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        user = self.request.user
+        if user.role == 'lecturer' and instance.test.lecturer != user:
+            raise serializers.ValidationError({"detail": "Permission Denied: You can only delete questions from your own tests."})
+        instance.delete()
+
+
+class QuestionViewSet(viewsets.ModelViewSet):
+    queryset = Question.objects.all()
+    serializer_class = QuestionLecturerSerializer
+    permission_classes = [permissions.IsAuthenticated, IsLecturer | IsAdmin | IsPlatformCoordinator | IsFacultyAdmin]
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        exam_obj = serializer.validated_data.get('exam')
+        if user.role == 'lecturer' and exam_obj and exam_obj.lecturer != user:
+            raise serializers.ValidationError({"detail": "Permission Denied: You can only add questions to your own exams."})
+        serializer.save()
+
+    def perform_update(self, serializer):
+        user = self.request.user
+        if user.role == 'lecturer' and serializer.instance.exam.lecturer != user:
+            raise serializers.ValidationError({"detail": "Permission Denied: You can only edit questions on your own exams."})
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        user = self.request.user
+        if user.role == 'lecturer' and instance.exam.lecturer != user:
+            raise serializers.ValidationError({"detail": "Permission Denied: You can only delete questions from your own exams."})
+        instance.delete()
+
 

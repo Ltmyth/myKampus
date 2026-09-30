@@ -42,6 +42,8 @@ export default function FacultyManagementPage() {
   const [promotionCourseId, setPromotionCourseId] = useState('');
   const [promotionCurrentYear, setPromotionCurrentYear] = useState(1);
   const [promotionTargetYear, setPromotionTargetYear] = useState(2);
+  const [promotionMode, setPromotionMode] = useState('next_semester');
+  const [promotionTargetSemester, setPromotionTargetSemester] = useState(1);
   const [selectedStudentPromotionIds, setSelectedStudentPromotionIds] = useState([]);
   const [studentOverrides, setStudentOverrides] = useState({});
 
@@ -231,11 +233,13 @@ export default function FacultyManagementPage() {
 
     try {
       const res = await api.post('/admin/users/promote_class/', {
+        promotion_target: promotionMode, // 'next_semester' | 'next_year' | 'custom'
         target_year: parseInt(promotionTargetYear),
+        target_semester: parseInt(promotionTargetSemester || 1),
         student_ids: selectedStudentPromotionIds.map(id => parseInt(id)),
         overrides: studentOverrides
       });
-      setSuccessMsg(res.detail || `Class promotion executed successfully for ${selectedStudentPromotionIds.length} students!`);
+      setSuccessMsg(res.detail || `Class/Individual promotion executed successfully for ${selectedStudentPromotionIds.length} students!`);
       setShowPromotionModal(false);
       setSelectedStudentPromotionIds([]);
       setStudentOverrides({});
@@ -789,6 +793,12 @@ export default function FacultyManagementPage() {
         >
           👨‍🏫 Course Units & Lecturers ({courseUnits.length})
         </button>
+        <button
+          onClick={() => setActiveTab('courses')}
+          className={`pb-3 text-xs font-bold border-b-2 transition-all ${activeTab === 'courses' ? 'border-brand-light text-brand-dark' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
+        >
+          📚 Courses by Faculty ({courses.length})
+        </button>
         {isSecretaryOrStaff && (
           <button
             onClick={() => setActiveTab('students')}
@@ -799,6 +809,136 @@ export default function FacultyManagementPage() {
         )}
       </div>
 
+      {/* TAB: COURSES BY FACULTY */}
+      {activeTab === 'courses' && (
+        <div className="space-y-6 animate-fade-in">
+          
+          {/* Header Controls */}
+          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <h3 className="text-sm font-extrabold text-slate-850 uppercase tracking-wider">Academic Degree Programs & Courses by Faculty</h3>
+              <p className="text-slate-500 text-xs font-medium">Browse, view, and manage academic programs organized by respective university faculties.</p>
+            </div>
+            
+            {isSecretaryOrStaff && (
+              <button
+                onClick={() => {
+                  setEditingCourse(null);
+                  setCourseFormData({
+                    faculty: faculties[0]?.id || '',
+                    name: '',
+                    code: '',
+                    description: '',
+                    department: '',
+                    duration_years: 3
+                  });
+                  setShowCourseModal(true);
+                }}
+                className="px-4 py-2 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-xl shadow-sm transition-all flex items-center space-x-1.5 shrink-0"
+              >
+                <span>➕ Add New Course</span>
+              </button>
+            )}
+          </div>
+
+          {/* Faculty Groups View */}
+          <div className="space-y-6">
+            {faculties.map((fac) => {
+              const facCourses = courses.filter(c => c.faculty === fac.id);
+              return (
+                <div key={fac.id} className="green-card rounded-3xl p-6 space-y-4 shadow-sm border border-emerald-100">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-emerald-100 pb-3 gap-2">
+                    <div className="flex items-center space-x-3">
+                      <span className="px-3 py-1 bg-brand-light/10 text-brand-dark font-black text-xs rounded-xl border border-brand-light/20 uppercase tracking-wider">
+                        {fac.code}
+                      </span>
+                      <div>
+                        <h4 className="text-base font-extrabold text-slate-850">{fac.name}</h4>
+                        <p className="text-[11px] text-slate-500 font-medium">
+                          Dean: <strong className="text-slate-800">{fac.dean ? (deans.find(d => d.id === fac.dean)?.first_name || 'Assigned Dean') : 'Unassigned'}</strong> · 
+                          Secretary: <strong className="text-slate-800">{fac.secretary ? (secretaries.find(s => s.id === fac.secretary)?.first_name || 'Assigned Secretary') : 'Unassigned'}</strong>
+                        </p>
+                      </div>
+                    </div>
+                    <span className="text-xs font-extrabold text-emerald-800 bg-emerald-50 px-3 py-1 rounded-xl border border-emerald-200 shrink-0">
+                      {facCourses.length} Degree Program(s)
+                    </span>
+                  </div>
+
+                  {facCourses.length === 0 ? (
+                    <p className="text-slate-400 text-xs py-4 text-center italic bg-slate-50/50 rounded-2xl border border-slate-100">
+                      No courses registered under {fac.name} yet.
+                    </p>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {facCourses.map((c) => {
+                        const unitsCount = courseUnits.filter(u => u.course === c.id || u.course_code === c.code).length;
+                        return (
+                          <div key={c.id} className="p-4 bg-gradient-to-br from-white to-emerald-50/30 rounded-2xl border border-emerald-200/80 shadow-sm flex flex-col justify-between space-y-3 hover:border-emerald-300 transition-all">
+                            <div className="space-y-1.5">
+                              <div className="flex justify-between items-start">
+                                <span className="text-[10px] bg-brand-light/10 text-brand-medium font-bold px-2 py-0.5 rounded border border-brand-light/20">
+                                  {c.code}
+                                </span>
+                                <span className="text-[10px] bg-slate-100 text-slate-600 font-bold px-2 py-0.5 rounded border border-slate-200">
+                                  ⏱️ {c.duration_years || 3} Years
+                                </span>
+                              </div>
+                              <h5 className="font-extrabold text-slate-850 text-sm leading-snug">{c.name}</h5>
+                              {c.department && (
+                                <p className="text-[11px] text-slate-500 font-medium">🏢 {c.department}</p>
+                              )}
+                              {c.description && (
+                                <p className="text-xs text-slate-600 line-clamp-2 mt-1">{c.description}</p>
+                              )}
+                            </div>
+
+                            <div className="pt-2 border-t border-emerald-100/80 flex items-center justify-between text-xs">
+                              <span className="text-[11px] text-emerald-800 font-bold">
+                                📖 {unitsCount} Course Unit(s)
+                              </span>
+
+                              {isSecretaryOrStaff && (
+                                <div className="flex items-center space-x-1.5">
+                                  <button
+                                    onClick={() => {
+                                      setEditingCourse(c);
+                                      setCourseFormData({
+                                        faculty: c.faculty || fac.id,
+                                        name: c.name,
+                                        code: c.code,
+                                        description: c.description || '',
+                                        department: c.department || '',
+                                        duration_years: c.duration_years || 3
+                                      });
+                                      setShowCourseModal(true);
+                                    }}
+                                    className="px-2.5 py-1 bg-white hover:bg-emerald-50 text-brand-medium font-bold text-xs rounded-lg border border-emerald-200 transition-all"
+                                  >
+                                    ✏️ Edit
+                                  </button>
+                                  <button
+                                    onClick={() => handleDeleteCourse(c.id, c.code)}
+                                    className="px-2.5 py-1 bg-red-50 hover:bg-red-100 text-red-700 font-bold text-xs rounded-lg border border-red-200 transition-all"
+                                  >
+                                    🗑️ Delete
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+        </div>
+      )}
+
       {/* TAB 1: CLASS TIMETABLES */}
       {activeTab === 'timetables' && (
         <div className="space-y-6">
@@ -808,7 +948,7 @@ export default function FacultyManagementPage() {
             <div className="flex flex-wrap items-center gap-4">
               <div className="flex items-center space-x-2">
                 <span className="text-xs font-bold text-slate-500 uppercase">Day:</span>
-                {['All', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map((day) => (
+                {['All', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map((day) => (
                   <button
                     key={day}
                     onClick={() => setSelectedDayFilter(day)}
@@ -2103,7 +2243,7 @@ export default function FacultyManagementPage() {
                     onChange={(e) => setTtFormData({ ...ttFormData, day_of_week: e.target.value })}
                     className="w-full px-2 py-2 bg-slate-50 border border-slate-200 rounded-xl"
                   >
-                    {['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map(d => (
+                    {['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map(d => (
                       <option key={d} value={d}>{d}</option>
                     ))}
                   </select>
@@ -2445,26 +2585,59 @@ export default function FacultyManagementPage() {
             </div>
 
             <form onSubmit={handleExecutePromotion} className="space-y-4 text-xs">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-indigo-50/60 p-3.5 rounded-2xl border border-indigo-100">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-indigo-50/60 p-3.5 rounded-2xl border border-indigo-100">
                 <div>
                   <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
-                    Global Default Target Academic Year *
+                    Promotion Type *
                   </label>
                   <select
-                    value={promotionTargetYear}
-                    onChange={(e) => setPromotionTargetYear(Number(e.target.value))}
+                    value={promotionMode}
+                    onChange={(e) => setPromotionMode(e.target.value)}
                     className="w-full bg-white border border-slate-200 font-bold text-slate-800 rounded-xl px-3 py-2"
                   >
-                    <option value={2}>Promote to Year 2</option>
-                    <option value={3}>Promote to Year 3</option>
-                    <option value={4}>Promote to Year 4</option>
-                    <option value={5}>🎓 Graduate Class (Alumni Status)</option>
+                    <option value="next_semester">⏩ Promote to Next Semester (Sem 1 → Sem 2)</option>
+                    <option value="next_year">🎓 Promote to Next Academic Year (Year X → Year X+1)</option>
+                    <option value="custom">⚙️ Custom Target Year & Semester</option>
                   </select>
                 </div>
 
-                <div className="flex flex-col justify-center text-[11px] text-slate-600 font-medium">
-                  <p>Selected Students: <strong className="text-indigo-900 font-extrabold">{selectedStudentPromotionIds.length} accounts</strong></p>
-                  <p className="text-slate-500 mt-0.5">Use the table below to uncheck or set custom individual target years for repeaters or skipped terms.</p>
+                {promotionMode === 'custom' && (
+                  <>
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
+                        Target Academic Year
+                      </label>
+                      <select
+                        value={promotionTargetYear}
+                        onChange={(e) => setPromotionTargetYear(Number(e.target.value))}
+                        className="w-full bg-white border border-slate-200 font-bold text-slate-800 rounded-xl px-3 py-2"
+                      >
+                        <option value={1}>Year 1</option>
+                        <option value={2}>Year 2</option>
+                        <option value={3}>Year 3</option>
+                        <option value={4}>Year 4</option>
+                        <option value={5}>🎓 Graduate Class</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
+                        Target Semester
+                      </label>
+                      <select
+                        value={promotionTargetSemester}
+                        onChange={(e) => setPromotionTargetSemester(Number(e.target.value))}
+                        className="w-full bg-white border border-slate-200 font-bold text-slate-800 rounded-xl px-3 py-2"
+                      >
+                        <option value={1}>Semester 1</option>
+                        <option value={2}>Semester 2</option>
+                      </select>
+                    </div>
+                  </>
+                )}
+
+                <div className="flex flex-col justify-center text-[11px] text-slate-600 font-medium sm:col-span-3">
+                  <p>Targeting <strong className="text-indigo-900 font-extrabold">{selectedStudentPromotionIds.length} student account(s)</strong> for promotion.</p>
                 </div>
               </div>
 

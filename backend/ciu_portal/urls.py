@@ -7,7 +7,8 @@ from .views import (
     ApplicationViewSet, ExamViewSet, ExamAttemptViewSet, TestViewSet, TestAttemptViewSet,
     ClassContentViewSet, AttendanceSessionViewSet, ReportsViewSet,
     ClassTimetableViewSet, ExamTimetableViewSet, SystemLogViewSet, ProctoringSettingViewSet,
-    TemporaryClearanceViewSet, QuestionBankViewSet, QuestionBankItemViewSet, ProctoringMonitorViewSet
+    TemporaryClearanceViewSet, QuestionBankViewSet, QuestionBankItemViewSet, ProctoringMonitorViewSet,
+    TestQuestionViewSet, QuestionViewSet
 )
 
 router = DefaultRouter()
@@ -32,6 +33,8 @@ router.register('temporary-clearances', TemporaryClearanceViewSet, basename='tem
 router.register('question-banks', QuestionBankViewSet, basename='question-banks')
 router.register('question-bank-items', QuestionBankItemViewSet, basename='question-bank-items')
 router.register('proctoring-monitor', ProctoringMonitorViewSet, basename='proctoring-monitor')
+router.register('test-questions', TestQuestionViewSet, basename='test-questions')
+router.register('exam-questions', QuestionViewSet, basename='exam-questions')
 
 urlpatterns = [
     path('auth/login/', MyTokenObtainPairView.as_view(), name='token_obtain_pair'),

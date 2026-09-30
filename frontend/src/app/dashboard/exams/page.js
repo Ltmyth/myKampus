@@ -76,6 +76,19 @@ export default function ExamsPage() {
   const [successMsg, setSuccessMsg] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
+  // Scorecard Preview Modal State
+  const [examScorecardPreviewData, setExamScorecardPreviewData] = useState(null);
+  const [editingExamQId, setEditingExamQId] = useState(null);
+  const [showExamAddQ, setShowExamAddQ] = useState(false);
+  const [examQEditForm, setExamQEditForm] = useState({
+    question_text: '',
+    option_a: '',
+    option_b: '',
+    option_c: '',
+    option_d: '',
+    correct_option: 'A'
+  });
+
   const isAdmin = user?.role === 'admin' || user?.role === 'platform_coordinator';
   const isRegistrarOrStaff = ['registrar', 'admin'].includes(user?.role);
   const isExecutiveReadOnly = ['dvc', 'vc', 'dean'].includes(user?.role);
@@ -257,6 +270,62 @@ export default function ExamsPage() {
       setErrorMsg(err.message || 'Failed to update exam paper.');
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleToggleExamPublish = async (examItem) => {
+    if (isExecutiveReadOnly) return;
+    setErrorMsg('');
+    setSuccessMsg('');
+    try {
+      const res = await api.post(`/exams/${examItem.id}/publish/`);
+      setSuccessMsg(res.detail);
+      loadExamData();
+    } catch (err) {
+      setErrorMsg(err.message || 'Failed to toggle exam publish status.');
+    }
+  };
+
+  const handlePreviewExamScorecard = async (examItem) => {
+    try {
+      const data = await api.get(`/exams/${examItem.id}/preview_scorecard/`);
+      setExamScorecardPreviewData(data);
+      setEditingExamQId(null);
+      setShowExamAddQ(false);
+    } catch (err) {
+      setErrorMsg(err.message || 'Failed to load exam scorecard preview.');
+    }
+  };
+
+  const handleSaveExamScorecardQuestion = async (examId, qId = null) => {
+    try {
+      if (qId) {
+        await api.patch(`/exam-questions/${qId}/`, examQEditForm);
+        setSuccessMsg('Exam question updated successfully!');
+      } else {
+        await api.post(`/exams/${examId}/questions/`, examQEditForm);
+        setSuccessMsg('New question added to exam scorecard!');
+      }
+      setEditingExamQId(null);
+      setShowExamAddQ(false);
+      const updated = await api.get(`/exams/${examId}/preview_scorecard/`);
+      setExamScorecardPreviewData(updated);
+      loadExamData();
+    } catch (err) {
+      setErrorMsg(err.message || 'Failed to save exam question.');
+    }
+  };
+
+  const handleDeleteExamScorecardQuestion = async (examId, qId) => {
+    if (!confirm('Are you sure you want to delete this question from the exam paper?')) return;
+    try {
+      await api.delete(`/exam-questions/${qId}/`);
+      setSuccessMsg('Question deleted from exam scorecard.');
+      const updated = await api.get(`/exams/${examId}/preview_scorecard/`);
+      setExamScorecardPreviewData(updated);
+      loadExamData();
+    } catch (err) {
+      setErrorMsg(err.message || 'Failed to delete question.');
     }
   };
 
@@ -790,10 +859,25 @@ export default function ExamsPage() {
                                     📊 Submissions ({allAttempts.filter(a => a.exam === examItem.id).length})
                                   </button>
 
+                                  <button
+                                    onClick={() => handlePreviewExamScorecard(examItem)}
+                                    className="px-3 py-1.5 bg-purple-50 hover:bg-purple-100 text-purple-800 border border-purple-200 text-xs font-bold rounded-xl transition-all"
+                                    title="Preview and edit questions/answers for this set exam using the score card layout"
+                                  >
+                                    👁️ Preview
+                                  </button>
+
                                   {!isExecutiveReadOnly && (
                                     <>
                                       {(isAdmin || (isLecturer && !isLockedForLecturer)) && (
                                         <>
+                                          <button
+                                            onClick={() => handleToggleExamPublish(examItem)}
+                                            className={`px-3 py-1.5 text-xs font-bold rounded-xl transition-all ${examItem.is_active || examItem.is_published ? 'bg-amber-50 text-amber-800 border border-amber-200' : 'bg-brand-light text-white'}`}
+                                            title="Toggle exam publish status"
+                                          >
+                                            {examItem.is_active || examItem.is_published ? 'Unpublish' : 'Publish'}
+                                          </button>
                                           <button
                                             onClick={() => handleOpenEditExamModal(examItem)}
                                             className="px-3 py-1.5 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 text-emerald-800 text-xs font-bold rounded-xl transition-all"
@@ -1659,6 +1743,343 @@ export default function ExamsPage() {
             >
               Understand & Acknowledge
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* EXAM SCORE CARD LAYOUT PREVIEW MODAL */}
+      {examScorecardPreviewData && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto animate-fade-in">
+          <div className="bg-white rounded-3xl max-w-3xl w-full p-6 md:p-8 space-y-6 shadow-2xl border border-slate-200 max-h-[90vh] overflow-y-auto custom-scrollbar">
+            
+            {/* Header Banner */}
+            <div className="flex items-start justify-between border-b border-slate-100 pb-4">
+              <div>
+                <span className="text-[10px] font-extrabold uppercase tracking-wider bg-purple-100 text-purple-800 border border-purple-200 px-3 py-1 rounded-full">
+                  🎓 Final Exam Score Card Layout Preview (Lecturer / Admin Draft View)
+                </span>
+                <h3 className="text-xl font-black text-slate-850 mt-2">{examScorecardPreviewData.title}</h3>
+                <p className="text-xs text-slate-500 font-medium mt-0.5">
+                  Course: {examScorecardPreviewData.course_code} ({examScorecardPreviewData.course_name}) {examScorecardPreviewData.course_unit_name ? `· Unit: ${examScorecardPreviewData.course_unit_name}` : ''}
+                </p>
+              </div>
+              <button
+                onClick={() => setExamScorecardPreviewData(null)}
+                className="text-slate-400 hover:text-slate-600 font-extrabold text-xl p-1"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Scorecard Header Card Simulation */}
+            <div className={`rounded-2xl p-6 text-white text-center space-y-3 ${examScorecardPreviewData.is_published ? 'bg-gradient-to-r from-emerald-900 to-slate-900' : 'bg-gradient-to-r from-amber-950 to-slate-900'}`}>
+              <div className="flex items-center justify-center space-x-2">
+                <span className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider border ${examScorecardPreviewData.is_published ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' : 'bg-amber-500/20 text-amber-300 border-amber-500/30'}`}>
+                  {examScorecardPreviewData.is_published ? '🟢 PUBLISHED (Visible to Students upon scheduled start)' : '🟡 DRAFT (Unpublished - Hidden from Students)'}
+                </span>
+              </div>
+              
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-black/20 p-4 rounded-xl border border-white/10 text-xs mt-4">
+                <div>
+                  <span className="text-white/60 text-[10px] uppercase font-bold block">Pass Grade Target</span>
+                  <span className="font-extrabold text-emerald-300">50.0%</span>
+                </div>
+                <div>
+                  <span className="text-white/60 text-[10px] uppercase font-bold block">Exam Duration</span>
+                  <span className="font-extrabold text-white">{examScorecardPreviewData.duration_minutes} Mins</span>
+                </div>
+                <div>
+                  <span className="text-white/60 text-[10px] uppercase font-bold block">Total Questions</span>
+                  <span className="font-extrabold text-white">{examScorecardPreviewData.total_questions} Questions</span>
+                </div>
+                <div>
+                  <span className="text-white/60 text-[10px] uppercase font-bold block">Target Year</span>
+                  <span className="font-extrabold text-amber-300">{examScorecardPreviewData.year_of_study === 0 ? 'All Years' : `Year ${examScorecardPreviewData.year_of_study}`}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Questions Breakdown & Scorecard Editor */}
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h4 className="text-xs font-extrabold text-slate-800 uppercase tracking-wider">Examination Scorecard Answer Key & Questions Editor</h4>
+                
+                {!isExecutiveReadOnly && canBuildExam && (
+                  <button
+                    onClick={() => {
+                      setEditingExamQId(null);
+                      setExamQEditForm({
+                        question_text: '',
+                        option_a: '',
+                        option_b: '',
+                        option_c: '',
+                        option_d: '',
+                        correct_option: 'A'
+                      });
+                      setShowExamAddQ(true);
+                    }}
+                    className="px-3 py-1.5 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-xl shadow-sm transition-all"
+                  >
+                    ➕ Add Question to Score Card
+                  </button>
+                )}
+              </div>
+
+              {/* Add New Exam Question Form */}
+              {showExamAddQ && (
+                <div className="p-4 bg-purple-50/70 border-2 border-purple-200 rounded-2xl space-y-3 animate-fade-in text-xs">
+                  <h5 className="font-extrabold text-purple-950 uppercase text-xs">Add New Examination Question</h5>
+                  
+                  <textarea
+                    placeholder="Type exam question text..."
+                    value={examQEditForm.question_text}
+                    onChange={(e) => setExamQEditForm({ ...examQEditForm, question_text: e.target.value })}
+                    className="w-full px-3 py-2 bg-white border border-purple-200 rounded-xl"
+                    rows={2}
+                  />
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <input
+                      type="text"
+                      placeholder="Option A"
+                      value={examQEditForm.option_a}
+                      onChange={(e) => setExamQEditForm({ ...examQEditForm, option_a: e.target.value })}
+                      className="px-3 py-1.5 bg-white border border-purple-200 rounded-xl"
+                    />
+                    <input
+                      type="text"
+                      placeholder="Option B"
+                      value={examQEditForm.option_b}
+                      onChange={(e) => setExamQEditForm({ ...examQEditForm, option_b: e.target.value })}
+                      className="px-3 py-1.5 bg-white border border-purple-200 rounded-xl"
+                    />
+                    <input
+                      type="text"
+                      placeholder="Option C"
+                      value={examQEditForm.option_c}
+                      onChange={(e) => setExamQEditForm({ ...examQEditForm, option_c: e.target.value })}
+                      className="px-3 py-1.5 bg-white border border-purple-200 rounded-xl"
+                    />
+                    <input
+                      type="text"
+                      placeholder="Option D"
+                      value={examQEditForm.option_d}
+                      onChange={(e) => setExamQEditForm({ ...examQEditForm, option_d: e.target.value })}
+                      className="px-3 py-1.5 bg-white border border-purple-200 rounded-xl"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-[10px] text-purple-900 uppercase mb-0.5">Correct Option</label>
+                    <select
+                      value={examQEditForm.correct_option}
+                      onChange={(e) => setExamQEditForm({ ...examQEditForm, correct_option: e.target.value })}
+                      className="w-full max-w-xs px-3 py-1.5 bg-white border border-purple-200 rounded-xl font-bold"
+                    >
+                      <option value="A">Option A</option>
+                      <option value="B">Option B</option>
+                      <option value="C">Option C</option>
+                      <option value="D">Option D</option>
+                    </select>
+                  </div>
+
+                  <div className="flex space-x-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => handleSaveExamScorecardQuestion(examScorecardPreviewData.id)}
+                      className="px-4 py-1.5 bg-brand-light text-white font-bold rounded-xl text-xs"
+                    >
+                      💾 Save Question
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowExamAddQ(false)}
+                      className="px-3 py-1.5 bg-slate-200 text-slate-700 font-bold rounded-xl text-xs"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+              
+              {(!examScorecardPreviewData.questions || examScorecardPreviewData.questions.length === 0) ? (
+                <div className="p-8 text-center bg-slate-50 border border-dashed border-slate-300 rounded-2xl text-slate-500 text-xs italic">
+                  No examination questions set yet. Click "Add Question to Score Card" above to set questions.
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {examScorecardPreviewData.questions.map((q, idx) => {
+                    const isEditing = editingExamQId === q.id;
+
+                    if (isEditing) {
+                      return (
+                        <div key={q.id} className="p-4 bg-amber-50/80 border-2 border-amber-300 rounded-2xl space-y-3 text-xs animate-fade-in">
+                          <div className="flex items-center justify-between font-extrabold text-amber-950">
+                            <span>Editing Exam Q{idx + 1}</span>
+                            <button onClick={() => setEditingExamQId(null)} className="text-slate-500 hover:text-slate-800">✕</button>
+                          </div>
+
+                          <textarea
+                            value={examQEditForm.question_text}
+                            onChange={(e) => setExamQEditForm({ ...examQEditForm, question_text: e.target.value })}
+                            className="w-full px-3 py-2 bg-white border border-amber-300 rounded-xl font-bold"
+                            rows={2}
+                          />
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            <input
+                              type="text"
+                              placeholder="Option A"
+                              value={examQEditForm.option_a}
+                              onChange={(e) => setExamQEditForm({ ...examQEditForm, option_a: e.target.value })}
+                              className="px-3 py-1.5 bg-white border border-amber-200 rounded-xl"
+                            />
+                            <input
+                              type="text"
+                              placeholder="Option B"
+                              value={examQEditForm.option_b}
+                              onChange={(e) => setExamQEditForm({ ...examQEditForm, option_b: e.target.value })}
+                              className="px-3 py-1.5 bg-white border border-amber-200 rounded-xl"
+                            />
+                            <input
+                              type="text"
+                              placeholder="Option C"
+                              value={examQEditForm.option_c}
+                              onChange={(e) => setExamQEditForm({ ...examQEditForm, option_c: e.target.value })}
+                              className="px-3 py-1.5 bg-white border border-amber-200 rounded-xl"
+                            />
+                            <input
+                              type="text"
+                              placeholder="Option D"
+                              value={examQEditForm.option_d}
+                              onChange={(e) => setExamQEditForm({ ...examQEditForm, option_d: e.target.value })}
+                              className="px-3 py-1.5 bg-white border border-amber-200 rounded-xl"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block font-bold text-[10px] text-amber-900 uppercase mb-0.5">Correct Option</label>
+                            <select
+                              value={examQEditForm.correct_option}
+                              onChange={(e) => setExamQEditForm({ ...examQEditForm, correct_option: e.target.value })}
+                              className="w-full max-w-xs px-3 py-1.5 bg-white border border-amber-300 rounded-xl font-bold"
+                            >
+                              <option value="A">Option A</option>
+                              <option value="B">Option B</option>
+                              <option value="C">Option C</option>
+                              <option value="D">Option D</option>
+                            </select>
+                          </div>
+
+                          <div className="flex items-center justify-between pt-1">
+                            <div className="flex space-x-2">
+                              <button
+                                type="button"
+                                onClick={() => handleSaveExamScorecardQuestion(examScorecardPreviewData.id, q.id)}
+                                className="px-4 py-1.5 bg-emerald-600 text-white font-bold rounded-xl text-xs"
+                              >
+                                💾 Save Changes
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setEditingExamQId(null)}
+                                className="px-3 py-1.5 bg-slate-200 text-slate-700 font-bold rounded-xl text-xs"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteExamScorecardQuestion(examScorecardPreviewData.id, q.id)}
+                              className="px-3 py-1.5 bg-red-100 text-red-700 hover:bg-red-200 font-bold rounded-xl text-xs"
+                            >
+                              🗑️ Delete Question
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div key={q.id || idx} className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <span className="font-bold text-slate-800 text-xs">
+                            Q{idx + 1}: {q.question_text}
+                          </span>
+                          
+                          <div className="flex items-center space-x-2 shrink-0">
+                            <span className="text-[10px] font-bold bg-white text-slate-600 px-2 py-0.5 rounded border border-slate-200">
+                              1 Point
+                            </span>
+
+                            {!isExecutiveReadOnly && canBuildExam && (
+                              <button
+                                onClick={() => {
+                                  setEditingExamQId(q.id);
+                                  setShowExamAddQ(false);
+                                  setExamQEditForm({
+                                    question_text: q.question_text || '',
+                                    option_a: q.option_a || '',
+                                    option_b: q.option_b || '',
+                                    option_c: q.option_c || '',
+                                    option_d: q.option_d || '',
+                                    correct_option: q.correct_option || 'A'
+                                  });
+                                }}
+                                className="px-2 py-0.5 bg-amber-100 text-amber-800 hover:bg-amber-200 text-[10px] font-extrabold rounded border border-amber-300"
+                              >
+                                ✏️ Edit
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs font-medium">
+                          {['A', 'B', 'C', 'D'].map((optKey) => {
+                            const optText = q[`option_${optKey.toLowerCase()}`];
+                            const isCorrect = String(q.correct_option).toUpperCase() === optKey;
+                            if (!optText) return null;
+                            return (
+                              <div key={optKey} className={`p-2.5 rounded-xl border flex items-center space-x-2 ${isCorrect ? 'bg-emerald-100/80 border-emerald-300 text-emerald-950 font-bold' : 'bg-white border-slate-200 text-slate-700'}`}>
+                                <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-extrabold ${isCorrect ? 'bg-emerald-600 text-white' : 'bg-slate-200 text-slate-600'}`}>
+                                  {optKey}
+                                </span>
+                                <span>{optText}</span>
+                                {isCorrect && <span className="ml-auto text-xs text-emerald-700 font-bold">✓ Official Key</span>}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer Actions */}
+            <div className="flex items-center justify-between pt-4 border-t border-slate-100">
+              <button
+                onClick={() => setExamScorecardPreviewData(null)}
+                className="px-5 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 text-xs font-bold rounded-xl transition-all"
+              >
+                Close Preview
+              </button>
+
+              {!isExecutiveReadOnly && (
+                <button
+                  onClick={async () => {
+                    await handleToggleExamPublish(examScorecardPreviewData);
+                    const updated = await api.get(`/exams/${examScorecardPreviewData.id}/preview_scorecard/`);
+                    setExamScorecardPreviewData(updated);
+                  }}
+                  className={`px-5 py-2 text-xs font-bold rounded-xl transition-all shadow-sm ${examScorecardPreviewData.is_published ? 'bg-amber-600 hover:bg-amber-700 text-white' : 'bg-emerald-600 hover:bg-emerald-700 text-white'}`}
+                >
+                  {examScorecardPreviewData.is_published ? 'Unpublish Exam' : 'Publish Exam Now'}
+                </button>
+              )}
+            </div>
+
           </div>
         </div>
       )}
