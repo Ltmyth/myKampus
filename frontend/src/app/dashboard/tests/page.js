@@ -77,6 +77,18 @@ export default function TestPortalPage() {
   const [successMsg, setSuccessMsg] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
+  // Aiken TXT Upload Modal State
+  const [showTxtModal, setShowTxtModal] = useState(false);
+  const [txtMode, setTxtMode] = useState('new'); // 'new' | 'append'
+  const [txtFile, setTxtFile] = useState(null);
+  const [txtText, setTxtText] = useState('');
+  const [txtTitle, setTxtTitle] = useState('');
+  const [txtCourseUnit, setTxtCourseUnit] = useState('');
+  const [txtDuration, setTxtDuration] = useState(60);
+  const [txtScheduledStart, setTxtScheduledStart] = useState('');
+  const [txtDueDate, setTxtDueDate] = useState('');
+  const [txtCategory, setTxtCategory] = useState('unit_test');
+
   // Scorecard Preview Modal State
   const [scorecardPreviewData, setScorecardPreviewData] = useState(null);
   const [loadingScorecardPreview, setLoadingScorecardPreview] = useState(false);
@@ -290,6 +302,91 @@ export default function TestPortalPage() {
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const handleUploadTxtTest = async (e) => {
+    e.preventDefault();
+    if (!txtFile && !txtText.trim()) {
+      setErrorMsg('Please select a .txt file or paste Aiken formatted text.');
+      return;
+    }
+    setErrorMsg('');
+    setSuccessMsg('');
+    setSubmitting(true);
+    try {
+      const formData = new FormData();
+      if (txtFile) {
+        formData.append('file', txtFile);
+      } else {
+        formData.append('txt_text', txtText);
+      }
+
+      if (txtMode === 'append' && selectedTest) {
+        const res = await api.post(`/tests/${selectedTest.id}/import_txt_questions/`, formData);
+        setSuccessMsg(res.detail || `Successfully imported ${res.questions_imported || 0} questions into test!`);
+        setShowTxtModal(false);
+        setTxtFile(null);
+        setTxtText('');
+        const qData = await api.get(`/test-questions/?test_id=${selectedTest.id}`);
+        setQuestions(qData || []);
+        loadPortalData();
+      } else {
+        if (!txtCourseUnit) {
+          setErrorMsg('Please select a Course Unit for the new test.');
+          setSubmitting(false);
+          return;
+        }
+        formData.append('title', txtTitle || 'Aiken Imported Test');
+        formData.append('course_unit', txtCourseUnit);
+        formData.append('category', txtCategory);
+        formData.append('duration_minutes', txtDuration);
+        if (txtScheduledStart) formData.append('scheduled_start', txtScheduledStart);
+        if (txtDueDate) formData.append('due_date', txtDueDate);
+
+        const res = await api.post('/tests/create_from_txt/', formData);
+        setSuccessMsg(res.detail || `Test "${res.title}" created with ${res.questions_count || 0} questions!`);
+        setShowTxtModal(false);
+        setTxtFile(null);
+        setTxtText('');
+        loadPortalData();
+      }
+    } catch (err) {
+      setErrorMsg(err.message || 'Failed to import .txt test paper. Check Aiken formatting.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const downloadSampleAiken = () => {
+    const sample = `A patient correctly states their name but cannot identify the hospital or date. How should this be documented?
+A. Alert and oriented ×3
+B. Alert and oriented ×2
+C. Disoriented
+D. Confused
+ANSWER: B
+
+A patient opens eyes only when painful stimuli is applied. This level of consciousness is:
+A. Lethargic
+B. Obtunded
+C. Stuporous
+D. Comatose
+ANSWER: C
+
+Double vision (diplopia) indicates dysfunction of:
+A. CN I
+B. CN II
+C. CN III, IV, or VI
+D. CN VIII
+ANSWER: C`;
+    const blob = new Blob([sample], { type: 'text/plain' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'sample_aiken_questions.txt';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    window.URL.revokeObjectURL(url);
   };
 
   const handleTogglePublish = async (testItem) => {
@@ -940,7 +1037,26 @@ export default function TestPortalPage() {
           
           {/* Create Test Form */}
           <div className="green-card rounded-2xl p-6 space-y-4">
-            <h3 className="text-sm font-bold text-slate-850 uppercase tracking-wider">Create New Test</h3>
+            <div className="flex items-center justify-between border-b border-emerald-100 pb-2">
+              <h3 className="text-sm font-bold text-slate-850 uppercase tracking-wider">Create New Test</h3>
+              <button
+                type="button"
+                onClick={() => {
+                  setTxtMode('new');
+                  setTxtTitle('');
+                  setTxtCourseUnit(selectedCourseUnit || (assignedCourseUnits[0]?.id || ''));
+                  setTxtScheduledStart(getUgandanNowDatetimeLocal());
+                  const d = new Date();
+                  d.setDate(d.getDate() + 2);
+                  setTxtDueDate(toUgandanDatetimeLocal(d.toISOString()));
+                  setShowTxtModal(true);
+                }}
+                className="px-2.5 py-1 bg-teal-50 text-teal-800 hover:bg-teal-100 border border-teal-200 text-xs font-bold rounded-lg transition-all flex items-center space-x-1"
+                title="Translate a .txt Aiken format file into a test paper"
+              >
+                <span>📄 Upload .TXT Paper</span>
+              </button>
+            </div>
 
             <form onSubmit={handleCreateTest} className="space-y-3">
               <div>
@@ -1197,6 +1313,16 @@ export default function TestPortalPage() {
                         >
                           ⚡ Seed Sample Package
                         </button>
+                        <button
+                          onClick={() => {
+                            setTxtMode('append');
+                            setShowTxtModal(true);
+                          }}
+                          className="px-3 py-1.5 bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold rounded-lg transition-all shadow-sm flex items-center space-x-1"
+                          title="Import questions from .txt Aiken file into this test"
+                        >
+                          <span>📄 Import .TXT</span>
+                        </button>
                       </>
                     )}
                     <button
@@ -1293,7 +1419,6 @@ export default function TestPortalPage() {
                         <select value={qType} onChange={(e) => setQType(e.target.value)} className="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs font-semibold">
                           <option value="mcq">Multiple Choice</option>
                           <option value="tf">True / False</option>
-                          <option value="short">Short Answer</option>
                         </select>
                       </div>
                       <div>
@@ -1313,7 +1438,7 @@ export default function TestPortalPage() {
 
                     <div>
                       <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Correct Answer / Key</label>
-                      <input type="text" placeholder="A, B, C, D, True, False, or short answer text" value={correctAnswer} onChange={(e) => setCorrectAnswer(e.target.value)} className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold" required />
+                      <input type="text" placeholder="e.g. A, B, C, D, True, or False" value={correctAnswer} onChange={(e) => setCorrectAnswer(e.target.value)} className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold" required />
                     </div>
 
                     <button type="submit" disabled={submitting} className="w-full py-2 bg-brand-light text-white text-xs font-bold rounded-lg shadow-sm">
@@ -2063,6 +2188,170 @@ export default function TestPortalPage() {
               )}
             </div>
 
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: AIKEN TXT IMPORT & TRANSLATION */}
+      {showTxtModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4 animate-fade-in">
+          <div className="bg-white rounded-3xl max-w-xl w-full p-6 space-y-4 shadow-2xl border border-slate-100 max-h-[90vh] overflow-y-auto custom-scrollbar">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <div>
+                <h3 className="text-base font-bold text-slate-850">
+                  {txtMode === 'append' ? `Import Questions into "${selectedTest?.title}"` : 'Translate .TXT File into Test Paper'}
+                </h3>
+                <p className="text-xs text-slate-500 font-medium">Standard Aiken Format Parser (Questions, Options A-D, ANSWER: X)</p>
+              </div>
+              <button onClick={() => setShowTxtModal(false)} className="text-slate-400 hover:text-slate-600 font-bold">✕</button>
+            </div>
+
+            <form onSubmit={handleUploadTxtTest} className="space-y-3 text-xs">
+              <div className="p-3 bg-teal-50 border border-teal-200 rounded-xl space-y-1.5 text-teal-900">
+                <p className="font-bold flex items-center justify-between">
+                  <span>Aiken Format Structure:</span>
+                  <span className="text-[10px] bg-teal-100 text-teal-800 px-2 py-0.5 rounded font-extrabold">Instant Auto-Translation</span>
+                </p>
+                <div className="font-mono text-[10.5px] bg-white p-2 rounded-lg border border-teal-200 text-slate-700 leading-relaxed">
+                  Question text goes here on line 1<br/>
+                  A. First option<br/>
+                  B. Second option<br/>
+                  C. Third option<br/>
+                  D. Fourth option<br/>
+                  ANSWER: B
+                </div>
+              </div>
+
+              {txtMode === 'new' && (
+                <div className="space-y-2.5">
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Target Course Unit *</label>
+                      <select
+                        value={txtCourseUnit}
+                        onChange={(e) => setTxtCourseUnit(e.target.value)}
+                        className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold"
+                        required
+                      >
+                        <option value="">-- Select Course Unit --</option>
+                        {assignedCourseUnits.map(u => (
+                          <option key={u.id} value={u.id}>[{u.code}] {u.name}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Category</label>
+                      <select
+                        value={txtCategory}
+                        onChange={(e) => setTxtCategory(e.target.value)}
+                        className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold"
+                      >
+                        <option value="unit_test">Unit Test</option>
+                        <option value="quiz">Quiz</option>
+                        <option value="practice">Practice Test</option>
+                        <option value="midterm">Midterm Test</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Test Title *</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Neurology Clinical Assessment Test"
+                      value={txtTitle}
+                      onChange={(e) => setTxtTitle(e.target.value)}
+                      className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold"
+                      required
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <label className="block text-[10px] text-slate-600 font-bold uppercase mb-0.5">Duration (mins)</label>
+                      <input
+                        type="number"
+                        value={txtDuration}
+                        onChange={(e) => setTxtDuration(e.target.value)}
+                        className="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] text-slate-600 font-bold uppercase mb-0.5">Start Time (EAT)</label>
+                      <input
+                        type="datetime-local"
+                        value={txtScheduledStart}
+                        onChange={(e) => setTxtScheduledStart(e.target.value)}
+                        className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg text-[11px] font-semibold"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] text-slate-600 font-bold uppercase mb-0.5">Due Date (EAT)</label>
+                      <input
+                        type="datetime-local"
+                        value={txtDueDate}
+                        onChange={(e) => setTxtDueDate(e.target.value)}
+                        className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg text-[11px] font-semibold"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <label className="block text-slate-700 font-bold uppercase mb-1">Select .txt File (e.g. neuro.txt)</label>
+                <input
+                  type="file"
+                  accept=".txt"
+                  onChange={(e) => setTxtFile(e.target.files[0])}
+                  className="w-full text-xs text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-bold file:bg-teal-50 file:text-teal-800 hover:file:bg-teal-100"
+                />
+              </div>
+
+              <div className="relative flex py-1 items-center">
+                <div className="flex-grow border-t border-slate-200"></div>
+                <span className="flex-shrink mx-3 text-slate-400 text-[10px] uppercase font-bold">Or Paste Aiken Content</span>
+                <div className="flex-grow border-t border-slate-200"></div>
+              </div>
+
+              <div>
+                <textarea
+                  rows={4}
+                  value={txtText}
+                  onChange={(e) => setTxtText(e.target.value)}
+                  placeholder="Paste question text, options A-D, and ANSWER: X here..."
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-mono text-[11px] resize-none"
+                />
+              </div>
+
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={downloadSampleAiken}
+                  className="text-teal-700 hover:text-teal-800 text-[11px] font-bold underline flex items-center space-x-1"
+                >
+                  <span>📥 Download Sample Aiken .txt</span>
+                </button>
+
+                <div className="flex items-center space-x-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowTxtModal(false)}
+                    className="px-4 py-2 bg-slate-100 text-slate-600 font-bold rounded-xl hover:bg-slate-200"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={submitting}
+                    className="px-5 py-2 bg-teal-600 hover:bg-teal-700 text-white font-bold rounded-xl shadow-md disabled:opacity-50"
+                  >
+                    {submitting ? 'Translating...' : txtMode === 'append' ? 'Translate & Append' : 'Translate & Create Test'}
+                  </button>
+                </div>
+              </div>
+            </form>
           </div>
         </div>
       )}

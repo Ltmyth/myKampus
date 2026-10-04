@@ -1,4 +1,5 @@
 import csv
+import re
 import random
 from django.db import models
 from django.utils import timezone
@@ -244,7 +245,8 @@ class AdminUserViewSet(viewsets.ModelViewSet):
     def update(self, request, *args, **kwargs):
         user_obj = self.get_object()
         if request.user.role == 'platform_coordinator' and user_obj.role == 'admin':
-            return Response({'detail': 'Platform Coordinator cannot modify System Admin accounts.'}, status=status.HTTP_403_FORBIDDEN)
+            if 'password' in request.data or 'new_password' in request.data:
+                return Response({'detail': 'Platform Coordinator cannot reset or change System Admin password.'}, status=status.HTTP_403_FORBIDDEN)
         return super().update(request, *args, **kwargs)
 
     def destroy(self, request, *args, **kwargs):
@@ -358,6 +360,154 @@ class AdminUserViewSet(viewsets.ModelViewSet):
             'detail': msg,
             'count': updated_count
         })
+
+    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsAdmin | IsFacultyAdmin | IsRegistrar])
+    def bulk_allocate_csv(self, request):
+        csv_file = request.FILES.get('file') or request.FILES.get('csv_file')
+        csv_text = request.data.get('csv_text')
+
+        if not csv_file and not csv_text:
+            return Response({'detail': 'Please upload a CSV file or provide csv_text data.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        lines = []
+        if csv_file:
+            decoded = csv_file.read().decode('utf-8-sig', errors='ignore')
+            lines = decoded.splitlines()
+        elif csv_text:
+            lines = csv_text.splitlines()
+
+        reader = csv.reader(lines)
+        header = None
+        allocated_count = 0
+        duplicate_count = 0
+        not_found_count = 0
+        total_rows = 0
+        seen_entries = set()
+
+        for row in reader:
+            if not row or not any(row):
+                continue
+            if header is None:
+                header = [c.strip().lower() for c in row]
+                continue
+
+            total_rows += 1
+            row_dict = {}
+            for i, val in enumerate(row):
+                if i < len(header):
+                    row_dict[header[i]] = val.strip()
+
+            reg_num = (row_dict.get('reg_number') or row_dict.get('reg_no') or row_dict.get('reg no') or
+                       row_dict.get('registration_number') or row_dict.get('student_id') or
+                       row_dict.get('username') or row_dict.get('email') or '')
+            faculty_code = (row_dict.get('faculty_code') or row_dict.get('faculty') or row_dict.get('faculty code') or
+                            row_dict.get('fac') or '')
+            course_code = (row_dict.get('course_code') or row_dict.get('course') or row_dict.get('course code') or
+                           row_dict.get('program') or row_dict.get('program_code') or '')
+            year_val_raw = (row_dict.get('year_of_study') or row_dict.get('year') or row_dict.get('year of study') or
+                            row_dict.get('yos') or '')
+            semester_raw = (row_dict.get('semester') or row_dict.get('sem') or '')
+
+            if not reg_num:
+                continue
+
+            # Deduplication key across file batch
+            batch_key = (reg_num.lower(), faculty_code.lower(), course_code.lower(), str(year_val_raw), str(semester_raw))
+            if batch_key in seen_entries:
+                duplicate_count += 1
+                continue
+            seen_entries.add(batch_key)
+
+            # Locate student
+            student = (User.objects.filter(role='student', reg_number__iexact=reg_num).first() or
+                       User.objects.filter(role='student', username__iexact=reg_num).first() or
+                       User.objects.filter(role='student', email__iexact=reg_num).first() or
+                       User.objects.filter(reg_number__iexact=reg_num).first())
+
+            if not student:
+                not_found_count += 1
+                continue
+
+            # Check Faculty restrictions for Faculty Admin / Secretary
+            target_fac = None
+            if faculty_code:
+                target_fac = Faculty.objects.filter(code__iexact=faculty_code).first() or Faculty.objects.filter(name__icontains=faculty_code).first()
+
+            if request.user.role in ['faculty_admin', 'dean']:
+                user_fac = request.user.faculty or (request.user.administered_faculties.first() if hasattr(request.user, 'administered_faculties') else None)
+                if user_fac and target_fac and target_fac != user_fac:
+                    continue
+
+            # Course lookup
+            target_course = None
+            if course_code:
+                target_course = Course.objects.filter(code__iexact=course_code).first() or Course.objects.filter(name__icontains=course_code).first()
+
+            # Year of study
+            year_val = None
+            if year_val_raw:
+                cleaned_yr = re.sub(r'[^\d]', '', str(year_val_raw))
+                if cleaned_yr and int(cleaned_yr) in [1, 2, 3, 4]:
+                    year_val = int(cleaned_yr)
+
+            # Semester
+            sem_val = None
+            if semester_raw:
+                cleaned_sem = re.sub(r'[^\d]', '', str(semester_raw))
+                if cleaned_sem and int(cleaned_sem) in [1, 2]:
+                    sem_val = int(cleaned_sem)
+
+            # Check if student already has this exact allocation (idempotent / duplicate ignore)
+            is_already_allocated = True
+            if target_fac and student.faculty != target_fac:
+                is_already_allocated = False
+            if target_course and not student.assigned_courses.filter(id=target_course.id).exists():
+                is_already_allocated = False
+            if year_val is not None and student.year_of_study != year_val:
+                is_already_allocated = False
+            if sem_val is not None and student.semester != sem_val:
+                is_already_allocated = False
+
+            if is_already_allocated:
+                duplicate_count += 1
+                continue
+
+            # Apply changes
+            if target_fac:
+                student.faculty = target_fac
+            if year_val is not None:
+                student.year_of_study = year_val
+            if sem_val is not None:
+                student.semester = sem_val
+            student.save()
+
+            if target_course:
+                student.assigned_courses.add(target_course)
+
+            allocated_count += 1
+
+        msg = f"Bulk student allocation completed: {allocated_count} unique student allocation(s) applied. {duplicate_count} duplicate row(s) ignored."
+        log_system_event(request.user, "BULK_STUDENT_ALLOCATION_CSV_SUCCESS", level="AUDIT", details=msg)
+        return Response({
+            'detail': msg,
+            'allocated_count': allocated_count,
+            'updated': allocated_count,
+            'duplicate_count': duplicate_count,
+            'skipped_duplicates': duplicate_count,
+            'not_found_count': not_found_count,
+            'total_rows': total_rows
+        })
+
+    @action(detail=False, methods=['get'])
+    def sample_allocation_csv(self, request):
+        response = HttpResponse(content_type='text/csv')
+        response['Content-Disposition'] = 'attachment; filename="sample_student_allocations.csv"'
+        writer = csv.writer(response)
+        writer.writerow(['reg_number', 'faculty_code', 'course_code', 'year_of_study', 'semester'])
+        writer.writerow(['2026SOBAT-A001', 'SOBAT', 'BIT2026', '2', '1'])
+        writer.writerow(['2026FST-A002', 'FST', 'BCS2026', '1', '2'])
+        writer.writerow(['2026FAS-A003', 'FAS', 'BSN2026', '3', '1'])
+        return response
 
     @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsAdmin | IsPlatformCoordinator | IsLecturer | IsFacultyAdmin | IsDean])
     def promote_class(self, request):
@@ -1017,7 +1167,11 @@ class CourseUnitViewSet(viewsets.ModelViewSet):
 
         reader = csv.reader(lines)
         header = None
-        imported_count = 0
+        created_count = 0
+        updated_count = 0
+        duplicate_count = 0
+        total_rows = 0
+        seen_signatures = set()
 
         for row in reader:
             if not row or not any(row):
@@ -1026,23 +1180,45 @@ class CourseUnitViewSet(viewsets.ModelViewSet):
                 header = [c.strip().lower() for c in row]
                 continue
 
+            total_rows += 1
             row_dict = {}
             for i, val in enumerate(row):
                 if i < len(header):
                     row_dict[header[i]] = val.strip()
 
-            code = row_dict.get('course code') or row_dict.get('code') or row_dict.get('unit_code') or row_dict.get('unit code')
-            name = row_dict.get('course name') or row_dict.get('name') or row_dict.get('unit_name') or row_dict.get('unit name')
-            course_code = row_dict.get('course_code') or row_dict.get('program_code') or row_dict.get('program') or row_dict.get('course') or request.data.get('course_code')
-            credit_units = row_dict.get('credit units') or row_dict.get('credit_units') or row_dict.get('credits') or '3'
+            code = (row_dict.get('course code') or row_dict.get('code') or row_dict.get('unit_code') or
+                    row_dict.get('unit code') or '')
+            name = (row_dict.get('course name') or row_dict.get('name') or row_dict.get('unit_name') or
+                    row_dict.get('unit name') or '')
+            course_code = (row_dict.get('course_code') or row_dict.get('program_code') or row_dict.get('program') or
+                           row_dict.get('course') or request.data.get('course_code') or '')
+            credit_units = (row_dict.get('credit units') or row_dict.get('credit_units') or
+                            row_dict.get('credits') or '3')
+            year_of_study = (row_dict.get('year_of_study') or row_dict.get('year') or
+                             row_dict.get('year of study') or '1')
+            lecturer_ref = (row_dict.get('lecturer_email') or row_dict.get('lecturer') or
+                            row_dict.get('lecturer_username') or '')
 
             if not code or not name:
                 continue
+
+            # Batch deduplication key
+            batch_key = (code.upper().strip(), course_code.upper().strip(), lecturer_ref.lower().strip())
+            if batch_key in seen_signatures:
+                duplicate_count += 1
+                continue
+            seen_signatures.add(batch_key)
 
             try:
                 cu_val = int(float(credit_units))
             except (ValueError, TypeError):
                 cu_val = 3
+
+            try:
+                cleaned_yr = re.sub(r'[^\d]', '', str(year_of_study))
+                yr_val = int(cleaned_yr) if cleaned_yr and int(cleaned_yr) in [1, 2, 3, 4] else 1
+            except (ValueError, TypeError):
+                yr_val = 1
 
             course = None
             if course_code:
@@ -1054,16 +1230,72 @@ class CourseUnitViewSet(viewsets.ModelViewSet):
             if not course:
                 course = Course.objects.first()
 
-            if course:
-                unit, created = CourseUnit.objects.update_or_create(
-                    code=code,
-                    course=course,
-                    defaults={'name': name, 'credit_units': cu_val}
-                )
-                imported_count += 1
+            if not course:
+                continue
 
-        log_system_event(request.user, f"CSV Course Units Uploaded: {imported_count} units imported", level='INFO')
-        return Response({'detail': f'Successfully imported {imported_count} course units from CSV.', 'count': imported_count})
+            # Locate Lecturer if provided
+            lecturer_obj = None
+            if lecturer_ref:
+                lecturer_obj = (User.objects.filter(role='lecturer', email__iexact=lecturer_ref).first() or
+                                User.objects.filter(role='lecturer', username__iexact=lecturer_ref).first() or
+                                User.objects.filter(email__iexact=lecturer_ref).first())
+
+            existing_unit = CourseUnit.objects.filter(code__iexact=code, course=course).first()
+            if existing_unit:
+                # Check if identical (duplicate ignore)
+                is_identical = (
+                    existing_unit.name.strip().lower() == name.strip().lower() and
+                    existing_unit.credit_units == cu_val and
+                    existing_unit.year_of_study == yr_val
+                )
+                if lecturer_obj and not existing_unit.lecturers.filter(id=lecturer_obj.id).exists():
+                    is_identical = False
+
+                if is_identical:
+                    duplicate_count += 1
+                    continue
+
+                existing_unit.name = name
+                existing_unit.credit_units = cu_val
+                existing_unit.year_of_study = yr_val
+                existing_unit.save()
+                if lecturer_obj:
+                    existing_unit.lecturers.add(lecturer_obj)
+                updated_count += 1
+            else:
+                new_unit = CourseUnit.objects.create(
+                    code=code,
+                    name=name,
+                    course=course,
+                    credit_units=cu_val,
+                    year_of_study=yr_val
+                )
+                if lecturer_obj:
+                    new_unit.lecturers.add(lecturer_obj)
+                created_count += 1
+
+        msg = f"Course unit allocation completed: {created_count} created, {updated_count} updated, {duplicate_count} duplicate row(s) ignored."
+        log_system_event(request.user, "CSV_COURSE_UNITS_UPLOADED", level='INFO', details=msg)
+        return Response({
+            'detail': msg,
+            'created_count': created_count,
+            'updated_count': updated_count,
+            'duplicate_count': duplicate_count,
+            'count': created_count + updated_count,
+            'total_rows': total_rows
+        })
+
+    @action(detail=False, methods=['get'])
+    def sample_csv(self, request):
+        response = HttpResponse(content_type='text/csv')
+        response['Content-Disposition'] = 'attachment; filename="sample_course_units_allocation.csv"'
+        writer = csv.writer(response)
+        writer.writerow(['unit_code', 'unit_name', 'course_code', 'year_of_study', 'credit_units', 'lecturer_email'])
+        writer.writerow(['BIT2104', 'Cloud Infrastructure Systems', 'BIT2026', '2', '4', 'lecturer@ciu.ac.ug'])
+        writer.writerow(['BIT2105', 'Cybersecurity & Cryptography Principles', 'BIT2026', '2', '3', 'lecturer@ciu.ac.ug'])
+        writer.writerow(['BCS1101', 'Structured Programming in C', 'BCS2026', '1', '4', 'lecturer@ciu.ac.ug'])
+        writer.writerow(['BSN2102', 'Human Anatomy & Clinical Physiology', 'BSN2026', '2', '4', 'lecturer@ciu.ac.ug'])
+        return response
 
 # 6. Applications ViewSet
 class ApplicationViewSet(viewsets.ModelViewSet):
@@ -1094,6 +1326,64 @@ class ApplicationViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(ApplicationSerializer(application).data)
+
+def parse_aiken_questions(raw_text):
+    """
+    Parses Aiken-formatted text files into structured question dictionaries.
+    Compatible with neuro.txt format:
+    Question text line(s)...
+    A. Option 1
+    B. Option 2
+    C. Option 3
+    D. Option 4
+    ANSWER: B
+    """
+    lines = raw_text.splitlines()
+    questions = []
+    curr_q = {'question_text': '', 'option_a': '', 'option_b': '', 'option_c': '', 'option_d': '', 'correct_answer': ''}
+    state = 'text'
+
+    option_pattern = re.compile(r'^([A-Da-d])[\.\)]\s*(.*)$')
+    answer_pattern = re.compile(r'^(?:ANSWER|Ans|Correct Answer)\s*:\s*([A-Da-d])', re.IGNORECASE)
+
+    for line in lines:
+        clean = line.strip()
+        if not clean:
+            continue
+
+        ans_match = answer_pattern.match(clean)
+        if ans_match:
+            curr_q['correct_answer'] = ans_match.group(1).upper()
+            if curr_q['question_text'] and curr_q['option_a'] and curr_q['option_b']:
+                questions.append(curr_q)
+            curr_q = {'question_text': '', 'option_a': '', 'option_b': '', 'option_c': '', 'option_d': '', 'correct_answer': ''}
+            state = 'text'
+            continue
+
+        opt_match = option_pattern.match(clean)
+        if opt_match:
+            letter = opt_match.group(1).upper()
+            opt_text = opt_match.group(2).strip()
+            if letter == 'A':
+                curr_q['option_a'] = opt_text
+            elif letter == 'B':
+                curr_q['option_b'] = opt_text
+            elif letter == 'C':
+                curr_q['option_c'] = opt_text
+            elif letter == 'D':
+                curr_q['option_d'] = opt_text
+            state = 'option'
+            continue
+
+        if state == 'text':
+            cleaned_line = re.sub(r'^\d+[\.\)]\s*', '', clean) if not curr_q['question_text'] else clean
+            if curr_q['question_text']:
+                curr_q['question_text'] += ' ' + cleaned_line
+            else:
+                curr_q['question_text'] = cleaned_line
+
+    return questions
+
 
 # 7. Exam ViewSet
 class ExamViewSet(viewsets.ModelViewSet):
@@ -1141,9 +1431,9 @@ class ExamViewSet(viewsets.ModelViewSet):
         target_course_ids = self.request.data.get('target_course_ids', [])
         target_years = self.request.data.get('target_years', [])
 
-        # Only System Admin can set an exam for All Course Units & All Years (Year 0)
-        if user.role != 'admin' and year_of_study == 0 and not course_unit:
-            raise serializers.ValidationError({"detail": "Permission Denied: Only System Administrators can set exams for All Course Units & All Years (Year 0). Please select an assigned course unit and specific year of study."})
+        # Only System Admin or Platform Coordinator can set an exam for All Course Units & All Years (Year 0)
+        if user.role not in ['admin', 'platform_coordinator'] and year_of_study == 0 and not course_unit:
+            raise serializers.ValidationError({"detail": "Permission Denied: Only System Administrators and Platform Coordinators can set exams for All Course Units & All Years (Year 0). Please select an assigned course unit and specific year of study."})
         
         if course_unit and (year_of_study == 0 or 'year_of_study' not in serializer.validated_data):
             serializer.validated_data['year_of_study'] = course_unit.year_of_study
@@ -1239,7 +1529,7 @@ class ExamViewSet(viewsets.ModelViewSet):
             return Response(serializer.data)
 
         elif request.method == 'POST':
-            if user.role not in ['lecturer', 'admin', 'faculty_admin']:
+            if user.role not in ['lecturer', 'admin', 'platform_coordinator', 'faculty_admin']:
                 return Response({'detail': 'Only lecturers or staff can add questions.'}, status=status.HTTP_403_FORBIDDEN)
             if user.role == 'lecturer':
                 if exam.lecturer != user:
@@ -1253,6 +1543,111 @@ class ExamViewSet(viewsets.ModelViewSet):
             serializer.is_valid(raise_exception=True)
             serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsLecturer | IsAdmin | IsPlatformCoordinator])
+    def import_txt_questions(self, request, pk=None):
+        exam = self.get_object()
+        txt_file = request.FILES.get('file') or request.FILES.get('txt_file')
+        txt_content = request.data.get('content') or request.data.get('text') or ''
+
+        if txt_file:
+            txt_content = txt_file.read().decode('utf-8-sig', errors='ignore')
+
+        if not txt_content.strip():
+            return Response({'detail': 'Please provide a .txt file or paste Aiken question text.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        parsed_questions = parse_aiken_questions(txt_content)
+        if not parsed_questions:
+            return Response({'detail': 'No valid Aiken-format questions were found in the text file. Please ensure format: Question text, A. option, B. option, ANSWER: X.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        created_objs = []
+        for q in parsed_questions:
+            created_objs.append(Question(
+                exam=exam,
+                question_text=q['question_text'],
+                option_a=q['option_a'],
+                option_b=q['option_b'],
+                option_c=q['option_c'] or 'N/A',
+                option_d=q['option_d'] or 'N/A',
+                correct_option=q['correct_answer']
+            ))
+        Question.objects.bulk_create(created_objs)
+
+        msg = f"Successfully translated & imported {len(created_objs)} questions from text file into exam '{exam.title}'."
+        log_system_event(request.user, "EXAM_TXT_QUESTIONS_IMPORTED", level="INFO", details=msg)
+        return Response({
+            'detail': msg,
+            'count': len(created_objs),
+            'questions': QuestionLecturerSerializer(created_objs, many=True).data
+        })
+
+    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsLecturer | IsAdmin | IsPlatformCoordinator])
+    def create_from_txt(self, request):
+        txt_file = request.FILES.get('file') or request.FILES.get('txt_file')
+        txt_content = request.data.get('content') or request.data.get('text') or ''
+        title = request.data.get('title') or 'New Examination Paper'
+        course_id = request.data.get('course') or request.data.get('course_id')
+        course_unit_id = request.data.get('course_unit') or request.data.get('course_unit_id')
+        duration_minutes = int(request.data.get('duration_minutes', 60))
+        year_of_study = int(request.data.get('year_of_study', 0))
+        scheduled_start = request.data.get('scheduled_start') or None
+        due_date = request.data.get('due_date') or None
+
+        if txt_file:
+            txt_content = txt_file.read().decode('utf-8-sig', errors='ignore')
+
+        if not txt_content.strip():
+            return Response({'detail': 'Please upload a .txt file or paste Aiken question text.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        parsed_questions = parse_aiken_questions(txt_content)
+        if not parsed_questions:
+            return Response({'detail': 'No valid Aiken-format questions were found in the text file.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        course = None
+        if course_id:
+            course = Course.objects.filter(id=course_id).first()
+        elif course_unit_id:
+            cu = CourseUnit.objects.filter(id=course_unit_id).first()
+            if cu:
+                course = cu.course
+        if not course:
+            course = Course.objects.first()
+
+        course_unit = CourseUnit.objects.filter(id=course_unit_id).first() if course_unit_id else None
+
+        exam = Exam.objects.create(
+            course=course,
+            course_unit=course_unit,
+            lecturer=request.user,
+            title=title,
+            duration_minutes=duration_minutes,
+            year_of_study=year_of_study,
+            scheduled_start=scheduled_start,
+            due_date=due_date,
+            is_active=False,
+            is_published=False
+        )
+
+        created_objs = []
+        for q in parsed_questions:
+            created_objs.append(Question(
+                exam=exam,
+                question_text=q['question_text'],
+                option_a=q['option_a'],
+                option_b=q['option_b'],
+                option_c=q['option_c'] or 'N/A',
+                option_d=q['option_d'] or 'N/A',
+                correct_option=q['correct_answer']
+            ))
+        Question.objects.bulk_create(created_objs)
+
+        msg = f"Successfully created exam '{exam.title}' with {len(created_objs)} questions translated from text file!"
+        log_system_event(request.user, "EXAM_CREATED_FROM_TXT", level="INFO", details=msg)
+        return Response({
+            'detail': msg,
+            'exam': ExamSerializer(exam).data,
+            'questions_count': len(created_objs)
+        }, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsLecturer | IsAdmin | IsPlatformCoordinator])
     def publish(self, request, pk=None):
@@ -1314,8 +1709,8 @@ class ExamViewSet(viewsets.ModelViewSet):
         if not exam.is_approved_by_dean:
             return Response({'detail': 'Exam Access Denied: This examination is pending approval from the Faculty Dean and is not yet available.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        if not exam.is_active:
-            return Response({'detail': 'This exam is not active.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not exam.is_published and not exam.is_active:
+            return Response({'detail': 'Exam Access Denied: This exam is currently not published.'}, status=status.HTTP_400_BAD_REQUEST)
 
         # Scheduled Date & Time Availability check (Ugandan East Africa Time UTC+3)
         now = timezone.now()
@@ -1332,13 +1727,20 @@ class ExamViewSet(viewsets.ModelViewSet):
                 return Response({'detail': 'You have already completed this exam.'}, status=status.HTTP_400_BAD_REQUEST)
             return Response(ExamAttemptSerializer(attempt, context={'request': request}).data)
 
-        attempt = ExamAttempt.objects.create(student=request.user, exam=exam)
+        # Late attempt detection (attempt started after scheduled stop time)
+        is_late = False
+        if exam.scheduled_start:
+            stop_time = exam.scheduled_start + timezone.timedelta(minutes=exam.duration_minutes)
+            if now > stop_time:
+                is_late = True
+
+        attempt = ExamAttempt.objects.create(student=request.user, exam=exam, is_late=is_late)
         return Response(ExamAttemptSerializer(attempt, context={'request': request}).data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['get'], permission_classes=[permissions.AllowAny])
     def export_csv(self, request, pk=None):
         authenticate_token_param(request)
-        if not request.user or not request.user.is_authenticated or request.user.role not in ['admin', 'lecturer', 'dean', 'dvc', 'registrar', 'faculty_admin']:
+        if not request.user or not request.user.is_authenticated or request.user.role not in ['admin', 'platform_coordinator', 'lecturer', 'dean', 'dvc', 'registrar', 'faculty_admin']:
             return Response({'detail': 'Authentication credentials were not provided or unauthorized.'}, status=status.HTTP_401_UNAUTHORIZED)
 
         exam = self.get_object()
@@ -1348,7 +1750,7 @@ class ExamViewSet(viewsets.ModelViewSet):
         response['Content-Disposition'] = f'attachment; filename="Exam_Results_{exam.course.code}_{exam.id}.csv"'
 
         writer = csv.writer(response)
-        writer.writerow(['Student Username', 'Full Name', 'Email', 'Exam Title', 'Course Code', 'Score (%)', 'Submitted At', 'Tab Switches', 'Status'])
+        writer.writerow(['Student Username', 'Full Name', 'Email', 'Exam Title', 'Course Code', 'Score (%)', 'Submitted At', 'Tab Switches', 'Is Late', 'Late Reason', 'Status'])
 
         for att in attempts:
             writer.writerow([
@@ -1360,6 +1762,8 @@ class ExamViewSet(viewsets.ModelViewSet):
                 att.score,
                 att.completed_at.strftime('%Y-%m-%d %H:%M:%S') if att.completed_at else 'In Progress',
                 att.tab_switches_count,
+                'YES' if att.is_late else 'NO',
+                att.late_submission_reason or '',
                 'Completed' if att.completed_at else 'Incomplete'
             ])
 
@@ -1412,9 +1816,25 @@ class ExamAttemptViewSet(viewsets.ReadOnlyModelViewSet):
         if attempt.completed_at:
             return Response({'detail': 'Attempt already completed.'}, status=status.HTTP_400_BAD_REQUEST)
 
+        now = timezone.now()
+        exam = attempt.exam
+
+        # Hard Due Date Cutoff
+        if exam.due_date and now > exam.due_date:
+            return Response({'detail': 'Exam Access Denied: The final deadline (due date) for this exam has passed. Submissions are closed.'}, status=status.HTTP_400_BAD_REQUEST)
+
         answers = request.data.get('answers', {})
         tab_switches = request.data.get('tab_switches', 0)
         auto_submitted_reason = request.data.get('auto_submitted_reason', None)
+        late_submission_reason = (request.data.get('late_submission_reason') or request.data.get('late_comment') or request.data.get('comment') or '').strip()
+
+        # Late detection
+        is_late = attempt.is_late
+        allotted_stop = attempt.started_at + timezone.timedelta(minutes=exam.duration_minutes)
+        scheduled_stop = (exam.scheduled_start + timezone.timedelta(minutes=exam.duration_minutes)) if exam.scheduled_start else None
+
+        if now > allotted_stop or (scheduled_stop and now > scheduled_stop):
+            is_late = True
 
         exam_questions = attempt.exam.questions.all()
         correct_count = 0
@@ -1431,10 +1851,15 @@ class ExamAttemptViewSet(viewsets.ReadOnlyModelViewSet):
         attempt.score = round(score_percent, 2)
         attempt.tab_switches_count = tab_switches
         attempt.auto_submitted_reason = auto_submitted_reason
-        attempt.completed_at = timezone.now()
+        attempt.is_late = is_late
+        if late_submission_reason:
+            attempt.late_submission_reason = late_submission_reason
+        elif is_late and not attempt.late_submission_reason:
+            attempt.late_submission_reason = auto_submitted_reason or 'Late submission after regular stop time.'
+        attempt.completed_at = now
         attempt.save()
 
-        log_system_event(request.user, f"Exam Submitted: {attempt.exam.title} (Score: {attempt.score}%)", level="INFO")
+        log_system_event(request.user, f"Exam Submitted: {attempt.exam.title} (Score: {attempt.score}%, Late: {attempt.is_late})", level="INFO")
         return Response(ExamAttemptSerializer(attempt, context={'request': request}).data)
 
     @action(detail=True, methods=['get'], permission_classes=[permissions.IsAuthenticated])
@@ -1508,9 +1933,9 @@ class TestViewSet(viewsets.ModelViewSet):
         target_course_ids = self.request.data.get('target_course_ids', [])
         target_years = self.request.data.get('target_years', [])
 
-        # Only System Admin can set a test for All Course Units & All Years (Year 0)
-        if user.role != 'admin' and year_of_study == 0 and not course_unit:
-            raise serializers.ValidationError({"detail": "Permission Denied: Only System Administrators can set tests for All Course Units & All Years (Year 0). Please select an assigned course unit and specific year of study."})
+        # Only System Admin or Platform Coordinator can set a test for All Course Units & All Years (Year 0)
+        if user.role not in ['admin', 'platform_coordinator'] and year_of_study == 0 and not course_unit:
+            raise serializers.ValidationError({"detail": "Permission Denied: Only System Administrators and Platform Coordinators can set tests for All Course Units & All Years (Year 0). Please select an assigned course unit and specific year of study."})
         
         if course_unit and (year_of_study == 0 or 'year_of_study' not in serializer.validated_data):
             serializer.validated_data['year_of_study'] = course_unit.year_of_study
@@ -1646,7 +2071,7 @@ class TestViewSet(viewsets.ModelViewSet):
             return Response(serializer.data)
 
         elif request.method == 'POST':
-            if user.role not in ['lecturer', 'admin', 'faculty_admin']:
+            if user.role not in ['lecturer', 'admin', 'platform_coordinator', 'faculty_admin']:
                 return Response({'detail': 'Only lecturers or staff can add test questions.'}, status=status.HTTP_403_FORBIDDEN)
             
             data = request.data.copy()
@@ -1655,6 +2080,123 @@ class TestViewSet(viewsets.ModelViewSet):
             serializer.is_valid(raise_exception=True)
             serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsLecturer | IsAdmin | IsPlatformCoordinator])
+    def import_txt_questions(self, request, pk=None):
+        test_obj = self.get_object()
+        txt_file = request.FILES.get('file') or request.FILES.get('txt_file')
+        txt_content = request.data.get('content') or request.data.get('text') or ''
+
+        if txt_file:
+            txt_content = txt_file.read().decode('utf-8-sig', errors='ignore')
+
+        if not txt_content.strip():
+            return Response({'detail': 'Please provide a .txt file or paste Aiken question text.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        parsed_questions = parse_aiken_questions(txt_content)
+        if not parsed_questions:
+            return Response({'detail': 'No valid Aiken-format questions were found in the text file. Please ensure format: Question text, A. option, B. option, ANSWER: X.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        created_objs = []
+        for q in parsed_questions:
+            created_objs.append(TestQuestion(
+                test=test_obj,
+                question_text=q['question_text'],
+                question_type='mcq',
+                option_a=q['option_a'],
+                option_b=q['option_b'],
+                option_c=q['option_c'] or 'N/A',
+                option_d=q['option_d'] or 'N/A',
+                correct_answer=q['correct_answer'],
+                points=1.0
+            ))
+        TestQuestion.objects.bulk_create(created_objs)
+
+        msg = f"Successfully translated & imported {len(created_objs)} questions from text file into test '{test_obj.title}'."
+        log_system_event(request.user, "TEST_TXT_QUESTIONS_IMPORTED", level="INFO", details=msg)
+        return Response({
+            'detail': msg,
+            'count': len(created_objs),
+            'questions': TestQuestionLecturerSerializer(created_objs, many=True).data
+        })
+
+    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsLecturer | IsAdmin | IsPlatformCoordinator])
+    def create_from_txt(self, request):
+        txt_file = request.FILES.get('file') or request.FILES.get('txt_file')
+        txt_content = request.data.get('content') or request.data.get('text') or ''
+        title = request.data.get('title') or 'New Test Paper'
+        category = request.data.get('category') or 'quiz'
+        course_id = request.data.get('course') or request.data.get('course_id')
+        course_unit_id = request.data.get('course_unit') or request.data.get('course_unit_id')
+        duration_minutes = int(request.data.get('duration_minutes', 30))
+        total_marks = int(request.data.get('total_marks', 100))
+        pass_percentage = float(request.data.get('pass_percentage', 50.0))
+        allowed_attempts = int(request.data.get('allowed_attempts', 1))
+        year_of_study = int(request.data.get('year_of_study', 0))
+        scheduled_start = request.data.get('scheduled_start') or None
+        due_date = request.data.get('due_date') or None
+
+        if txt_file:
+            txt_content = txt_file.read().decode('utf-8-sig', errors='ignore')
+
+        if not txt_content.strip():
+            return Response({'detail': 'Please upload a .txt file or paste Aiken question text.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        parsed_questions = parse_aiken_questions(txt_content)
+        if not parsed_questions:
+            return Response({'detail': 'No valid Aiken-format questions were found in the text file.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        course = None
+        if course_id:
+            course = Course.objects.filter(id=course_id).first()
+        elif course_unit_id:
+            cu = CourseUnit.objects.filter(id=course_unit_id).first()
+            if cu:
+                course = cu.course
+        if not course:
+            course = Course.objects.first()
+
+        course_unit = CourseUnit.objects.filter(id=course_unit_id).first() if course_unit_id else None
+
+        test_obj = Test.objects.create(
+            course=course,
+            course_unit=course_unit,
+            lecturer=request.user,
+            title=title,
+            category=category,
+            duration_minutes=duration_minutes,
+            total_marks=total_marks,
+            pass_percentage=pass_percentage,
+            allowed_attempts=allowed_attempts,
+            year_of_study=year_of_study,
+            scheduled_start=scheduled_start,
+            due_date=due_date,
+            is_published=False,
+            is_results_released=True
+        )
+
+        created_objs = []
+        for q in parsed_questions:
+            created_objs.append(TestQuestion(
+                test=test_obj,
+                question_text=q['question_text'],
+                question_type='mcq',
+                option_a=q['option_a'],
+                option_b=q['option_b'],
+                option_c=q['option_c'] or 'N/A',
+                option_d=q['option_d'] or 'N/A',
+                correct_answer=q['correct_answer'],
+                points=1.0
+            ))
+        TestQuestion.objects.bulk_create(created_objs)
+
+        msg = f"Successfully created test '{test_obj.title}' with {len(created_objs)} questions translated from text file!"
+        log_system_event(request.user, "TEST_CREATED_FROM_TXT", level="INFO", details=msg)
+        return Response({
+            'detail': msg,
+            'test': TestSerializer(test_obj).data,
+            'questions_count': len(created_objs)
+        }, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsLecturer | IsAdmin])
     def bulk_add_questions(self, request, pk=None):
@@ -1726,8 +2268,9 @@ class TestViewSet(viewsets.ModelViewSet):
         if test_obj.scheduled_start and now < test_obj.scheduled_start:
             return Response({'detail': f'Test Access Denied: This test is scheduled for {test_obj.scheduled_start.strftime("%Y-%m-%d %H:%M")} EAT and is not yet open.'}, status=status.HTTP_400_BAD_REQUEST)
 
+        # Hard Due Date cutoff
         if test_obj.due_date and now > test_obj.due_date:
-            return Response({'detail': 'Test Access Denied: The deadline for submitting this test has passed.'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'detail': 'Test Access Denied: The deadline (due date) for submitting this test has passed.'}, status=status.HTTP_400_BAD_REQUEST)
 
         user_attempts = TestAttempt.objects.filter(student=request.user, test=test_obj)
         completed_count = user_attempts.filter(completed_at__isnull=False).count()
@@ -1739,17 +2282,25 @@ class TestViewSet(viewsets.ModelViewSet):
         if active_attempt:
             return Response(TestAttemptSerializer(active_attempt).data)
 
+        # Detect late attempt if started after scheduled stop time
+        is_late = False
+        if test_obj.scheduled_start:
+            stop_time = test_obj.scheduled_start + timezone.timedelta(minutes=test_obj.duration_minutes)
+            if now > stop_time:
+                is_late = True
+
         attempt = TestAttempt.objects.create(
             student=request.user,
             test=test_obj,
-            attempt_number=completed_count + 1
+            attempt_number=completed_count + 1,
+            is_late=is_late
         )
         return Response(TestAttemptSerializer(attempt).data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['get'], permission_classes=[permissions.AllowAny])
     def export_csv(self, request, pk=None):
         authenticate_token_param(request)
-        if not request.user or not request.user.is_authenticated or request.user.role not in ['admin', 'lecturer', 'dean', 'dvc', 'registrar', 'faculty_admin']:
+        if not request.user or not request.user.is_authenticated or request.user.role not in ['admin', 'platform_coordinator', 'lecturer', 'dean', 'dvc', 'registrar', 'faculty_admin']:
             return Response({'detail': 'Authentication credentials were not provided or unauthorized.'}, status=status.HTTP_401_UNAUTHORIZED)
 
         test_obj = self.get_object()
@@ -1759,7 +2310,7 @@ class TestViewSet(viewsets.ModelViewSet):
         response['Content-Disposition'] = f'attachment; filename="Test_Results_{test_obj.course.code}_{test_obj.id}.csv"'
 
         writer = csv.writer(response)
-        writer.writerow(['Student Username', 'Full Name', 'Email', 'Test Title', 'Category', 'Course Code', 'Score (%)', 'Passed Status', 'Submitted At', 'Tab Switches', 'Attempt #'])
+        writer.writerow(['Student Username', 'Full Name', 'Email', 'Test Title', 'Category', 'Course Code', 'Score (%)', 'Passed Status', 'Submitted At', 'Tab Switches', 'Attempt #', 'Is Late', 'Late Reason'])
 
         for att in attempts:
             writer.writerow([
@@ -1773,7 +2324,9 @@ class TestViewSet(viewsets.ModelViewSet):
                 'PASSED' if att.passed else 'FAILED',
                 att.completed_at.strftime('%Y-%m-%d %H:%M:%S') if att.completed_at else 'In Progress',
                 att.tab_switches_count,
-                att.attempt_number
+                att.attempt_number,
+                'YES' if att.is_late else 'NO',
+                att.late_submission_reason or ''
             ])
 
         return response
@@ -1825,9 +2378,25 @@ class TestAttemptViewSet(viewsets.ReadOnlyModelViewSet):
         if attempt.completed_at:
             return Response({'detail': 'Attempt already completed.'}, status=status.HTTP_400_BAD_REQUEST)
 
+        now = timezone.now()
+        test_obj = attempt.test
+
+        # Hard Due Date Cutoff
+        if test_obj.due_date and now > test_obj.due_date:
+            return Response({'detail': 'Test Access Denied: The final deadline (due date) for this test has passed. Submissions are closed.'}, status=status.HTTP_400_BAD_REQUEST)
+
         answers = request.data.get('answers', {})
         tab_switches = request.data.get('tab_switches', 0)
         auto_submitted_reason = request.data.get('auto_submitted_reason', None)
+        late_submission_reason = (request.data.get('late_submission_reason') or request.data.get('late_comment') or request.data.get('comment') or '').strip()
+
+        # Late detection
+        is_late = attempt.is_late
+        allotted_stop = attempt.started_at + timezone.timedelta(minutes=test_obj.duration_minutes)
+        scheduled_stop = (test_obj.scheduled_start + timezone.timedelta(minutes=test_obj.duration_minutes)) if test_obj.scheduled_start else None
+
+        if now > allotted_stop or (scheduled_stop and now > scheduled_stop):
+            is_late = True
 
         test_questions = attempt.test.questions.all()
         total_points = 0.0
@@ -1852,10 +2421,15 @@ class TestAttemptViewSet(viewsets.ReadOnlyModelViewSet):
         attempt.passed = passed
         attempt.tab_switches_count = tab_switches
         attempt.auto_submitted_reason = auto_submitted_reason
-        attempt.completed_at = timezone.now()
+        attempt.is_late = is_late
+        if late_submission_reason:
+            attempt.late_submission_reason = late_submission_reason
+        elif is_late and not attempt.late_submission_reason:
+            attempt.late_submission_reason = auto_submitted_reason or 'Late submission after regular stop time.'
+        attempt.completed_at = now
         attempt.save()
 
-        log_system_event(request.user, f"Test Submitted: {attempt.test.title} (Score: {attempt.score}%, Passed: {passed})", level="INFO")
+        log_system_event(request.user, f"Test Submitted: {attempt.test.title} (Score: {attempt.score}%, Passed: {passed}, Late: {attempt.is_late})", level="INFO")
         return Response(TestAttemptSerializer(attempt).data)
 
     @action(detail=True, methods=['get'], permission_classes=[permissions.IsAuthenticated])
@@ -2299,7 +2873,7 @@ class SystemLogViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=False, methods=['get'])
     def export_csv(self, request):
         authenticate_token_param(request)
-        if not request.user or not request.user.is_authenticated or request.user.role != 'admin':
+        if not request.user or not request.user.is_authenticated or request.user.role not in ['admin', 'platform_coordinator']:
             return Response({'detail': 'Authentication credentials were not provided or unauthorized.'}, status=status.HTTP_401_UNAUTHORIZED)
 
         qs = self.get_queryset()

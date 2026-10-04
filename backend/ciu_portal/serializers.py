@@ -232,6 +232,8 @@ class ExamAttemptSerializer(serializers.ModelSerializer):
     exam_course_id = serializers.IntegerField(source='exam.course.id', read_only=True)
     duration_minutes = serializers.IntegerField(source='exam.duration_minutes', read_only=True)
     is_results_released = serializers.BooleanField(source='exam.is_results_released', read_only=True)
+    exam_scheduled_start = serializers.DateTimeField(source='exam.scheduled_start', read_only=True)
+    exam_due_date = serializers.DateTimeField(source='exam.due_date', read_only=True)
 
     class Meta:
         model = ExamAttempt
@@ -294,6 +296,8 @@ class TestAttemptSerializer(serializers.ModelSerializer):
     duration_minutes = serializers.IntegerField(source='test.duration_minutes', read_only=True)
     pass_percentage = serializers.FloatField(source='test.pass_percentage', read_only=True)
     is_results_released = serializers.BooleanField(source='test.is_results_released', read_only=True)
+    test_scheduled_start = serializers.DateTimeField(source='test.scheduled_start', read_only=True)
+    test_due_date = serializers.DateTimeField(source='test.due_date', read_only=True)
 
     class Meta:
         model = TestAttempt

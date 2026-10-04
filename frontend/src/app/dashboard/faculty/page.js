@@ -115,6 +115,15 @@ export default function FacultyManagementPage() {
   const [selectedDayFilter, setSelectedDayFilter] = useState('All');
   const [selectedCourseFilter, setSelectedCourseFilter] = useState('All');
   
+  // Course Unit Search and Program Filter
+  const [unitSearchText, setUnitSearchText] = useState('');
+  const [selectedUnitCourseFilter, setSelectedUnitCourseFilter] = useState('All');
+
+  // Bulk Student CSV Allocation State
+  const [showStudentCsvModal, setShowStudentCsvModal] = useState(false);
+  const [studentCsvFile, setStudentCsvFile] = useState(null);
+  const [studentCsvText, setStudentCsvText] = useState('');
+
   // UI Messages
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
@@ -122,10 +131,10 @@ export default function FacultyManagementPage() {
 
   const isExecutiveReadOnly = ['dvc', 'vc', 'dean'].includes(user?.role);
   const isAdmin = (user?.role === 'admin' || user?.role === 'platform_coordinator') && !isExecutiveReadOnly;
-  const isSecretaryOrStaff = ['faculty_admin', 'admin'].includes(user?.role) && !isExecutiveReadOnly;
+  const isSecretaryOrStaff = ['faculty_admin', 'admin', 'platform_coordinator'].includes(user?.role) && !isExecutiveReadOnly;
   const isStudent = user?.role === 'student';
   const isLecturer = user?.role === 'lecturer';
-  const canAssignLecturer = ['admin', 'faculty_admin'].includes(user?.role) && !isExecutiveReadOnly;
+  const canAssignLecturer = ['admin', 'faculty_admin', 'platform_coordinator'].includes(user?.role) && !isExecutiveReadOnly;
 
   useEffect(() => {
     loadFacultyData();
@@ -318,6 +327,48 @@ export default function FacultyManagementPage() {
     a.href = url;
     a.download = filename;
     a.click();
+  };
+
+  const handleUploadStudentCsv = async (e) => {
+    e.preventDefault();
+    if (!studentCsvFile && !studentCsvText.trim()) {
+      setErrorMsg('Please select a CSV file or paste raw CSV text.');
+      return;
+    }
+    setErrorMsg('');
+    setSuccessMsg('');
+    setSubmitting(true);
+    try {
+      const formData = new FormData();
+      if (studentCsvFile) {
+        formData.append('file', studentCsvFile);
+      } else {
+        formData.append('csv_text', studentCsvText);
+      }
+      const res = await api.post('/admin/users/bulk_allocate_csv/', formData);
+      setSuccessMsg(res.detail || `Allocations processed successfully! ${res.updated || 0} student(s) updated.`);
+      setShowStudentCsvModal(false);
+      setStudentCsvFile(null);
+      setStudentCsvText('');
+      loadFacultyData();
+    } catch (err) {
+      setErrorMsg(err.message || 'Failed to process bulk student allocations.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const downloadSampleStudentCsv = () => {
+    const sample = "username,registration_number,faculty_code,course_code,year_of_study,semester\nstd_albert,2026BACTFT-A001,FST,BIT2026,2,1\nstd_brenda,2026BACTFT-A002,FST,BSE2026,1,2\nstd_charles,2026BACTFT-A003,FBMS,BML2026,3,1\nstd_diana,2026BACTFT-A004,FBMS,BML2026,2,2";
+    const blob = new Blob([sample], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'sample_student_allocations.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    window.URL.revokeObjectURL(url);
   };
 
   // --- Faculty CRUD Handlers (Admin) ---
@@ -1240,22 +1291,47 @@ export default function FacultyManagementPage() {
               </div>
             </div>
 
-            {/* Year of Study Filter Bar */}
-            <div className="flex items-center space-x-2 bg-slate-50 p-2 rounded-xl border border-slate-100 text-xs">
-              <span className="font-bold text-slate-500 uppercase text-[10px]">Filter Year:</span>
-              {['All', '1', '2', '3', '4'].map(yr => (
-                <button
-                  key={yr}
-                  onClick={() => setSelectedUnitYearFilter(yr)}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
-                    selectedUnitYearFilter === yr
-                      ? 'bg-teal-700 text-white shadow-sm'
-                      : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
-                  }`}
+            {/* Search and Filters Toolbar */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-slate-50 p-3 rounded-xl border border-slate-200 text-xs">
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Search Course Units</label>
+                <input
+                  type="text"
+                  placeholder="Search code, name, lecturer..."
+                  value={unitSearchText}
+                  onChange={(e) => setUnitSearchText(e.target.value)}
+                  className="w-full bg-white border border-slate-200 text-slate-800 font-medium rounded-lg px-3 py-1.5 focus:ring-1 focus:ring-brand-light"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Filter Program</label>
+                <select
+                  value={selectedUnitCourseFilter}
+                  onChange={(e) => setSelectedUnitCourseFilter(e.target.value)}
+                  className="w-full bg-white border border-slate-200 text-slate-800 font-bold rounded-lg px-2.5 py-1.5 focus:ring-1 focus:ring-brand-light"
                 >
-                  {yr === 'All' ? 'All Years' : `Year ${yr}`}
-                </button>
-              ))}
+                  <option value="All">All Course Programs ({courses.length})</option>
+                  {courses.map(c => (
+                    <option key={c.id} value={c.code}>[{c.code}] {c.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Year of Study</label>
+                <select
+                  value={selectedUnitYearFilter}
+                  onChange={(e) => setSelectedUnitYearFilter(e.target.value)}
+                  className="w-full bg-white border border-slate-200 text-slate-800 font-bold rounded-lg px-2.5 py-1.5 focus:ring-1 focus:ring-brand-light"
+                >
+                  <option value="All">All Academic Years</option>
+                  <option value="1">Year 1</option>
+                  <option value="2">Year 2</option>
+                  <option value="3">Year 3</option>
+                  <option value="4">Year 4</option>
+                </select>
+              </div>
             </div>
 
             {courseUnits.length === 0 ? (
@@ -1276,7 +1352,21 @@ export default function FacultyManagementPage() {
                   </thead>
                   <tbody className="divide-y divide-slate-100 text-slate-700">
                     {courseUnits
-                      .filter(u => selectedUnitYearFilter === 'All' || (u.year_of_study || 1) === parseInt(selectedUnitYearFilter))
+                      .filter(u => {
+                        const matchesYear = selectedUnitYearFilter === 'All' || (u.year_of_study || 1) === parseInt(selectedUnitYearFilter);
+                        const matchesCourse = selectedUnitCourseFilter === 'All' || u.course_code === selectedUnitCourseFilter;
+                        const s = unitSearchText.toLowerCase().trim();
+                        const matchesSearch = !s ||
+                          (u.code && u.code.toLowerCase().includes(s)) ||
+                          (u.name && u.name.toLowerCase().includes(s)) ||
+                          (u.course_code && u.course_code.toLowerCase().includes(s)) ||
+                          (u.lecturer_details && u.lecturer_details.some(l =>
+                            (l.first_name && l.first_name.toLowerCase().includes(s)) ||
+                            (l.last_name && l.last_name.toLowerCase().includes(s)) ||
+                            (l.username && l.username.toLowerCase().includes(s))
+                          ));
+                        return matchesYear && matchesCourse && matchesSearch;
+                      })
                       .map((unit) => (
                         <tr key={unit.id} className="hover:bg-slate-50 transition-all">
                           <td className="px-3 py-3 font-extrabold text-brand-dark">{unit.code}</td>
@@ -1455,6 +1545,14 @@ export default function FacultyManagementPage() {
                         className="px-3.5 py-1.5 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-xl shadow-sm transition-all flex items-center space-x-1.5"
                       >
                         <span>🎓 + Allocate Student Profile</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setShowStudentCsvModal(true)}
+                        className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-sm transition-all flex items-center space-x-1.5"
+                      >
+                        <span>📥 Bulk CSV Allocation</span>
                       </button>
 
                       <button
@@ -2392,17 +2490,6 @@ export default function FacultyManagementPage() {
               </div>
 
               <div>
-                <label className="block text-slate-700 font-bold uppercase mb-1">Department</label>
-                <input
-                  type="text"
-                  value={courseFormData.department}
-                  onChange={(e) => setCourseFormData({ ...courseFormData, department: e.target.value })}
-                  placeholder="e.g. Department of Computing & Data Science"
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl"
-                />
-              </div>
-
-              <div>
                 <label className="block text-slate-700 font-bold uppercase mb-1">Description</label>
                 <textarea
                   value={courseFormData.description}
@@ -2729,6 +2816,89 @@ export default function FacultyManagementPage() {
                 >
                   {submitting ? 'Executing Promotion...' : `🚀 Execute Class Promotion (${selectedStudentPromotionIds.length})`}
                 </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: BULK CSV STUDENT ALLOCATION */}
+      {showStudentCsvModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4 animate-fade-in">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-6 space-y-5 shadow-2xl border border-slate-100">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <div>
+                <h3 className="text-base font-bold text-slate-850">Bulk Student Allocations via CSV</h3>
+                <p className="text-xs text-slate-500 font-medium">Batch allocate faculty, course, academic year and semester</p>
+              </div>
+              <button onClick={() => setShowStudentCsvModal(false)} className="text-slate-400 hover:text-slate-600 font-bold">✕</button>
+            </div>
+
+            <form onSubmit={handleUploadStudentCsv} className="space-y-4 text-xs">
+              <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl space-y-2 text-emerald-800">
+                <p className="font-bold flex items-center justify-between">
+                  <span>Supported Column Headers:</span>
+                  <span className="text-[10px] bg-emerald-100 text-emerald-900 px-2 py-0.5 rounded font-extrabold">Duplicates Auto-Ignored</span>
+                </p>
+                <div className="space-y-1 font-mono text-[11px]">
+                  <code className="block bg-white px-2 py-0.5 rounded border border-emerald-200">username,registration_number,faculty_code,course_code,year_of_study,semester</code>
+                </div>
+                <p className="text-[11px] text-emerald-700">
+                  Tip: Identifier can be <strong>username</strong>, <strong>registration_number</strong>, or <strong>email</strong>. Duplicate student rows in the batch or matching existing database state are automatically deduplicated.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-slate-700 font-bold uppercase mb-1">Select CSV File</label>
+                <input
+                  type="file"
+                  accept=".csv"
+                  onChange={(e) => setStudentCsvFile(e.target.files[0])}
+                  className="w-full text-xs text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-bold file:bg-brand-light/10 file:text-brand-dark hover:file:bg-brand-light/20"
+                />
+              </div>
+
+              <div className="relative flex py-1 items-center">
+                <div className="flex-grow border-t border-slate-200"></div>
+                <span className="flex-shrink mx-3 text-slate-400 text-[10px] uppercase font-bold">Or Paste Raw CSV</span>
+                <div className="flex-grow border-t border-slate-200"></div>
+              </div>
+
+              <div>
+                <textarea
+                  rows={4}
+                  value={studentCsvText}
+                  onChange={(e) => setStudentCsvText(e.target.value)}
+                  placeholder="username,registration_number,faculty_code,course_code,year_of_study,semester&#10;std_albert,2026BACTFT-A001,FST,BIT2026,2,1&#10;std_brenda,2026BACTFT-A002,FST,BSE2026,1,2"
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-mono text-[11px] resize-none"
+                />
+              </div>
+
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={downloadSampleStudentCsv}
+                  className="text-brand-light hover:text-brand-medium text-[11px] font-bold underline flex items-center space-x-1"
+                >
+                  <span>📥 Download Sample CSV</span>
+                </button>
+
+                <div className="flex items-center space-x-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowStudentCsvModal(false)}
+                    className="px-4 py-2 bg-slate-100 text-slate-600 font-bold rounded-xl hover:bg-slate-200"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={submitting}
+                    className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-md disabled:opacity-50"
+                  >
+                    {submitting ? 'Allocating...' : 'Process Student Allocations'}
+                  </button>
+                </div>
               </div>
             </form>
           </div>

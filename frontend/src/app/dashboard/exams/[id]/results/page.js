@@ -103,6 +103,18 @@ export default function ExamResultsPage() {
             </p>
           )}
           <p className="text-xs text-slate-500 font-medium">Completed at: {new Date(attempt.completed_at).toLocaleString()}</p>
+          {attempt.is_late && (
+            <div className="pt-2 space-y-1">
+              <span className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-amber-50 text-amber-800 border border-amber-300 font-extrabold text-[10.5px]">
+                <span>⚠️ Late Submission</span>
+              </span>
+              {attempt.late_submission_reason && (
+                <p className="text-[11px] text-amber-900 bg-amber-50/70 p-2.5 rounded-xl border border-amber-200 mt-1 italic">
+                  <strong>Student Comment:</strong> "{attempt.late_submission_reason}"
+                </p>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Score indicator */}

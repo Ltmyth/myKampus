@@ -28,6 +28,11 @@ export default function TestRunnerPage({ params }) {
   const [submitSuccess, setSubmitSuccess] = useState('');
   const [submitError, setSubmitError] = useState('');
 
+  // Late submission tracking
+  const [isLate, setIsLate] = useState(false);
+  const [lateReason, setLateReason] = useState('');
+  const [dueRemainingSeconds, setDueRemainingSeconds] = useState(null);
+
   const [submitting, setSubmitting] = useState(false);
   const autoSubmittedRef = useRef(false);
 
@@ -70,9 +75,25 @@ export default function TestRunnerPage({ params }) {
       const durationSecs = (testData.duration_minutes || 30) * 60;
       const startedAt = new Date(attemptData.started_at).getTime();
       const elapsedSecs = Math.floor((Date.now() - startedAt) / 1000);
-      const remainingSecs = Math.max(0, durationSecs - elapsedSecs);
+      const remainingSecs = durationSecs - elapsedSecs;
+      const hasDueDate = !!testData.due_date;
+      const dueTimestamp = hasDueDate ? new Date(testData.due_date).getTime() : null;
+      const isPastDueDate = dueTimestamp && Date.now() >= dueTimestamp;
 
-      setTimeLeftSeconds(remainingSecs);
+      if (isPastDueDate) {
+        handleAutoSubmit('Test Window Closed: Final Due Date Reached');
+        return;
+      }
+
+      if (remainingSecs <= 0 || attemptData.is_late) {
+        setIsLate(true);
+        setTimeLeftSeconds(0);
+        if (dueTimestamp) {
+          setDueRemainingSeconds(Math.max(0, Math.floor((dueTimestamp - Date.now()) / 1000)));
+        }
+      } else {
+        setTimeLeftSeconds(remainingSecs);
+      }
     } catch (err) {
       setSecurityNotice(err.message || 'Unable to launch test session.');
     } finally {
@@ -130,23 +151,45 @@ export default function TestRunnerPage({ params }) {
     };
   }, [loading, activeAttempt, proctoringSetting.is_proctoring_enabled, testId, tabSwitches]);
 
-  // 1. Timer Countdown Effect
+  // 1. Timer Countdown Effect (with overtime and due-date monitoring)
   useEffect(() => {
-    if (loading || !activeAttempt || timeLeftSeconds <= 0) return;
+    if (loading || !activeAttempt) return;
 
-    const timerInterval = setInterval(() => {
-      setTimeLeftSeconds((prev) => {
-        if (prev <= 1) {
-          clearInterval(timerInterval);
-          handleAutoSubmit('Countdown Timer Expired');
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-
-    return () => clearInterval(timerInterval);
-  }, [loading, activeAttempt, timeLeftSeconds]);
+    if (timeLeftSeconds > 0) {
+      const timerInterval = setInterval(() => {
+        setTimeLeftSeconds((prev) => {
+          if (prev <= 1) {
+            clearInterval(timerInterval);
+            const hasDueDate = !!testObj?.due_date;
+            const dueTimestamp = hasDueDate ? new Date(testObj.due_date).getTime() : null;
+            if (dueTimestamp && Date.now() >= dueTimestamp) {
+              handleAutoSubmit('Test Window Closed: Final Due Date Reached');
+            } else {
+              setIsLate(true);
+              if (dueTimestamp) {
+                setDueRemainingSeconds(Math.max(0, Math.floor((dueTimestamp - Date.now()) / 1000)));
+              }
+            }
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+      return () => clearInterval(timerInterval);
+    } else if (isLate && dueRemainingSeconds !== null && dueRemainingSeconds > 0) {
+      const dueInterval = setInterval(() => {
+        setDueRemainingSeconds((prev) => {
+          if (prev <= 1) {
+            clearInterval(dueInterval);
+            handleAutoSubmit('Test Window Closed: Final Due Date Reached');
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+      return () => clearInterval(dueInterval);
+    }
+  }, [loading, activeAttempt, timeLeftSeconds, isLate, dueRemainingSeconds, testObj]);
 
   // 2. Security Tab Switch & Focus Blur Monitoring
   useEffect(() => {
@@ -196,7 +239,7 @@ export default function TestRunnerPage({ params }) {
     await handleAutoSubmit('Student Submitted');
   };
 
-  const handleAutoSubmit = async (reason) => {
+  const handleAutoSubmit = async (reason, customLateReason = null) => {
     if (autoSubmittedRef.current) return;
     autoSubmittedRef.current = true;
     setSubmitting(true);
@@ -207,7 +250,8 @@ export default function TestRunnerPage({ params }) {
       await api.post(`/test-attempts/${activeAttempt.id}/submit/`, {
         answers,
         tab_switches: tabSwitches,
-        auto_submitted_reason: reason
+        auto_submitted_reason: reason,
+        late_submission_reason: customLateReason || lateReason
       });
 
       const draftKey = `ciu_test_draft_${testId}_${user.id}`;
@@ -304,9 +348,11 @@ export default function TestRunnerPage({ params }) {
 
         {/* Security Alerts & Timer */}
         <div className="flex items-center space-x-4">
-          <div className="px-3 py-1.5 bg-red-50 text-red-700 border border-red-100 rounded-xl flex items-center space-x-2">
-            <span className="w-2 h-2 rounded-full bg-red-500 animate-ping"></span>
-            <span className="font-mono font-bold text-sm">{formatTime(timeLeftSeconds)}</span>
+          <div className={`px-3 py-1.5 rounded-xl flex items-center space-x-2 border ${isLate ? 'bg-amber-100 text-amber-900 border-amber-300 font-extrabold' : 'bg-red-50 text-red-700 border-red-100'}`}>
+            <span className={`w-2 h-2 rounded-full ${isLate ? 'bg-amber-500' : 'bg-red-500'} animate-ping`}></span>
+            <span className="font-mono font-bold text-sm">
+              {isLate ? (dueRemainingSeconds !== null ? `Due: ${formatTime(dueRemainingSeconds)}` : 'OVERTIME') : formatTime(timeLeftSeconds)}
+            </span>
           </div>
 
           <div className="text-right hidden sm:block">
@@ -325,6 +371,19 @@ export default function TestRunnerPage({ params }) {
           </button>
         </div>
       </div>
+
+      {/* Late Submission Notice Banner */}
+      {isLate && (
+        <div className="p-4 bg-amber-50 border-2 border-amber-300 rounded-2xl flex items-center space-x-3 text-amber-900 text-xs font-semibold shadow-sm animate-fade-in">
+          <span className="text-2xl">⚠️</span>
+          <div>
+            <p className="font-extrabold text-amber-950 uppercase tracking-wide">Late Test Submission Window Active</p>
+            <p className="text-[11px] text-amber-800 leading-relaxed">
+              Standard test duration has ended. You may continue attempting and submit your responses before the final due date{testObj?.due_date ? ` (${new Date(testObj.due_date).toLocaleString()})` : ''}. A comment stating the reason for late submission is required upon submission.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Progress Bar */}
       <div className="w-full bg-slate-200 rounded-full h-1.5 overflow-hidden">
@@ -528,6 +587,26 @@ export default function TestRunnerPage({ params }) {
               <p>Unanswered: <span className="font-bold text-slate-500">{totalQuestions - answeredCount}</span></p>
             </div>
 
+            {/* Late Submission Comments */}
+            {isLate && (
+              <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl space-y-1.5 text-xs text-left">
+                <label className="block text-amber-900 font-bold uppercase text-[10.5px]">
+                  Comments on Late Submission <span className="text-red-650">*</span>
+                </label>
+                <textarea
+                  rows={2}
+                  value={lateReason}
+                  onChange={(e) => setLateReason(e.target.value)}
+                  placeholder="Explain reason for late submission (e.g. network disconnect, power interruption)..."
+                  className="w-full px-2.5 py-1.5 bg-white border border-amber-300 rounded-xl text-xs text-slate-800 resize-none font-medium focus:ring-1 focus:ring-amber-500"
+                  required
+                />
+                {!lateReason.trim() && (
+                  <p className="text-[10px] text-amber-700 italic">* Explanation comment is required prior to submitting late attempts.</p>
+                )}
+              </div>
+            )}
+
             <div className="flex items-center justify-end space-x-2 pt-2">
               <button
                 onClick={() => setShowConfirmModal(false)}
@@ -537,8 +616,8 @@ export default function TestRunnerPage({ params }) {
               </button>
               <button
                 onClick={handleManualSubmit}
-                disabled={submitting}
-                className="px-4 py-2 bg-brand-light hover:bg-brand-medium text-white font-bold text-xs rounded-xl shadow-sm"
+                disabled={submitting || (isLate && !lateReason.trim())}
+                className="px-4 py-2 bg-brand-light hover:bg-brand-medium text-white font-bold text-xs rounded-xl shadow-sm disabled:opacity-50 disabled:pointer-events-none"
               >
                 {submitting ? 'Submitting...' : 'Confirm Submission'}
               </button>

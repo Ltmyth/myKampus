@@ -1112,18 +1112,18 @@ export default function AdminPage() {
                             )}
                           </td>
                           <td className="px-4 py-3 text-center space-x-1">
+                            <button
+                              onClick={() => handleStartEdit(u)}
+                              className="px-2.5 py-1 bg-white border border-emerald-200 hover:bg-emerald-50 text-slate-800 text-[11px] font-bold rounded-lg transition-all shadow-2xs"
+                            >
+                              Edit
+                            </button>
                             {user?.role === 'platform_coordinator' && u.role === 'admin' ? (
-                              <span className="text-[10px] text-slate-400 font-bold italic px-2 py-0.5 bg-slate-100 rounded border border-slate-200">
-                                Admin Protected
+                              <span className="text-[10px] text-slate-400 font-semibold italic px-2 py-0.5 bg-slate-100 rounded border border-slate-200" title="Platform Coordinator cannot reset Admin password or delete Admin user">
+                                🛡️ Admin Protected
                               </span>
                             ) : (
                               <>
-                                <button
-                                  onClick={() => handleStartEdit(u)}
-                                  className="px-2.5 py-1 bg-white border border-emerald-200 hover:bg-emerald-50 text-slate-800 text-[11px] font-bold rounded-lg transition-all shadow-2xs"
-                                >
-                                  Edit
-                                </button>
                                 <button
                                   onClick={() => { setResetUserObj(u); setNewPasswordInput(''); setShowResetPassVisibility(false); }}
                                   className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 text-[11px] font-bold rounded-lg border border-amber-200 transition-all shadow-2xs"

@@ -28,6 +28,11 @@ export default function TakeExamPage() {
   const [showSubmitModal, setShowSubmitModal] = useState(false);
   const [confirmCheckbox, setConfirmCheckbox] = useState(false);
 
+  // Late submission tracking
+  const [isLate, setIsLate] = useState(false);
+  const [lateReason, setLateReason] = useState('');
+  const [dueRemainingSeconds, setDueRemainingSeconds] = useState(null);
+
   const timerRef = useRef(null);
 
   useEffect(() => {
@@ -56,14 +61,34 @@ export default function TakeExamPage() {
     };
   }, [examId]);
 
-  // Timer countdown hook
+  // Timer countdown hook (with overtime and due-date monitoring)
   useEffect(() => {
     if (timeLeft > 0) {
       timerRef.current = setInterval(() => {
         setTimeLeft(prev => {
           if (prev <= 1) {
             clearInterval(timerRef.current);
-            autoSubmitExam();
+            const hasDueDate = !!exam?.due_date;
+            const dueTimestamp = hasDueDate ? new Date(exam.due_date).getTime() : null;
+            if (dueTimestamp && Date.now() >= dueTimestamp) {
+              autoSubmitExam(null, null, tabSwitches, 'Assessment Window Closed: Final Due Date Reached');
+            } else {
+              setIsLate(true);
+              if (dueTimestamp) {
+                setDueRemainingSeconds(Math.max(0, Math.floor((dueTimestamp - Date.now()) / 1000)));
+              }
+            }
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+    } else if (isLate && dueRemainingSeconds !== null && dueRemainingSeconds > 0) {
+      timerRef.current = setInterval(() => {
+        setDueRemainingSeconds(prev => {
+          if (prev <= 1) {
+            clearInterval(timerRef.current);
+            autoSubmitExam(null, null, tabSwitches, 'Assessment Window Closed: Final Due Date Reached');
             return 0;
           }
           return prev - 1;
@@ -73,7 +98,7 @@ export default function TakeExamPage() {
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
-  }, [timeLeft]);
+  }, [timeLeft, isLate, dueRemainingSeconds, exam]);
 
   async function loadExamAttempt() {
     try {
@@ -103,16 +128,28 @@ export default function TakeExamPage() {
       const endTime = startTime + examData.duration_minutes * 60 * 1000;
       const now = new Date().getTime();
       const remainingSeconds = Math.max(0, Math.floor((endTime - now) / 1000));
-      
-      if (remainingSeconds <= 0) {
-        autoSubmitExam(attemptData.id, attemptData.answers);
+      const hasDueDate = !!examData.due_date;
+      const dueTimestamp = hasDueDate ? new Date(examData.due_date).getTime() : null;
+      const isPastDueDate = dueTimestamp && now >= dueTimestamp;
+
+      if (isPastDueDate) {
+        autoSubmitExam(attemptData.id, attemptData.answers, 0, 'Assessment Window Closed: Final Due Date Reached');
+        return;
+      }
+
+      if (remainingSeconds <= 0 || attemptData.is_late) {
+        setIsLate(true);
+        setTimeLeft(0);
+        if (dueTimestamp) {
+          setDueRemainingSeconds(Math.max(0, Math.floor((dueTimestamp - now) / 1000)));
+        }
       } else {
         setTimeLeft(remainingSeconds);
       }
 
     } catch (err) {
       setErrorMsg(err.message || 'Failed to load exam paper.');
-    } fontFinally: {
+    } finally {
       setLoading(false);
     }
   }
@@ -146,7 +183,8 @@ export default function TakeExamPage() {
       await api.post(`/attempts/${attId}/submit/`, {
         answers: answersPayload,
         tab_switches: switches,
-        auto_submitted_reason: reason
+        auto_submitted_reason: reason,
+        late_submission_reason: lateReason
       });
       setTimeout(() => {
         router.push(`/dashboard/exams/${examId}/results`);
@@ -234,16 +272,33 @@ export default function TakeExamPage() {
         </div>
 
         {/* Timer Box */}
-        <div className="flex items-center space-x-3 bg-brand-dark text-white px-5 py-3 rounded-xl shadow-md border border-white/5 self-start md:self-center">
-          <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 text-brand-emerald animate-pulse-slow" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <div className={`flex items-center space-x-3 px-5 py-3 rounded-xl shadow-md border self-start md:self-center ${isLate ? 'bg-amber-950 text-white border-amber-600/40' : 'bg-brand-dark text-white border-white/5'}`}>
+          <svg xmlns="http://www.w3.org/2000/svg" className={`w-5 h-5 ${isLate ? 'text-amber-400 animate-bounce' : 'text-brand-emerald animate-pulse-slow'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
           <div>
-            <span className="text-[9px] text-white/50 block font-bold uppercase tracking-wider">Time Remaining</span>
-            <span className="font-mono text-lg font-extrabold tracking-wider">{formatTime(timeLeft)}</span>
+            <span className="text-[9px] text-white/60 block font-bold uppercase tracking-wider">
+              {isLate ? '⚠️ Overtime (Late Window)' : 'Time Remaining'}
+            </span>
+            <span className={`font-mono text-lg font-extrabold tracking-wider ${isLate ? 'text-amber-300' : ''}`}>
+              {isLate ? (dueRemainingSeconds !== null ? `Due: ${formatTime(dueRemainingSeconds)}` : 'OVERTIME') : formatTime(timeLeft)}
+            </span>
           </div>
         </div>
       </div>
+
+      {/* Late Submission Notice Banner */}
+      {isLate && (
+        <div className="p-4 bg-amber-50 border-2 border-amber-300 rounded-2xl flex items-center space-x-3 text-amber-900 text-xs font-semibold shadow-sm animate-fade-in">
+          <span className="text-2xl">⚠️</span>
+          <div>
+            <p className="font-extrabold text-amber-950 uppercase tracking-wide">Late Submission Mode Active</p>
+            <p className="text-[11px] text-amber-800 leading-relaxed">
+              The standard duration or scheduled stop time has expired. You may still complete and submit your paper before the hard due date{exam?.due_date ? ` (${new Date(exam.due_date).toLocaleString()})` : ''}. A comment explaining the reason for late submission is required.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Main wizard grid */}
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
@@ -415,6 +470,26 @@ export default function TakeExamPage() {
               )}
             </div>
 
+            {/* Late Submission Comments */}
+            {isLate && (
+              <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-2xl space-y-1.5 text-xs text-left">
+                <label className="block text-amber-900 font-bold uppercase text-[10.5px]">
+                  Comments on Late Submission <span className="text-red-650">*</span>
+                </label>
+                <textarea
+                  rows={2}
+                  value={lateReason}
+                  onChange={(e) => setLateReason(e.target.value)}
+                  placeholder="Provide brief explanation for late submission (e.g. system connectivity interruption, power outage)..."
+                  className="w-full px-2.5 py-1.5 bg-white border border-amber-300 rounded-xl text-xs text-slate-800 resize-none font-medium focus:ring-1 focus:ring-amber-500"
+                  required
+                />
+                {!lateReason.trim() && (
+                  <p className="text-[10px] text-amber-700 italic">* Explanation comment is required prior to submitting late attempts.</p>
+                )}
+              </div>
+            )}
+
             {/* Confirmation checkbox */}
             <label className="flex items-start space-x-2.5 text-slate-650 cursor-pointer select-none text-[11px] font-semibold leading-relaxed">
               <input
@@ -436,7 +511,7 @@ export default function TakeExamPage() {
               </button>
               <button
                 type="button"
-                disabled={!confirmCheckbox}
+                disabled={!confirmCheckbox || (isLate && !lateReason.trim())}
                 onClick={() => {
                   setShowSubmitModal(false);
                   performSubmit(attempt.id, answers);

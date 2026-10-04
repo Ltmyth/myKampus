@@ -1,0 +1,314 @@
+A patient correctly states their name but cannot identify the hospital or date. How should this be documented?
+A. Alert and oriented ×3
+B. Alert and oriented ×2
+C. Disoriented
+D. Confused
+ANSWER: B
+
+A patient opens eyes only when painful stimuli is applied. This level of consciousness is:
+A. Lethargic
+B. Obtunded
+C. Stuporous
+D. Comatose
+ANSWER: C
+
+Which finding suggests impaired judgment during a mental status exam?
+A. Flat affect
+B. Inability to interpret a scenario (e.g., fire in a theater)
+C. Slurred speech
+D. Poor grooming
+ANSWER:B 
+
+A sudden fluctuation in attention and awareness is most consistent with:
+A. Dementia
+B. Delirium
+C. Depression
+D. Psychosis
+ANSWER: B
+
+Which is the most sensitive indicator of neurologic deterioration?
+A. Reflex changes
+B. LOC changes
+C. Gait abnormalities
+D. Cranial nerve deficits
+ANSWER: B
+
+A patient withdraws from pain, makes incomprehensible sounds, and opens eyes to voice. What is the GCS score?
+A. 9
+B. 10
+C. 11
+D. 12
+ANSWER: C
+
+A GCS score of 7 indicates:
+A. Mild brain injury
+B. Moderate injury
+C. Severe brain injury
+D. Normal status
+ANSWER: C
+
+Which component of GCS assesses brainstem function most directly?
+A. Eye opening
+B. Verbal response
+C. Motor response
+D. All equally
+ANSWER: A
+
+A patient is intubated. Which GCS component cannot be assessed reliably?
+A. Eye opening
+B. Motor response
+C. Verbal response
+D. Pain response
+ANSWER: C
+
+Proper documentation of GCS should include:
+A. Total score only
+B. Individual component scores
+C. Nurse interpretation only
+D. Diagnosis
+ANSWER: B
+
+A “worst headache of life” presentation suggests:
+A. Migraine
+B. Tension headache
+C. Subarachnoid hemorrhage
+D. Sinusitis
+ANSWER: C
+
+A patient reports unilateral throbbing headache with photophobia and nausea. Likely diagnosis:
+A. Cluster headache
+B. Migraine
+C. Tension headache
+D. Infection
+ANSWER: B
+
+Cluster headaches are commonly associated with:
+A. Bilateral pain
+B. Autonomic symptoms (tearing, nasal congestion)
+C. Mild intensity
+D. Long duration
+ANSWER:B 
+
+Which headache feature is a red flag?
+A. Gradual onset
+B. Recurrent pattern
+C. Sudden onset
+D. Relief with rest
+ANSWER: C
+
+Headache with fever and neck stiffness suggests:
+A. Migraine
+B. Stroke
+C. Meningitis
+D. Hypertension
+ANSWER:C 
+
+Inability to smile symmetrically suggests dysfunction of:
+A. CN V
+B. CN VII
+C. CN IX
+D. CN XII
+ANSWER: B
+
+Loss of gag reflex involves:
+A. CN II
+B. CN V
+C. CN IX/X
+D. CN XI
+ANSWER:C 
+
+Double vision (diplopia) indicates dysfunction of:
+A. CN I
+B. CN II
+C. CN III, IV, or VI
+D. CN VIII
+ANSWER: C
+
+Hearing loss is assessed via:
+A. CN VI
+B. CN VII
+C. CN VIII
+D. CN X
+ANSWER: C
+
+Tongue deviation on protrusion suggests lesion of:
+A. CN IX
+B. CN X
+C. CN XI
+D. CN XII
+ANSWER: D
+
+Absence of corneal reflex suggests damage to:
+A. CN II
+B. CN III
+C. CN V or VII
+D. CN VIII
+ANSWER: C
+
+Nystagmus during extraocular movement testing indicates:
+A. Normal finding
+B. Vestibular or cerebellar dysfunction
+C. Vision loss
+D. Pain
+ANSWER: B
+
+A zero reflex grading means:
+A. Normal
+B. Hypoactive
+C. Absent
+D. Hyperactive
+ANSWER: C
+
+Hyperreflexia suggests:
+A. Lower motor neuron lesion
+B. Upper motor neuron lesion
+C. Muscle disease
+D. Normal aging
+ANSWER: B
+
+Clonus is indicative of:
+A. Normal reflex
+B. Severe hyperreflexia
+C. Hyporeflexia
+D. Sensory loss
+ANSWER: B
+
+Inability to recognize numbers traced on the palm indicates impairment of:
+A. Pain sensation
+B. Graphesthesia
+C. Proprioception
+D. Reflexes
+ANSWER: B
+
+Positive Romberg test indicates:
+A. Visual impairment
+B. Balance dysfunction
+C. Hearing loss
+D. Pain
+ANSWER: B
+
+Loss of proprioception will most affect:
+A. Speech
+B. Balance
+C. Vision
+D. Memory
+ANSWER: B
+
+A patient sways significantly with eyes closed but not open. Interpretation:
+A. Cerebellar lesion
+B. Sensory ataxia
+C. Muscle weakness
+D. Normal
+ANSWER: B
+
+Coordination is primarily controlled by the:
+A. Cerebrum
+B. Cerebellum
+C. Brainstem
+D. Spinal cord
+ANSWER: B
+
+A shuffling gait is characteristic of:
+A. Stroke
+B. Parkinsonism
+C. Cerebellar disease
+D. Neuropathy
+ANSWER: B
+
+A wide-based unsteady gait suggests:
+A. Muscle injury
+B. Cerebellar dysfunction
+C. Bone fracture
+D. Normal aging
+ANSWER: B
+
+Foot drop is associated with:
+A. Sensory deficit
+B. Motor nerve dysfunction
+C. Vision loss
+D. Reflex increase
+ANSWER: B
+
+Hemiplegic gait suggests:
+A. Bilateral weakness
+B. Stroke
+C. Infection
+D. Anxiety
+ANSWER: B
+
+Difficulty initiating movement is typical of:
+A. Cerebellar disease
+B. Parkinson’s disease
+C. Neuropathy
+D. Myopathy
+ANSWER: B
+
+Positive Brudzinski’s sign is indicated by:
+A. Pain on leg extension
+B. Hip flexion on neck flexion
+C. Arm weakness
+D. Neck stiffness only
+ANSWER: B
+
+Positive Kernig’s sign is:
+A. Pain when extending knee
+B. Neck pain
+C. Eye pain
+D. Arm rigidity
+ANSWER: A
+
+Meningeal irritation is commonly caused by:
+A. Stroke
+B. Infection
+C. Trauma
+D. Tumor
+ANSWER: B
+
+Which is the best documentation?
+A. “Patient looks sick”
+B. “Patient confused”
+C. “Patient disoriented to time and place”
+D. “Patient abnormal”
+ANSWER: C
+
+A GCS drop from 14 to 10 indicates:
+A. Improvement
+B. Stability
+C. Deterioration
+D. No change
+ANSWER: C
+
+Which requires urgent escalation?
+A. Mild headache
+B. Sudden LOC change
+C. Normal reflexes
+D. Stable gait
+ANSWER: B
+
+Which finding suggests upper motor neuron lesion?
+A. Hyporeflexia
+B. Muscle wasting
+C. Hyperreflexia
+D. Flaccidity
+ANSWER: C
+
+A patient with slurred speech and facial droop likely has:
+A. Migraine
+B. Stroke
+C. Infection
+D. Anxiety
+ANSWER: B
+
+Which combination suggests meningitis?
+A. Headache + fever + neck stiffness
+B. Headache + nausea
+C. Fever + cough
+D. Pain + swelling
+ANSWER: A
+
+Best interpretation of unilateral weakness and hyperreflexia:
+A. Peripheral nerve issue
+B. Upper motor neuron lesion
+C. Muscle disease
+D. Normal finding
+ANSWER: B

@@ -173,6 +173,8 @@ class ExamAttempt(models.Model):
     score = models.FloatField(default=0.0, help_text="Percentage score from 0 to 100")
     tab_switches_count = models.IntegerField(default=0)
     auto_submitted_reason = models.CharField(max_length=255, null=True, blank=True)
+    is_late = models.BooleanField(default=False, help_text="Indicates whether attempt or submission occurred after regular stop time")
+    late_submission_reason = models.TextField(blank=True, null=True, help_text="Student comments explaining reason for late submission")
 
     def __str__(self):
         return f"{self.student.username} - {self.exam.title} (Score: {self.score}%)"
@@ -237,6 +239,8 @@ class TestAttempt(models.Model):
     tab_switches_count = models.IntegerField(default=0)
     auto_submitted_reason = models.CharField(max_length=255, null=True, blank=True)
     feedback = models.TextField(blank=True, null=True)
+    is_late = models.BooleanField(default=False, help_text="Indicates whether attempt or submission occurred after regular stop time")
+    late_submission_reason = models.TextField(blank=True, null=True, help_text="Student comments explaining reason for late submission")
 
     def __str__(self):
         return f"{self.student.username} - Attempt #{self.attempt_number} for {self.test.title} (Score: {self.score}%)"

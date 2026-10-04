@@ -138,6 +138,20 @@ export default function TestResultsPage({ params }) {
           </div>
         </div>
 
+        {/* Late Submission Flag & Student Comments */}
+        {attempt.is_late && (
+          <div className="mt-4 p-3.5 bg-amber-500/20 border border-amber-400/40 rounded-2xl max-w-2xl mx-auto text-left text-xs text-amber-200">
+            <span className="px-2 py-0.5 rounded bg-amber-400 text-amber-950 font-extrabold text-[10px] uppercase">
+              ⚠️ Late Submission
+            </span>
+            {attempt.late_submission_reason && (
+              <p className="mt-1.5 text-white/90 italic">
+                <strong className="text-amber-300">Student Comment:</strong> "{attempt.late_submission_reason}"
+              </p>
+            )}
+          </div>
+        )}
+
       </div>
 
       {/* Detailed Question Review */}
