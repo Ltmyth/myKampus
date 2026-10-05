@@ -33,6 +33,8 @@ class User(AbstractUser):
         (2, 'Semester 2'),
     )
     semester = models.IntegerField(choices=SEMESTER_CHOICES, default=1, help_text="Current Semester of Study for students (1 or 2)")
+    entry_year = models.IntegerField(default=2026, blank=True, null=True, help_text="Admission / Entry Year (e.g. 2026)")
+    intake = models.CharField(max_length=50, default='August Intake', blank=True, null=True, help_text="Admission Intake (e.g. August Intake, January Intake, May Intake)")
     must_change_password = models.BooleanField(default=False, help_text="Flag indicating student must change one-time password on login")
 
     @property

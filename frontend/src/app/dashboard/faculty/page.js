@@ -38,7 +38,9 @@ export default function FacultyManagementPage() {
 
   // Class Promotion State
   const [showPromotionModal, setShowPromotionModal] = useState(false);
-  const [promotionFacultyId, setPromotionFacultyId] = useState('');
+  const [promotionFacultyId, setPromotionFacultyId] = useState('All');
+  const [promotionEntryYear, setPromotionEntryYear] = useState('All');
+  const [promotionIntake, setPromotionIntake] = useState('All');
   const [promotionCourseId, setPromotionCourseId] = useState('');
   const [promotionCurrentYear, setPromotionCurrentYear] = useState(1);
   const [promotionTargetYear, setPromotionTargetYear] = useState(2);
@@ -51,6 +53,8 @@ export default function FacultyManagementPage() {
   const [studentSearch, setStudentSearch] = useState('');
   const [studentFacultyFilter, setStudentFacultyFilter] = useState('All');
   const [studentYearFilter, setStudentYearFilter] = useState('All');
+  const [studentEntryYearFilter, setStudentEntryYearFilter] = useState('All');
+  const [studentIntakeFilter, setStudentIntakeFilter] = useState('All');
   const [studentPage, setStudentPage] = useState(1);
   const [studentPageSize, setStudentPageSize] = useState(10);
 
@@ -246,6 +250,8 @@ export default function FacultyManagementPage() {
         target_year: parseInt(promotionTargetYear),
         target_semester: parseInt(promotionTargetSemester || 1),
         student_ids: selectedStudentPromotionIds.map(id => parseInt(id)),
+        entry_year: promotionEntryYear !== 'All' ? parseInt(promotionEntryYear) : null,
+        intake: promotionIntake !== 'All' ? promotionIntake : null,
         overrides: studentOverrides
       });
       setSuccessMsg(res.detail || `Class/Individual promotion executed successfully for ${selectedStudentPromotionIds.length} students!`);
@@ -1515,7 +1521,9 @@ export default function FacultyManagementPage() {
                   (st.reg_number || st.registration_number || '').toLowerCase().includes(studentSearch.toLowerCase());
                 const matchesFaculty = studentFacultyFilter === 'All' || (st.faculty_code === studentFacultyFilter || String(st.faculty) === String(studentFacultyFilter));
                 const matchesYear = studentYearFilter === 'All' || String(st.year_of_study || 1) === String(studentYearFilter);
-                return matchesSearch && matchesFaculty && matchesYear;
+                const matchesEntryYear = studentEntryYearFilter === 'All' || String(st.entry_year || 2026) === String(studentEntryYearFilter);
+                const matchesIntake = studentIntakeFilter === 'All' || (st.intake || 'August Intake').toLowerCase().includes(studentIntakeFilter.toLowerCase());
+                return matchesSearch && matchesFaculty && matchesYear && matchesEntryYear && matchesIntake;
               });
 
               const totalStudentPages = Math.max(1, Math.ceil(filteredStudents.length / studentPageSize));
@@ -1580,7 +1588,7 @@ export default function FacultyManagementPage() {
                   </div>
 
                   {/* Search and Filters Toolbar */}
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs bg-slate-50 p-3 rounded-xl border border-slate-200">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 text-xs bg-slate-50 p-3 rounded-xl border border-slate-200">
                     <div>
                       <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Search Students</label>
                       <input
@@ -1618,6 +1626,36 @@ export default function FacultyManagementPage() {
                         <option value="2">Year 2</option>
                         <option value="3">Year 3</option>
                         <option value="4">Year 4</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Entry Year</label>
+                      <select
+                        value={studentEntryYearFilter}
+                        onChange={(e) => { setStudentEntryYearFilter(e.target.value); setStudentPage(1); }}
+                        className="w-full bg-white border border-slate-200 text-slate-800 font-bold rounded-lg px-2.5 py-1.5 focus:ring-1 focus:ring-brand-light"
+                      >
+                        <option value="All">All Entry Years</option>
+                        <option value="2026">2026 Entry</option>
+                        <option value="2025">2025 Entry</option>
+                        <option value="2024">2024 Entry</option>
+                        <option value="2023">2023 Entry</option>
+                        <option value="2022">2022 Entry</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Intake</label>
+                      <select
+                        value={studentIntakeFilter}
+                        onChange={(e) => { setStudentIntakeFilter(e.target.value); setStudentPage(1); }}
+                        className="w-full bg-white border border-slate-200 text-slate-800 font-bold rounded-lg px-2.5 py-1.5 focus:ring-1 focus:ring-brand-light"
+                      >
+                        <option value="All">All Intakes</option>
+                        <option value="August Intake">August Intake</option>
+                        <option value="January Intake">January Intake</option>
+                        <option value="May Intake">May Intake</option>
                       </select>
                     </div>
                   </div>
@@ -1673,6 +1711,9 @@ export default function FacultyManagementPage() {
                                 <td className="px-4 py-3 font-bold text-slate-850">
                                   {st.first_name || st.username} {st.last_name}
                                   <span className="block text-[10px] text-slate-400 font-normal">{st.email}</span>
+                                  <span className="inline-block mt-0.5 px-2 py-0.5 rounded text-[9px] font-extrabold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                                    📅 {st.entry_year || 2026} · {st.intake || 'August Intake'}
+                                  </span>
                                 </td>
                                 <td className="px-4 py-3 text-center">
                                   <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-purple-50 text-purple-700 border border-purple-200">
@@ -2728,6 +2769,85 @@ export default function FacultyManagementPage() {
                 </div>
               </div>
 
+              {/* Cohort Filters for Promotion */}
+              <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 space-y-2">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <span className="font-bold text-[11px] text-slate-700 uppercase tracking-wider">
+                    🎯 Filter & Target Cohort (e.g. 2026 August Intake)
+                  </span>
+                  <div className="flex items-center space-x-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const matching = students.filter(st => {
+                          const matchesFac = promotionFacultyId === 'All' || (st.faculty_code === promotionFacultyId || String(st.faculty) === String(promotionFacultyId));
+                          const matchesEY = promotionEntryYear === 'All' || String(st.entry_year || 2026) === String(promotionEntryYear);
+                          const matchesIn = promotionIntake === 'All' || (st.intake || 'August Intake').toLowerCase().includes(promotionIntake.toLowerCase());
+                          return matchesFac && matchesEY && matchesIn;
+                        });
+                        setSelectedStudentPromotionIds(matching.map(s => s.id));
+                      }}
+                      className="text-[10px] font-bold px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition-all shadow-sm"
+                    >
+                      ✓ Select Filtered Cohort
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedStudentPromotionIds([])}
+                      className="text-[10px] font-bold px-2 py-1 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg transition-all"
+                    >
+                      Clear Selection
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 uppercase mb-0.5">Faculty</label>
+                    <select
+                      value={promotionFacultyId}
+                      onChange={(e) => setPromotionFacultyId(e.target.value)}
+                      className="w-full bg-white border border-slate-200 font-bold text-slate-800 rounded-lg px-2 py-1.5 text-xs"
+                    >
+                      <option value="All">All Faculties ({faculties.length})</option>
+                      {faculties.map(f => (
+                        <option key={f.id} value={f.code}>[{f.code}] {f.name}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 uppercase mb-0.5">Entry Year</label>
+                    <select
+                      value={promotionEntryYear}
+                      onChange={(e) => setPromotionEntryYear(e.target.value)}
+                      className="w-full bg-white border border-slate-200 font-bold text-slate-800 rounded-lg px-2 py-1.5 text-xs"
+                    >
+                      <option value="All">All Entry Years</option>
+                      <option value="2026">2026 Entry</option>
+                      <option value="2025">2025 Entry</option>
+                      <option value="2024">2024 Entry</option>
+                      <option value="2023">2023 Entry</option>
+                      <option value="2022">2022 Entry</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 uppercase mb-0.5">Intake</label>
+                    <select
+                      value={promotionIntake}
+                      onChange={(e) => setPromotionIntake(e.target.value)}
+                      className="w-full bg-white border border-slate-200 font-bold text-slate-800 rounded-lg px-2 py-1.5 text-xs"
+                    >
+                      <option value="All">All Intakes</option>
+                      <option value="August Intake">August Intake</option>
+                      <option value="January Intake">January Intake</option>
+                      <option value="May Intake">May Intake</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
               {/* Roster Table with Overrides */}
               <div className="max-h-64 overflow-y-auto custom-scrollbar border border-slate-200 rounded-xl">
                 <table className="w-full text-left text-xs border-collapse">
@@ -2736,67 +2856,107 @@ export default function FacultyManagementPage() {
                       <th className="px-3 py-2 w-8 text-center">
                         <input
                           type="checkbox"
-                          checked={selectedStudentPromotionIds.length === students.length && students.length > 0}
+                          checked={(() => {
+                            const matching = students.filter(st => {
+                              const matchesFac = promotionFacultyId === 'All' || (st.faculty_code === promotionFacultyId || String(st.faculty) === String(promotionFacultyId));
+                              const matchesEY = promotionEntryYear === 'All' || String(st.entry_year || 2026) === String(promotionEntryYear);
+                              const matchesIn = promotionIntake === 'All' || (st.intake || 'August Intake').toLowerCase().includes(promotionIntake.toLowerCase());
+                              return matchesFac && matchesEY && matchesIn;
+                            });
+                            return matching.length > 0 && matching.every(s => selectedStudentPromotionIds.includes(s.id));
+                          })()}
                           onChange={(e) => {
+                            const matching = students.filter(st => {
+                              const matchesFac = promotionFacultyId === 'All' || (st.faculty_code === promotionFacultyId || String(st.faculty) === String(promotionFacultyId));
+                              const matchesEY = promotionEntryYear === 'All' || String(st.entry_year || 2026) === String(promotionEntryYear);
+                              const matchesIn = promotionIntake === 'All' || (st.intake || 'August Intake').toLowerCase().includes(promotionIntake.toLowerCase());
+                              return matchesFac && matchesEY && matchesIn;
+                            });
                             if (e.target.checked) {
-                              setSelectedStudentPromotionIds(students.map(s => s.id));
+                              const matchingIds = matching.map(s => s.id);
+                              setSelectedStudentPromotionIds(prev => Array.from(new Set([...prev, ...matchingIds])));
                             } else {
-                              setSelectedStudentPromotionIds([]);
+                              const matchingIds = new Set(matching.map(s => s.id));
+                              setSelectedStudentPromotionIds(prev => prev.filter(id => !matchingIds.has(id)));
                             }
                           }}
-                          className="rounded text-indigo-600 focus:ring-indigo-500"
+                          className="rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer"
                         />
                       </th>
                       <th className="px-3 py-2">Student Name & Reg No</th>
-                      <th className="px-3 py-2 text-center">Current Year</th>
+                      <th className="px-3 py-2 text-center">Current Class</th>
                       <th className="px-3 py-2">Target Year Override</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 text-slate-700">
-                    {students.map((st) => {
-                      const isSelected = selectedStudentPromotionIds.includes(st.id);
-                      const currentYr = st.year_of_study || 1;
-                      const customTarget = studentOverrides[st.id] !== undefined ? studentOverrides[st.id] : promotionTargetYear;
+                    {(() => {
+                      const displayedStudents = students.filter(st => {
+                        const matchesFac = promotionFacultyId === 'All' || (st.faculty_code === promotionFacultyId || String(st.faculty) === String(promotionFacultyId));
+                        const matchesEY = promotionEntryYear === 'All' || String(st.entry_year || 2026) === String(promotionEntryYear);
+                        const matchesIn = promotionIntake === 'All' || (st.intake || 'August Intake').toLowerCase().includes(promotionIntake.toLowerCase());
+                        return matchesFac && matchesEY && matchesIn;
+                      });
 
-                      return (
-                        <tr key={st.id} className={isSelected ? 'bg-indigo-50/30' : 'opacity-60'}>
-                          <td className="px-3 py-2 text-center">
-                            <input
-                              type="checkbox"
-                              checked={isSelected}
-                              onChange={(e) => {
-                                if (e.target.checked) {
-                                  setSelectedStudentPromotionIds(prev => [...prev, st.id]);
-                                } else {
-                                  setSelectedStudentPromotionIds(prev => prev.filter(id => id !== st.id));
-                                }
-                              }}
-                              className="rounded text-indigo-600 focus:ring-indigo-500"
-                            />
-                          </td>
-                          <td className="px-3 py-2">
-                            <p className="font-bold text-slate-850">{st.first_name || st.username} {st.last_name}</p>
-                            <span className="text-[10px] text-slate-500 font-mono font-bold">{st.reg_number || st.registration_number || `@${st.username}`}</span>
-                          </td>
-                          <td className="px-3 py-2 text-center font-extrabold text-slate-700">
-                            Year {currentYr}
-                          </td>
-                          <td className="px-3 py-2">
-                            <select
-                              value={customTarget}
-                              onChange={(e) => setStudentOverrides(prev => ({ ...prev, [st.id]: Number(e.target.value) }))}
-                              className="bg-white border border-slate-200 text-slate-800 font-bold rounded-lg px-2 py-1 text-xs"
-                            >
-                              <option value={1}>Repeat Year 1</option>
-                              <option value={2}>Advance to Year 2</option>
-                              <option value={3}>Advance to Year 3</option>
-                              <option value={4}>Advance to Year 4</option>
-                              <option value={5}>🎓 Graduate (Alumni)</option>
-                            </select>
-                          </td>
-                        </tr>
-                      );
-                    })}
+                      if (displayedStudents.length === 0) {
+                        return (
+                          <tr>
+                            <td colSpan={4} className="py-6 text-center text-slate-400 italic">
+                              No students match the chosen cohort filter ({promotionEntryYear !== 'All' ? promotionEntryYear : ''} {promotionIntake !== 'All' ? promotionIntake : ''}).
+                            </td>
+                          </tr>
+                        );
+                      }
+
+                      return displayedStudents.map((st) => {
+                        const isSelected = selectedStudentPromotionIds.includes(st.id);
+                        const currentYr = st.year_of_study || 1;
+                        const customTarget = studentOverrides[st.id] !== undefined ? studentOverrides[st.id] : promotionTargetYear;
+
+                        return (
+                          <tr key={st.id} className={isSelected ? 'bg-indigo-50/40' : 'opacity-60'}>
+                            <td className="px-3 py-2 text-center">
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    setSelectedStudentPromotionIds(prev => [...prev, st.id]);
+                                  } else {
+                                    setSelectedStudentPromotionIds(prev => prev.filter(id => id !== st.id));
+                                  }
+                                }}
+                                className="rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                              />
+                            </td>
+                            <td className="px-3 py-2">
+                              <p className="font-bold text-slate-850">{st.first_name || st.username} {st.last_name}</p>
+                              <div className="flex items-center space-x-1.5 mt-0.5">
+                                <span className="text-[10px] text-slate-500 font-mono font-bold">{st.reg_number || st.registration_number || `@${st.username}`}</span>
+                                <span className="px-1.5 py-0.2 rounded text-[9px] font-extrabold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                                  {st.entry_year || 2026} · {st.intake || 'August Intake'}
+                                </span>
+                              </div>
+                            </td>
+                            <td className="px-3 py-2 text-center font-extrabold text-slate-700">
+                              Year {currentYr} (Sem {st.semester || 1})
+                            </td>
+                            <td className="px-3 py-2">
+                              <select
+                                value={customTarget}
+                                onChange={(e) => setStudentOverrides(prev => ({ ...prev, [st.id]: Number(e.target.value) }))}
+                                className="bg-white border border-slate-200 text-slate-800 font-bold rounded-lg px-2 py-1 text-xs"
+                              >
+                                <option value={1}>Repeat Year 1</option>
+                                <option value={2}>Advance to Year 2</option>
+                                <option value={3}>Advance to Year 3</option>
+                                <option value={4}>Advance to Year 4</option>
+                                <option value={5}>🎓 Graduate (Alumni)</option>
+                              </select>
+                            </td>
+                          </tr>
+                        );
+                      });
+                    })()}
                   </tbody>
                 </table>
               </div>

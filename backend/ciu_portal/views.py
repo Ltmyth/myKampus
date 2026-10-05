@@ -152,6 +152,81 @@ def get_user_assigned_faculties(user):
 
     return facs
 
+def clean_sheet_cell(val):
+    if val is None:
+        return ''
+    if isinstance(val, float) and val.is_integer():
+        return str(int(val))
+    return str(val).strip()
+
+def generate_excel_response(filename, headers, sample_rows, sheet_title="Template"):
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+    import io
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = sheet_title
+    if hasattr(ws, 'views') and len(ws.views.sheetView) > 0:
+        ws.views.sheetView[0].showGridLines = True
+
+    header_font = Font(name="Segoe UI", size=11, bold=True, color="FFFFFF")
+    header_fill = PatternFill(start_color="1B4D3E", end_color="1B4D3E", fill_type="solid") # CIU Deep Forest Green
+    header_align = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    
+    cell_font = Font(name="Segoe UI", size=10)
+    thin_border = Border(
+        left=Side(style='thin', color='D0D7DE'),
+        right=Side(style='thin', color='D0D7DE'),
+        top=Side(style='thin', color='D0D7DE'),
+        bottom=Side(style='thin', color='D0D7DE')
+    )
+
+    ws.append(headers)
+    for cell in ws[1]:
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = header_align
+        cell.border = thin_border
+    ws.row_dimensions[1].height = 28
+
+    for row_idx, row_data in enumerate(sample_rows, start=2):
+        ws.append(row_data)
+        ws.row_dimensions[row_idx].height = 20
+        for cell in ws[row_idx]:
+            cell.font = cell_font
+            cell.border = thin_border
+            cell.alignment = Alignment(vertical="center")
+
+    for col in ws.columns:
+        max_len = 0
+        col_letter = get_column_letter(col[0].column)
+        for cell in col:
+            val_str = str(cell.value or '')
+            max_len = max(max_len, len(val_str))
+        ws.column_dimensions[col_letter].width = max(max_len + 5, 15)
+
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+
+    response = HttpResponse(
+        output.getvalue(),
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    )
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+    return response
+
+def generate_csv_response(filename, headers, sample_rows):
+    response = HttpResponse(content_type='text/csv; charset=utf-8')
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+    writer = csv.writer(response)
+    writer.writerow(headers)
+    for r in sample_rows:
+        writer.writerow(r)
+    return response
+
 # 4. System Admin User Management ViewSet
 class AdminUserViewSet(viewsets.ModelViewSet):
     serializer_class = AdminUserSerializer
@@ -161,7 +236,19 @@ class AdminUserViewSet(viewsets.ModelViewSet):
             return [permissions.IsAuthenticated()]
         if self.action in ['promote_class', 'promote_students']:
             return [permissions.IsAuthenticated(), (IsAdmin | IsPlatformCoordinator | IsLecturer | IsFacultyAdmin | IsDean)()]
+        if self.action in ['sample_student_file', 'sample_staff_file', 'sample_allocation_csv', 'sample_student_csv', 'sample_student_excel', 'sample_staff_csv', 'sample_staff_excel']:
+            return [permissions.AllowAny()]
+        if self.action in ['upload_students', 'bulk_allocate_csv']:
+            return [permissions.IsAuthenticated(), (IsAdmin | IsPlatformCoordinator | IsFacultyAdmin | IsRegistrar)()]
+        if self.action in ['bulk_onboard_staff']:
+            return [permissions.IsAuthenticated(), (IsAdmin | IsPlatformCoordinator)()]
         return [permissions.IsAuthenticated(), IsAdmin()]
+
+    def perform_content_negotiation(self, request, force=False):
+        if self.action in ['sample_student_file', 'sample_staff_file', 'sample_allocation_csv', 'sample_student_csv', 'sample_student_excel', 'sample_staff_csv', 'sample_staff_excel']:
+            from rest_framework.renderers import JSONRenderer
+            return (JSONRenderer(), 'application/json')
+        return super().perform_content_negotiation(request, force=force)
 
     def get_queryset(self):
         user = self.request.user
@@ -169,6 +256,24 @@ class AdminUserViewSet(viewsets.ModelViewSet):
         role_param = self.request.query_params.get('role')
         if role_param:
             qs = qs.filter(role=role_param)
+
+        entry_year_param = self.request.query_params.get('entry_year')
+        if entry_year_param and entry_year_param != 'All':
+            try:
+                qs = qs.filter(entry_year=int(entry_year_param))
+            except (ValueError, TypeError):
+                pass
+
+        intake_param = self.request.query_params.get('intake')
+        if intake_param and intake_param != 'All':
+            qs = qs.filter(intake__iexact=intake_param.strip())
+
+        faculty_param = self.request.query_params.get('faculty')
+        if faculty_param and faculty_param != 'All':
+            if str(faculty_param).isdigit():
+                qs = qs.filter(faculty_id=int(faculty_param))
+            else:
+                qs = qs.filter(faculty__code__iexact=faculty_param.strip())
 
         if user.role == 'student':
             student_courses = Course.objects.filter(
@@ -500,7 +605,7 @@ class AdminUserViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'])
     def sample_allocation_csv(self, request):
-        response = HttpResponse(content_type='text/csv')
+        response = HttpResponse(content_type='text/csv; charset=utf-8')
         response['Content-Disposition'] = 'attachment; filename="sample_student_allocations.csv"'
         writer = csv.writer(response)
         writer.writerow(['reg_number', 'faculty_code', 'course_code', 'year_of_study', 'semester'])
@@ -509,6 +614,285 @@ class AdminUserViewSet(viewsets.ModelViewSet):
         writer.writerow(['2026FAS-A003', 'FAS', 'BSN2026', '3', '1'])
         return response
 
+    @action(detail=False, methods=['get'])
+    def sample_student_file(self, request):
+        fmt = request.query_params.get('format', 'csv').lower().strip()
+        headers = ['Registration Number', 'Full Name', 'Email', 'Faculty Code', 'Entry Year', 'Intake', 'Year of Study', 'Semester', 'Phone Contact']
+        sample_rows = [
+            ['2026SOBAT-B001', 'KIGOZI IVAN', 'ikigozi@ciu.ac.ug', 'SOBAT', 2026, 'August Intake', 1, 1, '0772123456'],
+            ['2026FST-B002', 'NAMUGANGA SARAH', 'snamuganga@ciu.ac.ug', 'FST', 2026, 'August Intake', 1, 1, '0701987654'],
+            ['2026SONM-B003', 'ATUHAIRE PATIENCE', 'patuhaire@ciu.ac.ug', 'SONM', 2026, 'August Intake', 1, 1, '0783456789'],
+            ['2026SOPH-B004', 'MUGISHA BRIAN', 'bmugisha@ciu.ac.ug', 'SOPH', 2026, 'January Intake', 1, 1, '0754112233'],
+            ['2026IAH-B005', 'NAJJEMBA GLORIA', 'gnajjemba@ciu.ac.ug', 'IAH', 2026, 'August Intake', 1, 1, '0778990011']
+        ]
+        if fmt in ['xlsx', 'excel', 'xls']:
+            return generate_excel_response('sample_student_onboarding.xlsx', headers, sample_rows, sheet_title="Students Onboarding")
+        return generate_csv_response('sample_student_onboarding.csv', headers, sample_rows)
+
+    @action(detail=False, methods=['get'])
+    def sample_student_csv(self, request):
+        return self.sample_student_file(request)
+
+    @action(detail=False, methods=['get'])
+    def sample_student_excel(self, request):
+        headers = ['Registration Number', 'Full Name', 'Email', 'Faculty Code', 'Entry Year', 'Intake', 'Year of Study', 'Semester', 'Phone Contact']
+        sample_rows = [
+            ['2026SOBAT-B001', 'KIGOZI IVAN', 'ikigozi@ciu.ac.ug', 'SOBAT', 2026, 'August Intake', 1, 1, '0772123456'],
+            ['2026FST-B002', 'NAMUGANGA SARAH', 'snamuganga@ciu.ac.ug', 'FST', 2026, 'August Intake', 1, 1, '0701987654'],
+            ['2026SONM-B003', 'ATUHAIRE PATIENCE', 'patuhaire@ciu.ac.ug', 'SONM', 2026, 'August Intake', 1, 1, '0783456789'],
+            ['2026SOPH-B004', 'MUGISHA BRIAN', 'bmugisha@ciu.ac.ug', 'SOPH', 2026, 'January Intake', 1, 1, '0754112233'],
+            ['2026IAH-B005', 'NAJJEMBA GLORIA', 'gnajjemba@ciu.ac.ug', 'IAH', 2026, 'August Intake', 1, 1, '0778990011']
+        ]
+        return generate_excel_response('sample_student_onboarding.xlsx', headers, sample_rows, sheet_title="Students Onboarding")
+
+    @action(detail=False, methods=['get'])
+    def sample_staff_file(self, request):
+        fmt = request.query_params.get('format', 'csv').lower().strip()
+        headers = ['Employee Name', 'Phone Contact', 'Email', 'User Name', 'Role', 'Faculty Code']
+        sample_rows = [
+            ['JOHN CHARLES OKIRIA', '0772409126', 'jokiria@ciu.ac.ug', 'CIU01', 'lecturer', 'SOBAT'],
+            ['DR. SENGOOBA ASUMAN', '0702487553', 'asengooba@ciu.ac.ug', 'CIU02', 'lecturer', 'FST'],
+            ['LONY TITUS OKELLO', '0772557156', 'tlony@ciu.ac.ug', 'CIU03', 'lecturer', 'FAS'],
+            ['TUSUUBIRA SHARIFU', '0770000000', 'stusuubira@ciu.ac.ug', 'CIU04', 'lecturer', 'SOBAT'],
+            ['DR. NAKITTO MARIA', '0782334455', 'mnakitto@ciu.ac.ug', 'CIU05', 'faculty_admin', 'SOBAT'],
+            ['PROF. SSEMAKULA PETER', '0752112233', 'pssemakula@ciu.ac.ug', 'CIU06', 'dean', 'FST']
+        ]
+        if fmt in ['xlsx', 'excel', 'xls']:
+            return generate_excel_response('sample_staff_list.xlsx', headers, sample_rows, sheet_title="Staff Onboarding")
+        return generate_csv_response('sample_staff_list.csv', headers, sample_rows)
+
+    @action(detail=False, methods=['get'])
+    def sample_staff_csv(self, request):
+        return self.sample_staff_file(request)
+
+    @action(detail=False, methods=['get'])
+    def sample_staff_excel(self, request):
+        headers = ['Employee Name', 'Phone Contact', 'Email', 'User Name', 'Role', 'Faculty Code']
+        sample_rows = [
+            ['JOHN CHARLES OKIRIA', '0772409126', 'jokiria@ciu.ac.ug', 'CIU01', 'lecturer', 'SOBAT'],
+            ['DR. SENGOOBA ASUMAN', '0702487553', 'asengooba@ciu.ac.ug', 'CIU02', 'lecturer', 'FST'],
+            ['LONY TITUS OKELLO', '0772557156', 'tlony@ciu.ac.ug', 'CIU03', 'lecturer', 'FAS'],
+            ['TUSUUBIRA SHARIFU', '0770000000', 'stusuubira@ciu.ac.ug', 'CIU04', 'lecturer', 'SOBAT'],
+            ['DR. NAKITTO MARIA', '0782334455', 'mnakitto@ciu.ac.ug', 'CIU05', 'faculty_admin', 'SOBAT'],
+            ['PROF. SSEMAKULA PETER', '0752112233', 'pssemakula@ciu.ac.ug', 'CIU06', 'dean', 'FST']
+        ]
+        return generate_excel_response('sample_staff_list.xlsx', headers, sample_rows, sheet_title="Staff Onboarding")
+
+    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsAdmin])
+    def bulk_onboard_staff(self, request):
+        uploaded_file = request.FILES.get('file') or request.FILES.get('staff_file') or request.FILES.get('excel_file') or request.FILES.get('csv_file')
+        raw_content = request.data.get('content') or request.data.get('csv_content')
+        default_role = request.data.get('default_role', 'lecturer')
+        default_faculty_id = request.data.get('faculty_id')
+        default_password = request.data.get('default_password') or 'Kampus@2026'
+
+        if not uploaded_file and not raw_content:
+            return Response({'detail': 'Please provide an Excel (.xls, .xlsx) or CSV file containing staff members.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        rows = []
+        filename = getattr(uploaded_file, 'name', '').lower() if uploaded_file else ''
+
+        if uploaded_file:
+            file_bytes = uploaded_file.read()
+            if filename.endswith('.xls') or file_bytes.startswith(b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1'):
+                # Process with xlrd (.xls legacy Excel format)
+                try:
+                    import xlrd
+                    book = xlrd.open_workbook(file_contents=file_bytes)
+                    sheet = book.sheet_by_index(0)
+                    if sheet.nrows > 0:
+                        headers = [str(sheet.cell_value(0, c)).strip().lower().replace('_', ' ') for c in range(sheet.ncols)]
+                        for r in range(1, sheet.nrows):
+                            row_vals = [sheet.cell_value(r, c) for c in range(sheet.ncols)]
+                            if any(str(v).strip() for v in row_vals):
+                                rows.append(dict(zip(headers, row_vals)))
+                except Exception as e:
+                    return Response({'detail': f'Failed to parse .xls Excel file: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+
+            elif filename.endswith('.xlsx') or file_bytes.startswith(b'PK\x03\x04'):
+                # Process with openpyxl (.xlsx modern Excel format)
+                try:
+                    import openpyxl
+                    import io
+                    wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
+                    sheet = wb.active
+                    iter_rows = list(sheet.iter_rows(values_only=True))
+                    if iter_rows:
+                        headers = [str(c or '').strip().lower().replace('_', ' ') for c in iter_rows[0]]
+                        for row_vals in iter_rows[1:]:
+                            if any(str(v or '').strip() for v in row_vals):
+                                rows.append(dict(zip(headers, row_vals)))
+                except Exception as e:
+                    return Response({'detail': f'Failed to parse .xlsx Excel file: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+
+            else:
+                # Process as CSV / text
+                try:
+                    import io
+                    text_str = None
+                    for encoding in ['utf-8-sig', 'utf-8', 'latin-1', 'cp1252']:
+                        try:
+                            text_str = file_bytes.decode(encoding)
+                            break
+                        except UnicodeDecodeError:
+                            continue
+                    if text_str is None:
+                        text_str = file_bytes.decode('utf-8', errors='ignore')
+                    
+                    reader = csv.reader(io.StringIO(text_str))
+                    lines = [r for r in reader if any(cell.strip() for cell in r)]
+                    if lines:
+                        headers = [c.strip().lower().replace('_', ' ') for c in lines[0]]
+                        for row_vals in lines[1:]:
+                            rows.append(dict(zip(headers, row_vals)))
+                except Exception as e:
+                    return Response({'detail': f'Failed to parse CSV file: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+
+        elif raw_content:
+            import io
+            reader = csv.reader(io.StringIO(raw_content))
+            lines = [r for r in reader if any(cell.strip() for cell in r)]
+            if lines:
+                headers = [c.strip().lower().replace('_', ' ') for c in lines[0]]
+                for row_vals in lines[1:]:
+                    rows.append(dict(zip(headers, row_vals)))
+
+        if not rows:
+            return Response({'detail': 'No staff rows found in the uploaded file.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        default_faculty = None
+        if default_faculty_id:
+            default_faculty = Faculty.objects.filter(id=default_faculty_id).first()
+
+        created_users = []
+        skipped_users = []
+        created_count = 0
+        skipped_count = 0
+
+        from django.contrib.auth.hashers import make_password
+        hashed_default_pwd = make_password(default_password)
+        valid_roles = dict(User.ROLE_CHOICES)
+
+        for row in rows:
+            raw_name = ''
+            raw_phone = ''
+            raw_email = ''
+            raw_username = ''
+            raw_role = ''
+            raw_faculty = ''
+
+            for k, v in row.items():
+                k_clean = str(k).strip().lower()
+                val_str = str(v).strip() if v is not None else ''
+                if isinstance(v, float) and v.is_integer():
+                    val_str = str(int(v))
+
+                if any(x in k_clean for x in ['employee name', 'staff name', 'full name', 'name']) and not any(x in k_clean for x in ['user', 'login']):
+                    raw_name = raw_name or val_str
+                elif any(x in k_clean for x in ['phone', 'contact', 'telephone', 'mobile', 'cell']):
+                    raw_phone = raw_phone or val_str
+                elif any(x in k_clean for x in ['email', 'mail']):
+                    raw_email = raw_email or val_str
+                elif any(x in k_clean for x in ['user name', 'username', 'staff id', 'staff no']):
+                    raw_username = raw_username or val_str
+                elif any(x in k_clean for x in ['role', 'designation', 'position']):
+                    raw_role = raw_role or val_str
+                elif any(x in k_clean for x in ['faculty', 'department', 'school']):
+                    raw_faculty = raw_faculty or val_str
+
+            if not raw_name and not raw_username and not raw_email:
+                continue
+
+            # Parse name
+            name_parts = raw_name.split()
+            first_name = name_parts[0] if name_parts else 'Staff'
+            last_name = ' '.join(name_parts[1:]) if len(name_parts) > 1 else ''
+
+            # Parse username
+            username = raw_username.strip()
+            if not username:
+                if raw_email and '@' in raw_email:
+                    username = raw_email.split('@')[0].strip()
+                else:
+                    username = f"{first_name[:3].lower()}{random.randint(100, 999)}"
+
+            # Parse email
+            email = raw_email.strip().lower()
+            if not email:
+                email = f"{username.lower()}@ciu.ac.ug"
+
+            # Parse role
+            target_role = default_role
+            if raw_role:
+                r_low = raw_role.strip().lower()
+                for r_code, r_label in valid_roles.items():
+                    if r_low == r_code.lower() or r_low == r_label.lower():
+                        target_role = r_code
+                        break
+
+            # Parse faculty
+            target_faculty = default_faculty
+            if raw_faculty:
+                fac = Faculty.objects.filter(models.Q(code__iexact=raw_faculty) | models.Q(name__icontains=raw_faculty)).first()
+                if fac:
+                    target_faculty = fac
+
+            # Deduplication: Check if username already exists
+            if User.objects.filter(username__iexact=username).exists():
+                skipped_count += 1
+                skipped_users.append({
+                    'username': username,
+                    'email': email,
+                    'name': raw_name or f"{first_name} {last_name}".strip(),
+                    'reason': f"Username '{username}' already exists in system"
+                })
+                continue
+
+            try:
+                new_user = User(
+                    username=username,
+                    email=email,
+                    first_name=first_name,
+                    last_name=last_name,
+                    phone=raw_phone[:30] if raw_phone else '',
+                    role=target_role,
+                    faculty=target_faculty,
+                    password=hashed_default_pwd,
+                    must_change_password=True
+                )
+                new_user.save()
+
+                created_count += 1
+                created_users.append({
+                    'id': new_user.id,
+                    'username': new_user.username,
+                    'name': f"{new_user.first_name} {new_user.last_name}".strip(),
+                    'email': new_user.email,
+                    'phone': new_user.phone,
+                    'role': new_user.role,
+                    'faculty': target_faculty.code if target_faculty else None
+                })
+            except Exception as e:
+                skipped_count += 1
+                skipped_users.append({
+                    'username': username,
+                    'email': email,
+                    'name': raw_name,
+                    'reason': f"Database error: {str(e)}"
+                })
+
+        msg = f"Bulk Staff Onboarding: Successfully onboarded {created_count} staff accounts ({skipped_count} skipped/duplicates)."
+        log_system_event(request.user, "BULK_STAFF_ONBOARDING_SUCCESS", level="AUDIT", details=msg)
+
+        return Response({
+            'detail': msg,
+            'total_rows': len(rows),
+            'created_count': created_count,
+            'skipped_count': skipped_count,
+            'created_users': created_users,
+            'skipped_users': skipped_users
+        })
+
     @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsAdmin | IsPlatformCoordinator | IsLecturer | IsFacultyAdmin | IsDean])
     def promote_class(self, request):
         user = request.user
@@ -516,6 +900,8 @@ class AdminUserViewSet(viewsets.ModelViewSet):
         course_id = request.data.get('course_id')
         current_year = request.data.get('current_year')
         current_semester = request.data.get('current_semester')
+        entry_year = request.data.get('entry_year')
+        intake = request.data.get('intake')
         promotion_target = request.data.get('promotion_target') or request.data.get('promotion_mode') or 'next_year'
         target_year = request.data.get('target_year')
         target_semester = request.data.get('target_semester')
@@ -535,6 +921,13 @@ class AdminUserViewSet(viewsets.ModelViewSet):
                 qs = qs.filter(year_of_study=int(current_year))
             if current_semester:
                 qs = qs.filter(semester=int(current_semester))
+            if entry_year and str(entry_year) != 'All':
+                try:
+                    qs = qs.filter(entry_year=int(entry_year))
+                except (ValueError, TypeError):
+                    pass
+            if intake and str(intake) != 'All':
+                qs = qs.filter(intake__iexact=str(intake).strip())
             student_updates = [{'id': st.id, 'selected': True} for st in qs]
 
         if not student_updates:
@@ -592,73 +985,61 @@ class AdminUserViewSet(viewsets.ModelViewSet):
             'students': AdminUserSerializer(updated_students, many=True).data
         })
 
-    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsAdmin])
+    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsAdmin | IsPlatformCoordinator | IsFacultyAdmin | IsRegistrar])
     def upload_students(self, request):
-        file_obj = request.FILES.get('file') or request.FILES.get('excel_file')
-        if not file_obj:
+        file_obj = request.FILES.get('file') or request.FILES.get('excel_file') or request.FILES.get('csv_file') or request.FILES.get('student_file')
+        raw_content = request.data.get('content') or request.data.get('csv_content') or request.data.get('csv_text')
+        if not file_obj and not raw_content:
             return Response({'detail': 'Please upload an Excel (.xlsx/.xls) or CSV (.csv) file.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        filename = file_obj.name.lower()
+        filename = getattr(file_obj, 'name', '').lower() if file_obj else ''
         rows = []
 
-        if filename.endswith('.csv'):
-            decoded = file_obj.read().decode('utf-8-sig', errors='ignore')
-            reader = csv.reader(decoded.splitlines())
-            header = None
-            for r in reader:
-                if not r or not any(r): continue
-                if header is None:
-                    header = [c.strip().lower() for c in r]
-                    continue
-                row_dict = {header[i]: r[i].strip() for i in range(min(len(header), len(r)))}
-                rows.append(row_dict)
-        elif filename.endswith(('.xlsx', '.xls')):
+        if file_obj:
             file_bytes = file_obj.read()
-            # Try xlrd for BIFF8 .xls or as fallback
-            if filename.endswith('.xls'):
+            if filename.endswith('.xls') or file_bytes.startswith(b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1'):
+                # Process with xlrd (.xls legacy Excel format)
                 try:
                     import xlrd
                     wb = xlrd.open_workbook(file_contents=file_bytes)
                     for sheet_name in wb.sheet_names():
                         ws = wb.sheet_by_name(sheet_name)
                         if ws.nrows < 2: continue
-                        header = [str(cell).strip().lower() for cell in ws.row_values(0)]
+                        headers = [re.sub(r'[\s_]+', ' ', str(cell).strip().lower().replace('.', '')) for cell in ws.row_values(0)]
                         for r_idx in range(1, ws.nrows):
-                            row_vals = [str(c).strip() if c is not None else '' for c in ws.row_values(r_idx)]
+                            row_vals = [clean_sheet_cell(c) for c in ws.row_values(r_idx)]
                             if not any(row_vals): continue
-                            row_dict = {header[i]: row_vals[i] for i in range(min(len(header), len(row_vals)))}
+                            row_dict = {headers[i]: row_vals[i] for i in range(min(len(headers), len(row_vals)))}
                             rows.append(row_dict)
                 except Exception as ex1:
                     try:
-                        import openpyxl
-                        import io
+                        import openpyxl, io
                         wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
                         for ws in wb.worksheets:
-                            header = None
-                            for row in ws.iter_rows(values_only=True):
-                                if not row or not any(row): continue
-                                row_vals = [str(cell).strip() if cell is not None else '' for cell in row]
-                                if header is None:
-                                    header = [c.lower() for c in row_vals]
-                                    continue
-                                row_dict = {header[i]: row_vals[i] for i in range(min(len(header), len(row_vals)))}
+                            iter_rows = list(ws.iter_rows(values_only=True))
+                            if not iter_rows: continue
+                            headers = [re.sub(r'[\s_]+', ' ', str(c or '').strip().lower().replace('.', '')) for c in iter_rows[0]]
+                            for row_data in iter_rows[1:]:
+                                row_vals = [clean_sheet_cell(c) for c in row_data]
+                                if not any(row_vals): continue
+                                row_dict = {headers[i]: row_vals[i] for i in range(min(len(headers), len(row_vals)))}
                                 rows.append(row_dict)
                     except Exception as ex2:
                         return Response({'detail': f'Error reading Excel file: {str(ex1)} | {str(ex2)}'}, status=status.HTTP_400_BAD_REQUEST)
-            else:
+
+            elif filename.endswith('.xlsx') or file_bytes.startswith(b'PK\x03\x04'):
+                # Process with openpyxl (.xlsx modern Excel format)
                 try:
-                    import openpyxl
-                    import io
+                    import openpyxl, io
                     wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
                     for ws in wb.worksheets:
-                        header = None
-                        for row in ws.iter_rows(values_only=True):
-                            if not row or not any(row): continue
-                            row_vals = [str(cell).strip() if cell is not None else '' for cell in row]
-                            if header is None:
-                                header = [c.lower() for c in row_vals]
-                                continue
-                            row_dict = {header[i]: row_vals[i] for i in range(min(len(header), len(row_vals)))}
+                        iter_rows = list(ws.iter_rows(values_only=True))
+                        if not iter_rows: continue
+                        headers = [re.sub(r'[\s_]+', ' ', str(c or '').strip().lower().replace('.', '')) for c in iter_rows[0]]
+                        for row_data in iter_rows[1:]:
+                            row_vals = [clean_sheet_cell(c) for c in row_data]
+                            if not any(row_vals): continue
+                            row_dict = {headers[i]: row_vals[i] for i in range(min(len(headers), len(row_vals)))}
                             rows.append(row_dict)
                 except Exception as ex1:
                     try:
@@ -667,112 +1048,277 @@ class AdminUserViewSet(viewsets.ModelViewSet):
                         for sheet_name in wb.sheet_names():
                             ws = wb.sheet_by_name(sheet_name)
                             if ws.nrows < 2: continue
-                            header = [str(cell).strip().lower() for cell in ws.row_values(0)]
+                            headers = [re.sub(r'[\s_]+', ' ', str(cell).strip().lower().replace('.', '')) for cell in ws.row_values(0)]
                             for r_idx in range(1, ws.nrows):
-                                row_vals = [str(c).strip() if c is not None else '' for c in ws.row_values(r_idx)]
+                                row_vals = [clean_sheet_cell(c) for c in ws.row_values(r_idx)]
                                 if not any(row_vals): continue
-                                row_dict = {header[i]: row_vals[i] for i in range(min(len(header), len(row_vals)))}
+                                row_dict = {headers[i]: row_vals[i] for i in range(min(len(headers), len(row_vals)))}
                                 rows.append(row_dict)
                     except Exception as ex2:
                         return Response({'detail': f'Error reading Excel file: {str(ex1)} | {str(ex2)}'}, status=status.HTTP_400_BAD_REQUEST)
 
+            else:
+                # Process as CSV
+                try:
+                    import io
+                    text_str = None
+                    for enc in ['utf-8-sig', 'utf-8', 'latin-1', 'cp1252']:
+                        try:
+                            text_str = file_bytes.decode(enc)
+                            break
+                        except UnicodeDecodeError:
+                            continue
+                    if text_str is None:
+                        text_str = file_bytes.decode('utf-8', errors='ignore')
+                    reader = csv.reader(io.StringIO(text_str))
+                    header = None
+                    for r in reader:
+                        if not r or not any(r): continue
+                        if header is None:
+                            header = [re.sub(r'[\s_]+', ' ', c.strip().lower().replace('.', '')) for c in r]
+                            continue
+                        row_dict = {header[i]: clean_sheet_cell(r[i]) for i in range(min(len(header), len(r)))}
+                        rows.append(row_dict)
+                except Exception as e:
+                    return Response({'detail': f'Failed to parse CSV file: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+
+        elif raw_content:
+            import io
+            reader = csv.reader(io.StringIO(raw_content))
+            header = None
+            for r in reader:
+                if not r or not any(r): continue
+                if header is None:
+                    header = [re.sub(r'[\s_]+', ' ', c.strip().lower().replace('.', '')) for c in r]
+                    continue
+                row_dict = {header[i]: clean_sheet_cell(r[i]) for i in range(min(len(header), len(r)))}
+                rows.append(row_dict)
+
+        if not rows:
+            return Response({'detail': 'No student records found in the uploaded file.'}, status=status.HTTP_400_BAD_REQUEST)
+
         created_students = []
+        skipped_students = []
+        created_count = 0
+        skipped_count = 0
+
+        default_faculty_id = request.data.get('default_faculty_id') or request.data.get('faculty_id') or request.data.get('faculty')
+        default_faculty_obj = None
+        if default_faculty_id:
+            if str(default_faculty_id).isdigit():
+                default_faculty_obj = Faculty.objects.filter(id=int(default_faculty_id)).first()
+            else:
+                default_faculty_obj = Faculty.objects.filter(code__iexact=str(default_faculty_id).strip()).first() or Faculty.objects.filter(name__icontains=str(default_faculty_id).strip()).first()
+
         default_batch_pass = request.data.get('default_password') or request.POST.get('default_password')
         if default_batch_pass:
             default_batch_pass = str(default_batch_pass).strip()
 
+        default_entry_year = request.data.get('entry_year') or request.data.get('default_entry_year') or 2026
+        try:
+            default_entry_year = int(re.sub(r'[^\d]', '', str(default_entry_year)))
+        except Exception:
+            default_entry_year = 2026
+
+        default_intake = (request.data.get('intake') or request.data.get('default_intake') or 'August Intake').strip()
+
         from django.contrib.auth.hashers import make_password
         pass_hash_cache = {}
+        if default_batch_pass:
+            pass_hash_cache[default_batch_pass] = make_password(default_batch_pass)
 
         for index, r in enumerate(rows, start=1):
-            reg = (
-                r.get('registration no') or r.get('registration_no') or
-                r.get('registration number') or r.get('reg_number') or r.get('registration_number') or
-                r.get('reg_no') or r.get('regno') or
-                r.get('entry no') or r.get('entry_no') or
-                r.get('student_no') or r.get('student no') or f"2026SOBAT-B{index:03d}"
-            ).strip()
+            # Extract reg number
+            reg = ''
+            for k, v in r.items():
+                if any(x in k for x in ['reg', 'registration', 'student no', 'student id', 'entry no']) and not any(x in k for x in ['date', 'time', 'status']):
+                    reg = reg or v
+            if not reg:
+                reg = r.get('username') or f"2026SOBAT-B{index:03d}"
+            reg = str(reg).strip()
 
-            surname = (r.get('surname') or r.get('last name') or r.get('last_name') or '').strip()
-            first_name_col = (r.get('first name') or r.get('first_name') or '').strip()
-            
+            # Extract name
+            surname = ''
+            first_name_col = ''
+            full_name_col = ''
+            for k, v in r.items():
+                if any(x in k for x in ['surname', 'last name']):
+                    surname = surname or v
+                elif any(x in k for x in ['first name', 'given name']):
+                    first_name_col = first_name_col or v
+                elif any(x in k for x in ['full name', 'student name', 'name', 'employee name']) and not any(x in k for x in ['user', 'faculty', 'course']):
+                    full_name_col = full_name_col or v
+
             if surname or first_name_col:
                 name = f"{first_name_col} {surname}".strip()
+            elif full_name_col:
+                name = full_name_col.strip()
             else:
-                name = (r.get('full name') or r.get('full_name') or r.get('name') or r.get('student name') or r.get('student_name') or f"Student {index}").strip()
-
-            email = (r.get('email') or r.get('student_email') or r.get('student email') or f"student_{index}@ciu.ac.ug").strip()
-            fac_str = (r.get('faculty') or r.get('faculty_code') or r.get('faculty code') or r.get('program') or 'SOBAT').strip()
+                name = f"Student {index}"
 
             name_parts = name.split(' ', 1)
-            first_name = name_parts[0]
+            first_name = name_parts[0] if name_parts else 'Student'
             last_name = name_parts[1] if len(name_parts) > 1 else ''
 
-            specified_pass = r.get('password') or r.get('one_time_password') or r.get('otp') or default_batch_pass
-            otp_pass = str(specified_pass).strip() if (specified_pass and str(specified_pass).strip()) else f"CIU-{random.randint(100000, 999999)}"
+            # Extract email
+            email = ''
+            for k, v in r.items():
+                if 'email' in k or 'mail' in k:
+                    email = email or v
+            email = str(email).strip().lower()
+
+            # Username
             username = reg.replace('/', '-').replace(' ', '').lower()
+            if not email:
+                email = f"{username}@ciu.ac.ug"
+
+            # Faculty
+            fac_str = ''
+            for k, v in r.items():
+                if any(x in k for x in ['faculty', 'department', 'school', 'program']):
+                    fac_str = fac_str or v
+            fac_str = str(fac_str).strip()
+
+            faculty_obj = None
+            if fac_str:
+                faculty_obj = Faculty.objects.filter(code__iexact=fac_str).first() or Faculty.objects.filter(name__icontains=fac_str).first()
+                if not faculty_obj:
+                    fac_lower = fac_str.lower()
+                    if 'business' in fac_lower or 'sobat' in fac_lower or 'applied tech' in fac_lower:
+                        faculty_obj = Faculty.objects.filter(code='SOBAT').first()
+                    elif 'nursing' in fac_lower or 'sonm' in fac_lower:
+                        faculty_obj = Faculty.objects.filter(code='SONM').first()
+                    elif 'public health' in fac_lower or 'soph' in fac_lower:
+                        faculty_obj = Faculty.objects.filter(code='SOPH').first()
+                    elif 'allied' in fac_lower or 'iah' in fac_lower:
+                        faculty_obj = Faculty.objects.filter(code='IAH').first()
+                    elif 'science' in fac_lower or 'fst' in fac_lower:
+                        faculty_obj = Faculty.objects.filter(code='FST').first()
+            if not faculty_obj:
+                faculty_obj = default_faculty_obj or Faculty.objects.first()
+
+            # Entry Year
+            entry_year_val = default_entry_year
+            for k, v in r.items():
+                if any(x in k for x in ['entry year', 'admission year', 'year of entry', 'cohort year']):
+                    cleaned_y = re.sub(r'[^\d]', '', str(v))
+                    if cleaned_y and len(cleaned_y) == 4:
+                        entry_year_val = int(cleaned_y)
+                        break
+
+            # Intake
+            intake_val = default_intake
+            for k, v in r.items():
+                if any(x in k for x in ['intake', 'admission intake', 'cohort']):
+                    if str(v).strip():
+                        intake_val = str(v).strip()
+                        break
+
+            # Year of study
+            year_of_study = 1
+            for k, v in r.items():
+                if any(x in k for x in ['year of study', 'yos', 'study year']):
+                    cleaned_yos = re.sub(r'[^\d]', '', str(v))
+                    if cleaned_yos and int(cleaned_yos) in [1, 2, 3, 4, 5]:
+                        year_of_study = int(cleaned_yos)
+                        break
+
+            # Semester
+            semester = 1
+            for k, v in r.items():
+                if any(x in k for x in ['semester', 'sem']):
+                    cleaned_s = re.sub(r'[^\d]', '', str(v))
+                    if cleaned_s and int(cleaned_s) in [1, 2]:
+                        semester = int(cleaned_s)
+                        break
+
+            # Phone
+            phone = ''
+            for k, v in r.items():
+                if any(x in k for x in ['phone', 'contact', 'mobile', 'telephone']):
+                    phone = phone or v
+            phone = str(phone).strip()[:30]
+
+            # Password
+            specified_pass = ''
+            for k, v in r.items():
+                if any(x in k for x in ['password', 'otp', 'one time password']):
+                    specified_pass = specified_pass or v
+            specified_pass = str(specified_pass).strip() or default_batch_pass
+            otp_pass = specified_pass if specified_pass else f"CIU-{random.randint(100000, 999999)}"
 
             if otp_pass not in pass_hash_cache:
                 pass_hash_cache[otp_pass] = make_password(otp_pass)
             hashed_pass = pass_hash_cache[otp_pass]
 
-            # Smart faculty resolution
-            faculty_obj = Faculty.objects.filter(code__iexact=fac_str).first()
-            if not faculty_obj:
-                faculty_obj = Faculty.objects.filter(name__icontains=fac_str).first()
-            if not faculty_obj:
-                fac_lower = fac_str.lower()
-                if 'business' in fac_lower or 'sobat' in fac_lower or 'applied tech' in fac_lower:
-                    faculty_obj = Faculty.objects.filter(code='SOBAT').first()
-                elif 'nursing' in fac_lower or 'sonm' in fac_lower:
-                    faculty_obj = Faculty.objects.filter(code='SONM').first()
-                elif 'public health' in fac_lower or 'soph' in fac_lower:
-                    faculty_obj = Faculty.objects.filter(code='SOPH').first()
-                elif 'allied' in fac_lower or 'iah' in fac_lower:
-                    faculty_obj = Faculty.objects.filter(code='IAH').first()
-                elif 'science' in fac_lower or 'fst' in fac_lower:
-                    faculty_obj = Faculty.objects.filter(code='FST').first()
-            
-            if not faculty_obj:
-                faculty_obj = Faculty.objects.first()
+            # Deduplication: Check if username or reg_number already exists
+            existing_user = User.objects.filter(
+                models.Q(username__iexact=username) |
+                models.Q(reg_number__iexact=reg)
+            ).first()
 
-            user_obj, created = User.objects.get_or_create(
-                username=username,
-                defaults={
-                    'email': email,
-                    'first_name': first_name,
-                    'last_name': last_name,
-                    'role': 'student',
+            if existing_user:
+                skipped_count += 1
+                skipped_students.append({
+                    'username': existing_user.username,
                     'reg_number': reg,
-                    'faculty': faculty_obj,
-                    'tuition_paid_percentage': 0.0,
-                    'must_change_password': True
-                }
-            )
-            user_obj.password = hashed_pass
-            user_obj.reg_number = reg
-            user_obj.email = email
-            user_obj.first_name = first_name
-            user_obj.last_name = last_name
-            user_obj.must_change_password = True
-            if faculty_obj:
-                user_obj.faculty = faculty_obj
-            user_obj.save()
+                    'full_name': name,
+                    'reason': f"Student account '{reg}' / '{existing_user.username}' already exists in system"
+                })
+                continue
 
-            created_students.append({
-                'id': user_obj.id,
-                'username': user_obj.username,
-                'reg_number': reg,
-                'full_name': name,
-                'email': email,
-                'faculty': faculty_obj.code if faculty_obj else 'SOBAT',
-                'one_time_password': otp_pass
-            })
+            try:
+                user_obj = User(
+                    username=username,
+                    email=email,
+                    first_name=first_name,
+                    last_name=last_name,
+                    phone=phone,
+                    role='student',
+                    reg_number=reg,
+                    faculty=faculty_obj,
+                    entry_year=entry_year_val,
+                    intake=intake_val,
+                    year_of_study=year_of_study,
+                    semester=semester,
+                    tuition_paid_percentage=0.0,
+                    password=hashed_pass,
+                    must_change_password=True
+                )
+                user_obj.save()
 
-        log_system_event(request.user, "BATCH_STUDENT_IMPORT_SUCCESS", level="AUDIT", details=f"Imported {len(created_students)} student accounts via Excel/CSV with generated one-time passwords.")
+                created_count += 1
+                created_students.append({
+                    'id': user_obj.id,
+                    'username': user_obj.username,
+                    'reg_number': reg,
+                    'full_name': name,
+                    'email': email,
+                    'faculty': faculty_obj.code if faculty_obj else 'SOBAT',
+                    'entry_year': entry_year_val,
+                    'intake': intake_val,
+                    'year_of_study': year_of_study,
+                    'semester': semester,
+                    'one_time_password': otp_pass
+                })
+            except Exception as e:
+                skipped_count += 1
+                skipped_students.append({
+                    'username': username,
+                    'reg_number': reg,
+                    'full_name': name,
+                    'reason': f"Database error: {str(e)}"
+                })
+
+        msg = f"Bulk Student Onboarding: Successfully onboarded {created_count} student account(s) ({skipped_count} skipped/duplicates)."
+        log_system_event(request.user, "BATCH_STUDENT_IMPORT_SUCCESS", level="AUDIT", details=msg)
         return Response({
-            'detail': f'Successfully onboarded {len(created_students)} students with one-time passwords.',
-            'students': created_students
+            'detail': msg,
+            'total_rows': len(rows),
+            'created_count': created_count,
+            'skipped_count': skipped_count,
+            'students': created_students,
+            'skipped_students': skipped_students
         })
 
 
@@ -1424,7 +1970,7 @@ class ExamViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         user = self.request.user
         if user.role in ['faculty_admin', 'dean', 'registrar', 'dvc', 'vc']:
-            raise serializers.ValidationError({"detail": "Permission Denied: Faculty Secretaries, Deans, Academic Registrars, DVC, and VC are restricted from setting exams. Only Lecturers and System Administrators can set exams."})
+            raise serializers.ValidationError({"detail": "Permission Denied: Faculty Secretaries, Deans, Academic Registrars, DVC, and VC are restricted from setting exams. Only Lecturers, Platform Coordinators and System Administrators can set exams."})
         
         course_unit = serializer.validated_data.get('course_unit')
         year_of_study = serializer.validated_data.get('year_of_study', 0)
@@ -1926,7 +2472,7 @@ class TestViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         user = self.request.user
         if user.role in ['faculty_admin', 'dean', 'registrar', 'dvc', 'vc']:
-            raise serializers.ValidationError({"detail": "Permission Denied: Faculty Secretaries, Deans, Academic Registrars, DVC, and VC are restricted from setting tests. Only Lecturers and System Administrators can set tests."})
+            raise serializers.ValidationError({"detail": "Permission Denied: Faculty Secretaries, Deans, Academic Registrars, DVC, and VC are restricted from setting tests. Only Lecturers, Platform Coordinators and System Administrators can set tests."})
         
         course_unit = serializer.validated_data.get('course_unit')
         year_of_study = serializer.validated_data.get('year_of_study', 0)

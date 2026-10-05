@@ -108,9 +108,9 @@ export default function TestPortalPage() {
 
   const isAdmin = user?.role === 'admin' || user?.role === 'platform_coordinator';
   const isExecutiveReadOnly = ['dvc', 'vc', 'dean'].includes(user?.role);
-  const isStaff = ['lecturer', 'admin', 'faculty_admin', 'dean', 'registrar', 'dvc', 'vc'].includes(user?.role);
+  const isStaff = ['lecturer', 'admin', 'platform_coordinator', 'faculty_admin', 'dean', 'registrar', 'dvc', 'vc'].includes(user?.role);
   const isLecturer = user?.role === 'lecturer';
-  const canBuildTest = ['lecturer', 'admin'].includes(user?.role) && !['faculty_admin', 'dean', 'registrar', 'dvc', 'vc'].includes(user?.role);
+  const canBuildTest = ['lecturer', 'admin', 'platform_coordinator'].includes(user?.role) && !['faculty_admin', 'dean', 'registrar', 'dvc', 'vc'].includes(user?.role);
 
   useEffect(() => {
     loadPortalData();

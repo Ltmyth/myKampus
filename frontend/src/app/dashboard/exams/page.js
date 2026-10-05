@@ -102,11 +102,11 @@ export default function ExamsPage() {
   const [examTxtDueDate, setExamTxtDueDate] = useState('');
 
   const isAdmin = user?.role === 'admin' || user?.role === 'platform_coordinator';
-  const isRegistrarOrStaff = ['registrar', 'admin'].includes(user?.role);
+  const isRegistrarOrStaff = ['registrar', 'admin', 'platform_coordinator'].includes(user?.role);
   const isExecutiveReadOnly = ['dvc', 'vc', 'dean'].includes(user?.role);
-  const isStaff = ['lecturer', 'admin', 'faculty_admin', 'registrar', 'dean', 'dvc', 'vc'].includes(user?.role);
+  const isStaff = ['lecturer', 'admin', 'platform_coordinator', 'faculty_admin', 'registrar', 'dean', 'dvc', 'vc'].includes(user?.role);
   const isLecturer = user?.role === 'lecturer';
-  const canBuildExam = ['lecturer', 'admin'].includes(user?.role) && !['faculty_admin', 'dean', 'registrar', 'dvc', 'vc'].includes(user?.role);
+  const canBuildExam = ['lecturer', 'admin', 'platform_coordinator'].includes(user?.role) && !['faculty_admin', 'dean', 'registrar', 'dvc', 'vc'].includes(user?.role);
 
   useEffect(() => {
     loadExamData();
@@ -791,71 +791,78 @@ ANSWER: C`;
                   return studentExams.length === 0 ? (
                     <p className="text-slate-400 text-xs py-8 text-center">No active examination papers scheduled for {user?.faculty_name || 'your assigned faculty'}.</p>
                   ) : (
-                    <div className="space-y-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                       {studentExams.map((examItem) => {
                         const myAttempt = attempts.find(a => a.exam === examItem.id);
-                      return (
-                        <div key={examItem.id} className="p-5 bg-gradient-to-br from-white to-emerald-50/30 rounded-2xl border border-emerald-200/70 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                          <div className="space-y-1.5 flex-1">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className="text-[10px] bg-brand-light/10 text-brand-medium font-bold px-2.5 py-0.5 rounded border border-brand-light/20">
-                                {examItem.course_code}
-                              </span>
-                              {examItem.course_unit_name && (
-                                <span className="text-[10px] bg-slate-200 text-slate-700 font-bold px-2 py-0.5 rounded">
-                                  {examItem.course_unit_name}
+                        return (
+                          <div key={examItem.id} className="green-card rounded-2xl p-5 flex flex-col justify-between space-y-4 hover:border-emerald-300 hover:shadow-md transition-all shadow-sm">
+                            <div className="space-y-2">
+                              <div className="flex items-center justify-between">
+                                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider bg-brand-light/10 text-brand-dark border border-brand-light/20">
+                                  {examItem.course_code}
                                 </span>
-                              )}
-                              <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${examItem.is_results_released ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-slate-200 text-slate-600 border-slate-300'}`}>
-                                {examItem.is_results_released ? 'RELEASED' : 'WITHHELD'}
-                              </span>
+                                <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${examItem.is_results_released ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-slate-200 text-slate-600 border-slate-300'}`}>
+                                  {examItem.is_results_released ? 'RESULTS RELEASED' : 'WITHHELD'}
+                                </span>
+                              </div>
+
+                              <h4 className="font-bold text-slate-850 text-base leading-tight">{examItem.title}</h4>
+                              <p className="text-xs text-slate-500 font-medium">
+                                Unit: <span className="font-semibold text-slate-800">{examItem.course_unit_name || examItem.course_code}</span>
+                              </p>
+
+                              <div className="pt-2 text-[11px] text-slate-600 space-y-1 bg-slate-50 p-2.5 rounded-xl border border-slate-100 font-medium">
+                                <p>⏱️ Duration: <span className="font-bold text-slate-800">{examItem.duration_minutes} mins</span> | ❓ Questions: <span className="font-bold text-slate-800">{examItem.questions_count}</span></p>
+                                <p>📅 Scheduled Start (EAT): <span className="font-bold text-slate-800">{formatUgandanTime(examItem.scheduled_start)}</span></p>
+                                {examItem.due_date && (
+                                  <p>⏳ Due Date (EAT): <span className="font-bold text-amber-700">{formatUgandanTime(examItem.due_date)}</span></p>
+                                )}
+                                <p>💰 Fee Gate: <span className="font-bold text-emerald-700">100% Tuition Clearance</span></p>
+                              </div>
                             </div>
 
-                            <h4 className="font-bold text-slate-850 text-base">{examItem.title}</h4>
-                            <p className="text-xs text-slate-500 font-medium">Duration: <strong className="text-slate-800">{examItem.duration_minutes} mins</strong> · Questions: <strong className="text-slate-800">{examItem.questions_count}</strong></p>
-                            <p className="text-xs text-slate-600 font-medium pt-1">
-                              📅 Scheduled Start (EAT): <strong className="text-slate-800">{formatUgandanTime(examItem.scheduled_start)}</strong>
-                            </p>
-                            <p className="text-[11px] text-emerald-700 font-medium pt-0.5">💰 Fee Gate: 100% Full Tuition Clearance Required</p>
-                          </div>
-
-                          <div className="flex flex-wrap items-center gap-2 shrink-0">
-                            {myAttempt ? (
-                              myAttempt.completed_at ? (
-                                examItem.is_results_released ? (
-                                  <button
-                                    onClick={() => router.push(`/dashboard/exams/${examItem.id}/results?attemptId=${myAttempt.id}`)}
-                                    className="px-3.5 py-2 bg-emerald-600 text-white text-xs font-bold rounded-xl hover:bg-emerald-700 shadow-sm"
-                                  >
-                                    View Scorecard ({myAttempt.score}%)
-                                  </button>
+                            <div className="pt-2 border-t border-slate-100">
+                              {myAttempt ? (
+                                myAttempt.completed_at ? (
+                                  examItem.is_results_released ? (
+                                    <div className="flex items-center justify-between">
+                                      <span className="px-2.5 py-1 rounded text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                        Score: {myAttempt.score}%
+                                      </span>
+                                      <button
+                                        onClick={() => router.push(`/dashboard/exams/${examItem.id}/results?attemptId=${myAttempt.id}`)}
+                                        className="px-3.5 py-1.5 bg-emerald-600 text-white text-xs font-bold rounded-lg hover:bg-emerald-700 transition-all shadow-sm"
+                                      >
+                                        View Scorecard
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <span className="w-full block text-center px-2.5 py-1.5 rounded text-xs font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                                      🔒 Results Withheld
+                                    </span>
+                                  )
                                 ) : (
-                                  <span className="px-3 py-1.5 rounded-xl text-xs font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
-                                    🔒 Results Withheld
-                                  </span>
+                                  <button
+                                    onClick={() => startExam(examItem.id)}
+                                    className="w-full py-2 bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold rounded-lg shadow-sm transition-all"
+                                  >
+                                    Resume Exam
+                                  </button>
                                 )
                               ) : (
                                 <button
                                   onClick={() => startExam(examItem.id)}
-                                  className="px-3.5 py-2 bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold rounded-xl shadow-sm"
+                                  disabled={!examItem.is_active || examItem.questions_count === 0}
+                                  className="w-full py-2 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-lg shadow-sm transition-all disabled:opacity-50"
                                 >
-                                  Resume Exam
+                                  Launch Exam
                                 </button>
-                              )
-                            ) : (
-                              <button
-                                onClick={() => startExam(examItem.id)}
-                                disabled={!examItem.is_active || examItem.questions_count === 0}
-                                className="px-4 py-2 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-xl shadow-sm disabled:opacity-50"
-                              >
-                                Launch Exam
-                              </button>
-                            )}
+                              )}
+                            </div>
                           </div>
-                        </div>
-                      );
-                    })}
-                  </div>
+                        );
+                      })}
+                    </div>
                 );
               })()}
               </div>
@@ -885,62 +892,61 @@ ANSWER: C`;
                       {facExams.length === 0 ? (
                         <p className="text-slate-400 text-xs py-4 text-center italic">No exams set for {faculty.name} yet.</p>
                       ) : (
-                        <div className="space-y-3">
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                           {facExams.map((examItem) => {
                             const isMyExam = (isLecturer && (examItem.lecturer === user.id || examItem.lecturer_name === user.username || examItem.lecturer_name === user.first_name));
                             const isApproved = Boolean(examItem.is_approved_by_dean);
                             const isLockedForLecturer = isLecturer && isApproved;
+                            const canManageThisExam = isAdmin || (isLecturer && !isLockedForLecturer);
 
                             return (
-                              <div key={examItem.id} className="p-4 bg-gradient-to-r from-white via-white to-emerald-50/20 rounded-xl border border-emerald-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-4 hover:border-emerald-300 transition-all">
-                                <div className="space-y-1.5 flex-1">
-                                  <div className="flex flex-wrap items-center gap-2">
-                                    <span className="text-[10px] bg-brand-light/10 text-brand-medium font-bold px-2 py-0.5 rounded border border-brand-light/20">
+                              <div key={examItem.id} className="bg-gradient-to-br from-white to-emerald-50/30 rounded-2xl border border-emerald-200/80 p-5 shadow-sm hover:border-emerald-300 hover:shadow-md transition-all flex flex-col justify-between space-y-3">
+                                <div className="space-y-2">
+                                  <div className="flex items-center justify-between flex-wrap gap-1">
+                                    <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-emerald-100 text-emerald-800 border border-emerald-200">
                                       {examItem.course_code}
                                     </span>
-                                    {examItem.course_unit_name && (
-                                      <span className="text-[10px] bg-slate-200 text-slate-700 font-bold px-2 py-0.5 rounded">
-                                        {examItem.course_unit_name}
+                                    <div className="flex items-center space-x-1">
+                                      {isApproved ? (
+                                        <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                                          ✅ Approved
+                                        </span>
+                                      ) : (
+                                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
+                                          ⏳ Pending
+                                        </span>
+                                      )}
+                                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${examItem.is_results_released ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-slate-200 text-slate-600 border-slate-300'}`}>
+                                        {examItem.is_results_released ? 'RELEASED' : 'WITHHELD'}
                                       </span>
-                                    )}
-
-                                    {/* Dean Approval Status Badge */}
-                                    {isApproved ? (
-                                      <span className="text-[10px] font-extrabold px-2.5 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-300">
-                                        ✅ Approved by Dean
-                                      </span>
-                                    ) : (
-                                      <span className="text-[10px] font-bold px-2.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200">
-                                        ⏳ Approval Pending
-                                      </span>
-                                    )}
-
-                                    {isLockedForLecturer && (
-                                      <span className="text-[10px] font-extrabold px-2 py-0.5 rounded bg-red-50 text-red-700 border border-red-200">
-                                        🔒 Locked (Cannot Edit)
-                                      </span>
-                                    )}
-
-                                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${examItem.is_results_released ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-slate-200 text-slate-600 border-slate-300'}`}>
-                                      {examItem.is_results_released ? 'RELEASED' : 'WITHHELD'}
-                                    </span>
+                                    </div>
                                   </div>
 
-                                  <h4 className="font-bold text-slate-850 text-sm">{examItem.title}</h4>
-                                  <p className="text-xs text-slate-500 font-medium">Duration: <strong className="text-slate-800">{examItem.duration_minutes} mins</strong> · Questions: <strong className="text-slate-800">{examItem.questions_count}</strong> · Lecturer: <strong className="text-slate-800">{examItem.lecturer_name}</strong></p>
-                                  <div className="pt-1 text-[11px] text-slate-600 space-y-0.5 font-medium">
+                                  <h4 className="font-bold text-slate-850 text-base leading-tight">{examItem.title}</h4>
+                                  <p className="text-xs text-slate-500 font-medium">
+                                    Unit: <span className="font-semibold text-slate-800">{examItem.course_unit_name || examItem.course_code}</span>
+                                  </p>
+                                  <p className="text-xs text-slate-500">
+                                    Lecturer: <span className="font-semibold text-slate-800">{examItem.lecturer_name}</span>
+                                  </p>
+
+                                  <div className="pt-2 text-[11px] text-slate-600 space-y-1 bg-white p-2.5 rounded-xl border border-slate-200 font-medium">
+                                    <p>⏱️ Duration: <span className="font-bold text-slate-800">{examItem.duration_minutes} mins</span> | ❓ Questions: <span className="font-bold text-slate-800">{examItem.questions_count}</span></p>
                                     <p>📅 Scheduled Start (EAT): <span className="font-bold text-slate-800">{formatUgandanTime(examItem.scheduled_start)}</span></p>
                                     {examItem.due_date && (
                                       <p>⏳ Due Date (EAT): <span className="font-bold text-amber-700">{formatUgandanTime(examItem.due_date)}</span></p>
                                     )}
+                                    {isLockedForLecturer && (
+                                      <p className="text-[10px] text-red-600 font-bold">🔒 Locked (Approved by Dean)</p>
+                                    )}
                                   </div>
                                 </div>
 
-                                {/* Staff Actions */}
-                                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                                {/* Staff Actions Footer */}
+                                <div className="pt-2 border-t border-slate-200 flex flex-wrap items-center justify-between gap-1">
                                   <button
                                     onClick={() => handleSelectExamForQuestions(examItem)}
-                                    className="px-3 py-1.5 bg-white border border-emerald-200 hover:bg-emerald-50 text-slate-800 text-xs font-bold rounded-xl transition-all"
+                                    className="px-2 py-1 bg-white border border-emerald-200 hover:bg-emerald-50 text-slate-800 text-xs font-bold rounded-lg transition-all"
                                   >
                                     Questions ({examItem.questions_count})
                                   </button>
@@ -950,7 +956,7 @@ ANSWER: C`;
                                       setSelectedExamFilter(String(examItem.id));
                                       setActiveTab('submissions');
                                     }}
-                                    className="px-3 py-1.5 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 text-emerald-800 text-xs font-bold rounded-xl transition-all"
+                                    className="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-bold rounded-lg transition-all"
                                     title="Filter student exam submissions and view scorecards"
                                   >
                                     📊 Submissions ({allAttempts.filter(a => a.exam === examItem.id).length})
@@ -958,36 +964,36 @@ ANSWER: C`;
 
                                   <button
                                     onClick={() => handlePreviewExamScorecard(examItem)}
-                                    className="px-3 py-1.5 bg-purple-50 hover:bg-purple-100 text-purple-800 border border-purple-200 text-xs font-bold rounded-xl transition-all"
-                                    title="Preview and edit questions/answers for this set exam using the score card layout"
+                                    className="px-2 py-1 bg-purple-50 hover:bg-purple-100 text-purple-800 border border-purple-200 text-xs font-bold rounded-lg transition-all"
+                                    title="Preview exam paper and score card layout"
                                   >
                                     👁️ Preview
                                   </button>
 
                                   {!isExecutiveReadOnly && (
                                     <>
-                                      {(isAdmin || (isLecturer && !isLockedForLecturer)) && (
+                                      {canManageThisExam && (
                                         <>
                                           <button
                                             onClick={() => handleToggleExamPublish(examItem)}
-                                            className={`px-3 py-1.5 text-xs font-bold rounded-xl transition-all ${examItem.is_active || examItem.is_published ? 'bg-amber-50 text-amber-800 border border-amber-200' : 'bg-brand-light text-white'}`}
+                                            className={`px-2 py-1 text-xs font-bold rounded-lg transition-all ${examItem.is_active || examItem.is_published ? 'bg-amber-50 text-amber-800 border border-amber-200' : 'bg-brand-light text-white'}`}
                                             title="Toggle exam publish status"
                                           >
                                             {examItem.is_active || examItem.is_published ? 'Unpublish' : 'Publish'}
                                           </button>
                                           <button
                                             onClick={() => handleOpenEditExamModal(examItem)}
-                                            className="px-3 py-1.5 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 text-emerald-800 text-xs font-bold rounded-xl transition-all"
+                                            className="px-2 py-1 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 text-emerald-800 text-xs font-bold rounded-lg transition-all"
                                             title="Edit exam details"
                                           >
                                             ✏️ Edit
                                           </button>
                                           <button
                                             onClick={() => handleDeleteExam(examItem)}
-                                            className="px-3 py-1.5 bg-red-50 border border-red-200 hover:bg-red-100 text-red-700 text-xs font-bold rounded-xl transition-all"
+                                            className="px-2 py-1 bg-red-50 border border-red-200 hover:bg-red-100 text-red-700 text-xs font-bold rounded-lg transition-all"
                                             title="Delete exam paper"
                                           >
-                                            🗑️ Delete
+                                            🗑️
                                           </button>
                                         </>
                                       )}
@@ -995,9 +1001,9 @@ ANSWER: C`;
                                       {isRegistrarOrStaff && (
                                         <button
                                           onClick={() => handleReleaseExamResults(examItem.id)}
-                                          className={`px-3 py-1.5 text-xs font-bold rounded-xl transition-all ${examItem.is_results_released ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' : 'bg-brand-light text-white'}`}
+                                          className={`px-2 py-1 text-xs font-bold rounded-lg transition-all ${examItem.is_results_released ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' : 'bg-brand-light text-white'}`}
                                         >
-                                          {examItem.is_results_released ? 'Hide Scores' : 'Release Scores'}
+                                          {examItem.is_results_released ? '🔒 Withhold' : '📢 Release'}
                                         </button>
                                       )}
                                     </>
@@ -1005,7 +1011,7 @@ ANSWER: C`;
 
                                   <button
                                     onClick={() => downloadResultsCSV(examItem.id)}
-                                    className="p-2 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 text-xs font-bold rounded-xl"
+                                    className="p-1 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 text-xs font-bold rounded-lg"
                                     title="Export Results CSV"
                                   >
                                     📊 CSV
@@ -1024,19 +1030,24 @@ ANSWER: C`;
                 {unassignedExams.length > 0 && (
                   <div className="green-card rounded-2xl p-6 space-y-4">
                     <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">General / Unassigned Faculty Exams</h3>
-                    <div className="space-y-3">
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                       {unassignedExams.map((examItem) => (
-                        <div key={examItem.id} className="p-4 bg-slate-50 rounded-xl border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                          <div>
-                            <h4 className="font-bold text-slate-850 text-sm">{examItem.title}</h4>
-                            <p className="text-xs text-slate-500 font-medium">Course: {examItem.course_code} · Lecturer: {examItem.lecturer_name}</p>
+                        <div key={examItem.id} className="bg-white rounded-2xl border border-slate-200 p-5 flex flex-col justify-between space-y-3 shadow-sm hover:border-emerald-300 transition-all">
+                          <div className="space-y-1.5">
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-slate-100 text-slate-800 border border-slate-200">
+                              {examItem.course_code}
+                            </span>
+                            <h4 className="font-bold text-slate-850 text-base leading-tight">{examItem.title}</h4>
+                            <p className="text-xs text-slate-500 font-medium">Lecturer: <span className="font-semibold text-slate-800">{examItem.lecturer_name}</span></p>
                           </div>
-                          <button
-                            onClick={() => handleSelectExamForQuestions(examItem)}
-                            className="px-3 py-1.5 bg-white border border-slate-200 text-slate-800 text-xs font-bold rounded-xl"
-                          >
-                            Questions ({examItem.questions_count})
-                          </button>
+                          <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
+                            <button
+                              onClick={() => handleSelectExamForQuestions(examItem)}
+                              className="px-3 py-1.5 bg-white border border-slate-200 text-slate-800 text-xs font-bold rounded-lg"
+                            >
+                              Questions ({examItem.questions_count})
+                            </button>
+                          </div>
                         </div>
                       ))}
                     </div>

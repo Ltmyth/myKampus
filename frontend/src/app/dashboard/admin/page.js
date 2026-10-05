@@ -38,6 +38,12 @@ export default function AdminPage() {
   const [customDefaultPass, setCustomDefaultPass] = useState('');
   const [onboardingResults, setOnboardingResults] = useState([]);
   const [uploadingExcel, setUploadingExcel] = useState(false);
+  const [batchEntryYear, setBatchEntryYear] = useState(2026);
+  const [batchIntake, setBatchIntake] = useState('August Intake');
+  const [batchFacultyId, setBatchFacultyId] = useState('');
+  const [onboardingSummary, setOnboardingSummary] = useState(null);
+  const [singleEntryYear, setSingleEntryYear] = useState(2026);
+  const [singleIntake, setSingleIntake] = useState('August Intake');
 
   // Bulk User Selection & Deletion State
   const [selectedUserIds, setSelectedUserIds] = useState([]);
@@ -89,6 +95,15 @@ export default function AdminPage() {
   const [bulkYearOfStudy, setBulkYearOfStudy] = useState(1);
   const [bulkFacultyId, setBulkFacultyId] = useState('');
   const [bulkCourseIds, setBulkCourseIds] = useState([]);
+
+  // Bulk Staff Onboarding State (Excel .xls / .xlsx / .csv)
+  const [showBulkStaffModal, setShowBulkStaffModal] = useState(false);
+  const [bulkStaffFile, setBulkStaffFile] = useState(null);
+  const [bulkStaffRole, setBulkStaffRole] = useState('lecturer');
+  const [bulkStaffFacultyId, setBulkStaffFacultyId] = useState('');
+  const [bulkStaffDefaultPassword, setBulkStaffDefaultPassword] = useState('Kampus@2026');
+  const [uploadingBulkStaff, setUploadingBulkStaff] = useState(false);
+  const [bulkStaffResult, setBulkStaffResult] = useState(null);
 
   // Form state (Reset Password)
   const [resetUserObj, setResetUserObj] = useState(null);
@@ -292,6 +307,9 @@ export default function AdminPage() {
     try {
       const formData = new FormData();
       formData.append('file', excelFile);
+      if (batchEntryYear) formData.append('entry_year', batchEntryYear);
+      if (batchIntake) formData.append('intake', batchIntake);
+      if (batchFacultyId) formData.append('faculty_id', batchFacultyId);
       if (customDefaultPass.trim()) {
         formData.append('default_password', customDefaultPass.trim());
       }
@@ -315,6 +333,7 @@ export default function AdminPage() {
       const data = await res.json();
       if (res.ok) {
         setSuccessMsg(data.detail || 'Batch student onboarding complete!');
+        setOnboardingSummary(data);
         setOnboardingResults(data.students || []);
         loadAdminData();
       } else {
@@ -393,10 +412,12 @@ export default function AdminPage() {
 
     try {
       const formData = new FormData();
-      const csvHeader = "Registration No,Full Name,Email,Faculty,One Time Password\n";
-      const csvRow = `"${singleRegNumber.trim()}","${singleFullName.trim()}","${singleEmail.trim() || `student_${Date.now()}@ciu.ac.ug`}","${singleFaculty || 'SOBAT'}","${singleInitialPassword.trim()}"\n`;
+      const csvHeader = "Registration No,Full Name,Email,Faculty,Entry Year,Intake,One Time Password\n";
+      const csvRow = `"${singleRegNumber.trim()}","${singleFullName.trim()}","${singleEmail.trim() || `student_${Date.now()}@ciu.ac.ug`}","${singleFaculty || 'SOBAT'}","${singleEntryYear}","${singleIntake}","${singleInitialPassword.trim()}"\n`;
       const blob = new Blob([csvHeader + csvRow], { type: 'text/csv' });
       formData.append('file', blob, 'single_student.csv');
+      formData.append('entry_year', singleEntryYear);
+      formData.append('intake', singleIntake);
       if (singleInitialPassword.trim()) {
         formData.append('default_password', singleInitialPassword.trim());
       }
@@ -420,6 +441,7 @@ export default function AdminPage() {
       const data = await res.json();
       if (res.ok) {
         setSuccessMsg(`Single student '${singleFullName}' onboarded successfully with One-Time Password!`);
+        setOnboardingSummary(data);
         setOnboardingResults(data.students || []);
         setSingleRegNumber('');
         setSingleFullName('');
@@ -606,6 +628,101 @@ export default function AdminPage() {
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const handleBulkStaffUpload = async (e) => {
+    e.preventDefault();
+    if (!bulkStaffFile) {
+      setErrorMsg('Please select an Excel (.xls/.xlsx) or CSV file containing staff members.');
+      return;
+    }
+    try {
+      setUploadingBulkStaff(true);
+      setErrorMsg('');
+      setSuccessMsg('');
+      setBulkStaffResult(null);
+
+      const formData = new FormData();
+      formData.append('file', bulkStaffFile);
+      formData.append('default_role', bulkStaffRole);
+      if (bulkStaffFacultyId) {
+        formData.append('faculty_id', bulkStaffFacultyId);
+      }
+      formData.append('default_password', bulkStaffDefaultPassword || 'Kampus@2026');
+
+      const rawBaseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000/api';
+      const API_BASE_URL = rawBaseUrl.replace(/\/$/, '');
+      const token = localStorage.getItem('token');
+
+      const res = await fetch(`${API_BASE_URL}/admin/users/bulk_onboard_staff/`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`
+        },
+        body: formData
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        setSuccessMsg(data.detail || `Bulk Staff Onboarding: Successfully onboarded ${data.created_count} staff accounts!`);
+        setBulkStaffResult(data);
+        setBulkStaffFile(null);
+        await loadAdminData();
+      } else {
+        setErrorMsg(data.detail || 'Failed to process bulk staff onboarding file.');
+      }
+    } catch (err) {
+      setErrorMsg(err.message || 'Failed to onboard staff from file.');
+    } finally {
+      setUploadingBulkStaff(false);
+    }
+  };
+
+  const downloadSampleFile = async (type, format = 'csv') => {
+    try {
+      const rawBaseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api';
+      const API_BASE_URL = rawBaseUrl.replace(/\/$/, '');
+      const tokensStr = localStorage.getItem('ciu_tokens');
+      let token = '';
+      if (tokensStr) {
+        try { token = JSON.parse(tokensStr).access; } catch (e) {}
+      }
+
+      const endpoint = type === 'staff'
+        ? `${API_BASE_URL}/admin/users/sample_staff_file/?format=${format}`
+        : `${API_BASE_URL}/admin/users/sample_student_file/?format=${format}`;
+
+      const res = await fetch(endpoint, {
+        headers: token ? { 'Authorization': `Bearer ${token}` } : {}
+      });
+
+      if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = type === 'staff'
+        ? (format === 'xlsx' ? 'sample_staff_list.xlsx' : 'sample_staff_list.csv')
+        : (format === 'xlsx' ? 'sample_student_onboarding.xlsx' : 'sample_student_onboarding.csv');
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.warn('Blob download fallback to direct window open:', err);
+      const rawBaseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api';
+      const API_BASE_URL = rawBaseUrl.replace(/\/$/, '');
+      window.open(`${API_BASE_URL}/admin/users/sample_${type}_file/?format=${format}`, '_blank');
+    }
+  };
+
+  const handleDownloadStaffSample = (format = 'csv') => {
+    downloadSampleFile('staff', format);
+  };
+
+  const handleDownloadStudentSample = (format = 'csv') => {
+    downloadSampleFile('student', format);
   };
 
   const handleConfirmResetPassword = async (e) => {
@@ -875,14 +992,23 @@ export default function AdminPage() {
                 </button>
               </div>
 
-              <button
-                type="button"
-                onClick={handleSyncCIUClearance}
-                disabled={submitting}
-                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-sm transition-all flex items-center space-x-1 hidden sm:flex"
-              >
-                <span>⚡ Refresh Clearance Levels</span>
-              </button>
+              <div className="flex items-center space-x-2">
+                <button
+                  type="button"
+                  onClick={() => setShowBulkStaffModal(true)}
+                  className="px-3.5 py-1.5 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-xl shadow-sm transition-all flex items-center space-x-1.5"
+                >
+                  <span>📥 Bulk Onboard Staff (Excel/CSV)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSyncCIUClearance}
+                  disabled={submitting}
+                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-sm transition-all flex items-center space-x-1 hidden sm:flex"
+                >
+                  <span>⚡ Refresh Clearance Levels</span>
+                </button>
+              </div>
             </div>
 
             {/* Filter Controls Bar */}
@@ -1511,7 +1637,7 @@ export default function AdminPage() {
             {/* SINGLE STUDENT ONBOARDING FORM */}
             {onboardingMode === 'single' ? (
               <form onSubmit={handleSingleStudentOnboarding} className="space-y-4 text-xs animate-fade-in">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
                   <div>
                     <label className="block text-slate-700 font-bold uppercase mb-1">Registration Number *</label>
                     <input
@@ -1560,6 +1686,32 @@ export default function AdminPage() {
                       ))}
                     </select>
                   </div>
+
+                  <div>
+                    <label className="block text-slate-700 font-bold uppercase mb-1">Entry Year</label>
+                    <input
+                      type="number"
+                      value={singleEntryYear}
+                      onChange={(e) => setSingleEntryYear(e.target.value)}
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800"
+                      placeholder="2026"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-700 font-bold uppercase mb-1">Intake</label>
+                    <select
+                      value={singleIntake}
+                      onChange={(e) => setSingleIntake(e.target.value)}
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800"
+                      required
+                    >
+                      <option value="August Intake">August Intake</option>
+                      <option value="January Intake">January Intake</option>
+                      <option value="May Intake">May Intake</option>
+                    </select>
+                  </div>
                 </div>
 
                 <div>
@@ -1587,27 +1739,98 @@ export default function AdminPage() {
             ) : (
               /* BATCH EXCEL ONBOARDING FORM */
               <form onSubmit={handleExcelOnboardingSubmit} className="space-y-4 text-xs animate-fade-in">
-                <div className="border-2 border-dashed border-slate-300 hover:border-emerald-500 rounded-2xl p-8 text-center bg-slate-50/50 transition-all">
-                  <div className="w-12 h-12 bg-emerald-100 text-emerald-700 rounded-full flex items-center justify-center mx-auto mb-3">
+                {/* Sample Template Download Bar */}
+                <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-3 bg-emerald-50/80 border border-emerald-200 rounded-2xl">
+                  <div className="flex items-center space-x-2.5">
+                    <span className="text-xl">📋</span>
+                    <div>
+                      <h4 className="font-bold text-emerald-950 text-xs">Official Student Onboarding Spreadsheet Template</h4>
+                      <p className="text-[10px] text-emerald-700 font-medium">Download the standard template, populate your student roster, and upload below.</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center space-x-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => handleDownloadStudentSample('xlsx')}
+                      className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white font-bold rounded-xl transition-all shadow-xs flex items-center space-x-1"
+                    >
+                      <span>📥 Download Excel (.xlsx)</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDownloadStudentSample('csv')}
+                      className="px-3 py-1.5 bg-white hover:bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold rounded-xl transition-all shadow-xs flex items-center space-x-1"
+                    >
+                      <span>📄 Download CSV (.csv)</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Upload Drag & Drop Area */}
+                <div className="border-2 border-dashed border-slate-300 hover:border-emerald-500 rounded-2xl p-6 text-center bg-slate-50/50 transition-all">
+                  <div className="w-12 h-12 bg-emerald-100 text-emerald-700 rounded-full flex items-center justify-center mx-auto mb-2">
                     <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
                     </svg>
                   </div>
                   <input
                     type="file"
-                    accept=".xlsx, .xls, .csv"
+                    accept=".xlsx, .xls, .csv, application/vnd.ms-excel, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, text/csv"
                     onChange={(e) => setExcelFile(e.target.files[0])}
                     className="hidden"
                     id="excel_upload_input"
                   />
-                  <label htmlFor="excel_upload_input" className="cursor-pointer font-bold text-brand-dark hover:underline text-xs">
-                    {excelFile ? `Selected: ${excelFile.name}` : 'Click to choose Excel (.xlsx / .xls) or CSV file'}
+                  <label htmlFor="excel_upload_input" className="cursor-pointer font-bold text-brand-dark hover:underline text-xs block">
+                    {excelFile ? `Selected: ${excelFile.name} (${(excelFile.size / 1024).toFixed(1)} KB)` : 'Click to choose Excel (.xlsx / .xls) or CSV file'}
                   </label>
-                  <p className="text-[10px] text-slate-400 mt-1 font-medium">Headers required: reg_number, full_name, email, faculty</p>
+                  <p className="text-[10px] text-slate-400 mt-1 font-medium">Compatible columns: Registration Number, Full Name, Email, Faculty, Entry Year, Intake</p>
+                </div>
+
+                {/* Batch Cohort Settings Grid */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-slate-50 p-3 rounded-xl border border-slate-200">
+                  <div>
+                    <label className="block text-slate-700 font-bold uppercase mb-1 text-[10px]">Cohort Entry Year</label>
+                    <input
+                      type="number"
+                      value={batchEntryYear}
+                      onChange={(e) => setBatchEntryYear(e.target.value)}
+                      placeholder="2026"
+                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl font-bold text-slate-800 text-xs"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-700 font-bold uppercase mb-1 text-[10px]">Cohort Intake</label>
+                    <select
+                      value={batchIntake}
+                      onChange={(e) => setBatchIntake(e.target.value)}
+                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl font-bold text-slate-800 text-xs"
+                      required
+                    >
+                      <option value="August Intake">August Intake</option>
+                      <option value="January Intake">January Intake</option>
+                      <option value="May Intake">May Intake</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-700 font-bold uppercase mb-1 text-[10px]">Target Faculty (Fallback)</label>
+                    <select
+                      value={batchFacultyId}
+                      onChange={(e) => setBatchFacultyId(e.target.value)}
+                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl font-bold text-slate-800 text-xs"
+                    >
+                      <option value="">-- Read from File / Default SOBAT --</option>
+                      {faculties.map(f => (
+                        <option key={f.id} value={f.id}>[{f.code}] {f.name}</option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
 
                 <div>
-                  <label className="block text-slate-700 font-bold uppercase mb-1">Batch Initial Password (Optional)</label>
+                  <label className="block text-slate-700 font-bold uppercase mb-1 text-[10px]">Batch Initial Password (Optional)</label>
                   <input
                     type="text"
                     value={customDefaultPass}
@@ -1616,9 +1839,37 @@ export default function AdminPage() {
                     className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs"
                   />
                   <span className="text-[10px] text-slate-500 font-medium mt-1 block">
-                    🔒 All onboarded students are flagged to set a new password on first login. Default tuition clearance is set to 0.0%.
+                    🔒 All onboarded students are flagged to set a new password on first login. Default tuition clearance is set to 0.0%. Duplicates are safely skipped.
                   </span>
                 </div>
+
+                {/* Onboarding Summary (if processed) */}
+                {onboardingSummary && (
+                  <div className="space-y-2 bg-slate-50 p-3 rounded-xl border border-slate-200">
+                    <div className="flex items-center space-x-2">
+                      <span className="px-2.5 py-0.5 rounded-full text-xs font-black bg-emerald-100 text-emerald-800">
+                        ✅ {onboardingSummary.created_count} Students Created
+                      </span>
+                      <span className="px-2.5 py-0.5 rounded-full text-xs font-black bg-amber-100 text-amber-800">
+                        ⚠️ {onboardingSummary.skipped_count} Skipped / Duplicates
+                      </span>
+                      <span className="text-xs text-slate-500 font-bold">
+                        (Total rows: {onboardingSummary.total_rows})
+                      </span>
+                    </div>
+
+                    {onboardingSummary.skipped_students?.length > 0 && (
+                      <div className="max-h-24 overflow-y-auto custom-scrollbar border border-amber-200 bg-amber-50/40 rounded-lg p-2 text-[11px] space-y-1">
+                        <p className="font-bold text-amber-900">Skipped Entries / Duplicates:</p>
+                        {onboardingSummary.skipped_students.slice(0, 10).map((sk, idx) => (
+                          <p key={idx} className="text-slate-600">
+                            • <strong className="text-slate-800">{sk.reg_number || sk.username}</strong>: {sk.reason}
+                          </p>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 <button
                   type="submit"
@@ -2360,6 +2611,175 @@ export default function AdminPage() {
                   className="px-5 py-2 bg-teal-600 hover:bg-teal-700 text-white font-bold rounded-xl transition-all shadow-md"
                 >
                   {submitting ? 'Applying...' : `Confirm Bulk Allocation (${selectedUserIds.length})`}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: BULK ONBOARD STAFF (EXCEL .XLS / .XLSX / CSV) */}
+      {showBulkStaffModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-xl p-6 space-y-4 max-h-[90vh] overflow-y-auto custom-scrollbar">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center space-x-2">
+                <span className="text-xl">📥</span>
+                <div>
+                  <h3 className="font-bold text-slate-850 text-base">Bulk Onboard Staff (Excel / CSV)</h3>
+                  <p className="text-[11px] text-slate-500 font-medium">Batch create lecturer & staff accounts from "Staff_List.xls", Excel, or CSV</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => { setShowBulkStaffModal(false); setBulkStaffResult(null); }}
+                className="text-slate-400 hover:text-slate-700 text-lg font-bold"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleBulkStaffUpload} className="space-y-4 text-xs">
+              {/* File Upload Box */}
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
+                  Staff File (.xls, .xlsx, .csv) *
+                </label>
+                <div className="border-2 border-dashed border-slate-300 hover:border-brand-light rounded-2xl p-4 text-center bg-slate-50/50 transition-all">
+                  <input
+                    type="file"
+                    accept=".xls,.xlsx,.csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"
+                    onChange={(e) => setBulkStaffFile(e.target.files[0])}
+                    className="hidden"
+                    id="bulk_staff_file_input"
+                  />
+                  <label htmlFor="bulk_staff_file_input" className="cursor-pointer space-y-1 block">
+                    <span className="text-2xl block">📊</span>
+                    <span className="font-bold text-brand-dark hover:underline block text-xs">
+                      {bulkStaffFile ? `Selected: ${bulkStaffFile.name} (${(bulkStaffFile.size / 1024).toFixed(1)} KB)` : 'Click to select Staff_List.xls, modern .xlsx or .csv file'}
+                    </span>
+                    <span className="text-[10px] text-slate-400 block">
+                      Compatible with Employee Name, Phone Contact, Email, User Name columns
+                    </span>
+                  </label>
+                </div>
+              </div>
+
+              {/* Settings Grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-50 p-3 rounded-xl border border-slate-200">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Default Staff Role</label>
+                  <select
+                    value={bulkStaffRole}
+                    onChange={(e) => setBulkStaffRole(e.target.value)}
+                    className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl font-bold text-slate-800"
+                  >
+                    <option value="lecturer">Lecturer (Academic Staff)</option>
+                    <option value="faculty_admin">Faculty Secretary</option>
+                    <option value="dean">Faculty Dean</option>
+                    <option value="registrar">Academic Registrar</option>
+                    <option value="platform_coordinator">Platform Coordinator</option>
+                    <option value="admin">System Administrator</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Target Faculty (Optional)</label>
+                  <select
+                    value={bulkStaffFacultyId}
+                    onChange={(e) => setBulkStaffFacultyId(e.target.value)}
+                    className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl font-bold text-slate-800"
+                  >
+                    <option value="">-- Auto-detect / None --</option>
+                    {faculties.map(f => (
+                      <option key={f.id} value={f.id}>[{f.code}] {f.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="sm:col-span-2">
+                  <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Default Temporary Password</label>
+                  <input
+                    type="text"
+                    value={bulkStaffDefaultPassword}
+                    onChange={(e) => setBulkStaffDefaultPassword(e.target.value)}
+                    placeholder="Kampus@2026"
+                    className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl font-mono text-xs"
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1">Staff accounts will be flagged to change their password upon first login.</p>
+                </div>
+              </div>
+
+              {/* Sample Download Action */}
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-2 text-[11px] bg-emerald-50/70 p-2.5 rounded-xl border border-emerald-200">
+                <div className="flex items-center space-x-2">
+                  <span>📋</span>
+                  <span className="text-emerald-900 font-bold">Standard Staff Onboarding Template:</span>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <button
+                    type="button"
+                    onClick={() => handleDownloadStaffSample('xlsx')}
+                    className="px-2.5 py-1 bg-emerald-700 hover:bg-emerald-800 text-white font-bold rounded-lg transition-all shadow-xs flex items-center space-x-1"
+                  >
+                    <span>📥 Sample Excel (.xlsx)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDownloadStaffSample('csv')}
+                    className="px-2.5 py-1 bg-white hover:bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold rounded-lg transition-all shadow-xs flex items-center space-x-1"
+                  >
+                    <span>📄 Sample CSV (.csv)</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Result Summary (if any) */}
+              {bulkStaffResult && (
+                <div className="space-y-2 bg-slate-50 p-3 rounded-xl border border-slate-200">
+                  <div className="flex items-center space-x-2">
+                    <span className="px-2.5 py-0.5 rounded-full text-xs font-black bg-emerald-100 text-emerald-800">
+                      ✅ {bulkStaffResult.created_count} Created
+                    </span>
+                    <span className="px-2.5 py-0.5 rounded-full text-xs font-black bg-amber-100 text-amber-800">
+                      ⚠️ {bulkStaffResult.skipped_count} Skipped / Duplicates
+                    </span>
+                    <span className="text-xs text-slate-500 font-bold">
+                      (Total rows: {bulkStaffResult.total_rows})
+                    </span>
+                  </div>
+
+                  {bulkStaffResult.skipped_users?.length > 0 && (
+                    <div className="max-h-28 overflow-y-auto custom-scrollbar border border-amber-200 bg-amber-50/40 rounded-lg p-2 text-[11px] space-y-1">
+                      <p className="font-bold text-amber-900">Skipped Entries / Duplicates:</p>
+                      {bulkStaffResult.skipped_users.slice(0, 10).map((sk, idx) => (
+                        <p key={idx} className="text-slate-600">
+                          • <strong className="text-slate-800">{sk.username || sk.email || sk.name}</strong>: {sk.reason}
+                        </p>
+                      ))}
+                      {bulkStaffResult.skipped_users.length > 10 && (
+                        <p className="text-slate-500 italic">+ {bulkStaffResult.skipped_users.length - 10} more duplicate entries</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Footer Actions */}
+              <div className="flex items-center justify-end space-x-2 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => { setShowBulkStaffModal(false); setBulkStaffResult(null); }}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition-all"
+                >
+                  Close
+                </button>
+                <button
+                  type="submit"
+                  disabled={uploadingBulkStaff || !bulkStaffFile}
+                  className="px-5 py-2 bg-brand-light hover:bg-brand-medium text-white font-bold rounded-xl transition-all shadow-md disabled:opacity-50 flex items-center space-x-1.5"
+                >
+                  <span>{uploadingBulkStaff ? 'Processing Staff File...' : '⚡ Onboard Staff Now'}</span>
                 </button>
               </div>
             </form>
