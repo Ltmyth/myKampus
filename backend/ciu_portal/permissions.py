@@ -18,7 +18,7 @@ class IsDean(permissions.BasePermission):
 
 class IsFacultyAdmin(permissions.BasePermission):
     def has_permission(self, request, view):
-        return request.user and request.user.is_authenticated and request.user.role == 'faculty_admin'
+        return request.user and request.user.is_authenticated and request.user.role in ['faculty_admin', 'faculty_secretary']
 
 class IsRegistrar(permissions.BasePermission):
     def has_permission(self, request, view):
@@ -49,5 +49,5 @@ class IsStaffUser(permissions.BasePermission):
     Allows access to Admin, Platform Coordinator, DVC, VC, Dean, Faculty Admin, Registrar, and Lecturer
     """
     def has_permission(self, request, view):
-        return request.user and request.user.is_authenticated and request.user.role in ['admin', 'platform_coordinator', 'dvc', 'vc', 'dean', 'faculty_admin', 'registrar', 'lecturer']
+        return request.user and request.user.is_authenticated and request.user.role in ['admin', 'platform_coordinator', 'dvc', 'vc', 'dean', 'faculty_admin', 'faculty_secretary', 'registrar', 'lecturer']
 

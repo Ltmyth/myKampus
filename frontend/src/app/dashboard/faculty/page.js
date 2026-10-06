@@ -98,6 +98,24 @@ export default function FacultyManagementPage() {
     lecturers: []
   });
   const [selectedUnitYearFilter, setSelectedUnitYearFilter] = useState('All');
+  const [selectedUnitFacultyFilter, setSelectedUnitFacultyFilter] = useState('All');
+  const [studentCourseFilter, setStudentCourseFilter] = useState('All');
+
+  // Course Units Review & Attachment Modal State
+  const [showUnitsReviewModal, setShowUnitsReviewModal] = useState(false);
+  const [selectedReviewCourse, setSelectedReviewCourse] = useState(null);
+  const [reviewUnitsList, setReviewUnitsList] = useState([]);
+  const [loadingReviewUnits, setLoadingReviewUnits] = useState(false);
+  const [reviewSearchTerm, setReviewSearchTerm] = useState('');
+  const [reviewYearFilter, setReviewYearFilter] = useState('All');
+  const [attachExistingUnitId, setAttachExistingUnitId] = useState('');
+  const [showInlineAddUnit, setShowInlineAddUnit] = useState(false);
+  const [newUnitInlineData, setNewUnitInlineData] = useState({
+    code: '',
+    name: '',
+    credit_units: 3,
+    year_of_study: 1
+  });
 
   // Course Units Import State (Excel & CSV)
   const [showCsvModal, setShowCsvModal] = useState(false);
@@ -184,6 +202,7 @@ export default function FacultyManagementPage() {
   const isStudent = user?.role === 'student';
   const isLecturer = user?.role === 'lecturer';
   const canAssignLecturer = ['admin', 'faculty_admin', 'platform_coordinator'].includes(user?.role) && !isExecutiveReadOnly;
+  const canBulkManage = isSecretaryOrStaff;
 
   useEffect(() => {
     loadFacultyData();
@@ -736,6 +755,141 @@ export default function FacultyManagementPage() {
     });
   };
 
+  const handleBulkDeleteFacultyCourses = (fac) => {
+    const facCourses = courses.filter(c => c.faculty === fac.id);
+    if (facCourses.length === 0) return;
+    const count = facCourses.length;
+    showConfirm({
+      title: `Bulk Delete Courses in ${fac.code}`,
+      description: (
+        <span>
+          Are you sure you want to permanently delete all <strong className="text-red-700 font-bold">{count}</strong> course(s) under <strong className="text-slate-800">{fac.name} ({fac.code})</strong>?
+          <br />
+          <span className="text-xs text-red-600 block mt-2 font-medium">
+            ⚠️ Warning: This will permanently remove all associated course units, timetables, and assessments.
+          </span>
+        </span>
+      ),
+      confirmText: `Delete ${count} Course(s)`,
+      variant: 'danger',
+      icon: '🗑️',
+      onConfirm: async () => {
+        setConfirmModal(prev => ({ ...prev, loading: true }));
+        setErrorMsg('');
+        setSuccessMsg('');
+        try {
+          const res = await api.post('/courses/bulk_delete/', {
+            faculty_id: fac.id
+          });
+          setSuccessMsg(res?.detail || `Successfully deleted courses for ${fac.code}.`);
+          setSelectedCourseIds(prev => prev.filter(id => !facCourses.map(c => c.id).includes(id)));
+          closeConfirm();
+          loadFacultyData();
+        } catch (err) {
+          setErrorMsg(err.response?.data?.detail || err.message || 'Failed to delete faculty courses.');
+          setConfirmModal(prev => ({ ...prev, loading: false }));
+        }
+      }
+    });
+  };
+
+  // --- Course Units Review & Attachment Handlers ---
+  const handleOpenReviewUnitsModal = async (course) => {
+    setSelectedReviewCourse(course);
+    setReviewSearchTerm('');
+    setReviewYearFilter('All');
+    setAttachExistingUnitId('');
+    setShowInlineAddUnit(false);
+    setShowUnitsReviewModal(true);
+    setLoadingReviewUnits(true);
+    try {
+      const units = await api.get(`/courses/${course.id}/units/`);
+      setReviewUnitsList(units || []);
+    } catch {
+      const fallback = courseUnits.filter(u => u.course === course.id || u.course_code === course.code);
+      setReviewUnitsList(fallback);
+    } finally {
+      setLoadingReviewUnits(false);
+    }
+  };
+
+  const handleAttachExistingUnit = async () => {
+    if (!attachExistingUnitId || !selectedReviewCourse) return;
+    try {
+      setSubmitting(true);
+      setErrorMsg('');
+      const res = await api.post(`/courses/${selectedReviewCourse.id}/attach_units/`, {
+        unit_ids: [parseInt(attachExistingUnitId)]
+      });
+      setSuccessMsg(res?.detail || 'Course unit attached successfully.');
+      setAttachExistingUnitId('');
+      const updatedUnits = await api.get(`/courses/${selectedReviewCourse.id}/units/`).catch(() => null);
+      if (updatedUnits) setReviewUnitsList(updatedUnits);
+      loadFacultyData();
+    } catch (err) {
+      setErrorMsg(err.response?.data?.detail || err.message || 'Failed to attach unit.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleCreateAndAttachUnit = async (e) => {
+    e.preventDefault();
+    if (!newUnitInlineData.code || !newUnitInlineData.name || !selectedReviewCourse) return;
+    try {
+      setSubmitting(true);
+      setErrorMsg('');
+      const res = await api.post(`/courses/${selectedReviewCourse.id}/attach_units/`, {
+        code: newUnitInlineData.code,
+        name: newUnitInlineData.name,
+        credit_units: newUnitInlineData.credit_units,
+        year_of_study: newUnitInlineData.year_of_study
+      });
+      setSuccessMsg(res?.detail || 'New unit created and attached.');
+      setNewUnitInlineData({ code: '', name: '', credit_units: 3, year_of_study: 1 });
+      setShowInlineAddUnit(false);
+      const updatedUnits = await api.get(`/courses/${selectedReviewCourse.id}/units/`).catch(() => null);
+      if (updatedUnits) setReviewUnitsList(updatedUnits);
+      loadFacultyData();
+    } catch (err) {
+      setErrorMsg(err.response?.data?.detail || err.message || 'Failed to create unit.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleDetachUnitFromCourse = (unit) => {
+    if (!selectedReviewCourse) return;
+    showConfirm({
+      title: 'Detach / Remove Unit',
+      description: (
+        <span>
+          Are you sure you want to detach unit <strong className="text-red-700 font-bold">[{unit.code}] {unit.name}</strong> from <strong>{selectedReviewCourse.code}</strong>?
+        </span>
+      ),
+      confirmText: 'Detach Unit',
+      variant: 'danger',
+      icon: '✂️',
+      onConfirm: async () => {
+        setConfirmModal(prev => ({ ...prev, loading: true }));
+        try {
+          await api.post(`/courses/${selectedReviewCourse.id}/attach_units/`, {
+            action: 'detach',
+            unit_ids: [unit.id]
+          });
+          setSuccessMsg(`Detached unit ${unit.code} successfully.`);
+          const updatedUnits = await api.get(`/courses/${selectedReviewCourse.id}/units/`).catch(() => null);
+          if (updatedUnits) setReviewUnitsList(updatedUnits);
+          closeConfirm();
+          loadFacultyData();
+        } catch (err) {
+          setErrorMsg(err.response?.data?.detail || err.message || 'Failed to detach unit.');
+          setConfirmModal(prev => ({ ...prev, loading: false }));
+        }
+      }
+    });
+  };
+
   // --- Course Unit CRUD Handlers ---
   const handleOpenCourseUnitModal = (unit = null) => {
     setErrorMsg('');
@@ -1001,8 +1155,12 @@ export default function FacultyManagementPage() {
       }).slice(0, 1)
     : faculties;
 
-  // Filter course units according to year filter, program filter, and search text
+  // Filter course units according to faculty, year filter, program filter, and search text
   const filteredCourseUnits = courseUnits.filter(u => {
+    const matchesFaculty = selectedUnitFacultyFilter === 'All' ||
+      u.faculty_code === selectedUnitFacultyFilter ||
+      String(u.faculty_id) === String(selectedUnitFacultyFilter) ||
+      courses.some(c => (c.id === u.course || c.code === u.course_code) && (String(c.faculty) === String(selectedUnitFacultyFilter) || c.faculty_code === selectedUnitFacultyFilter));
     const matchesYear = selectedUnitYearFilter === 'All' || (u.year_of_study || 1) === parseInt(selectedUnitYearFilter);
     const matchesCourse = selectedUnitCourseFilter === 'All' || u.course_code === selectedUnitCourseFilter;
     const s = unitSearchText.toLowerCase().trim();
@@ -1015,7 +1173,16 @@ export default function FacultyManagementPage() {
         (l.last_name && l.last_name.toLowerCase().includes(s)) ||
         (l.username && l.username.toLowerCase().includes(s))
       ));
-    return matchesYear && matchesCourse && matchesSearch;
+    return matchesFaculty && matchesYear && matchesCourse && matchesSearch;
+  });
+
+  const filteredReviewUnits = (reviewUnitsList || []).filter(u => {
+    const s = reviewSearchTerm.toLowerCase().trim();
+    const matchesSearch = !s ||
+      (u.code && u.code.toLowerCase().includes(s)) ||
+      (u.name && u.name.toLowerCase().includes(s));
+    const matchesYear = reviewYearFilter === 'All' || String(u.year_of_study || 1) === String(reviewYearFilter);
+    return matchesSearch && matchesYear;
   });
 
   if (loading) {
@@ -1153,7 +1320,7 @@ export default function FacultyManagementPage() {
             </div>
             
             <div className="flex items-center gap-2 shrink-0">
-              {isAdmin && courses.length > 0 && (
+              {canBulkManage && courses.length > 0 && (
                 <button
                   type="button"
                   onClick={handleToggleSelectAllCourses}
@@ -1186,7 +1353,7 @@ export default function FacultyManagementPage() {
           </div>
 
           {/* Sticky Bulk Action Bar for Courses */}
-          {isAdmin && selectedCourseIds.length > 0 && (
+          {canBulkManage && selectedCourseIds.length > 0 && (
             <div className="sticky top-2 z-20 bg-gradient-to-r from-red-600 via-rose-600 to-red-700 text-white p-3.5 rounded-2xl shadow-xl border border-red-500/50 flex flex-wrap items-center justify-between gap-3 animate-fade-in">
               <div className="flex items-center space-x-3">
                 <span className="w-8 h-8 rounded-xl bg-white/20 flex items-center justify-center text-sm font-bold shadow-inner">
@@ -1242,16 +1409,26 @@ export default function FacultyManagementPage() {
                       </div>
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
-                      {isAdmin && facCourses.length > 0 && (
-                        <button
-                          type="button"
-                          onClick={() => handleToggleSelectAllFacCourses(fac.id)}
-                          className="text-[11px] text-brand-dark hover:text-brand-medium font-bold px-2.5 py-1 rounded-xl bg-white hover:bg-emerald-50 border border-emerald-200 transition-all shadow-2xs"
-                        >
-                          {allFacSelected
-                            ? `✕ Deselect ${fac.code}`
-                            : `☑️ Select All in ${fac.code}`}
-                        </button>
+                      {canBulkManage && facCourses.length > 0 && (
+                        <div className="flex items-center space-x-1.5">
+                          <button
+                            type="button"
+                            onClick={() => handleToggleSelectAllFacCourses(fac.id)}
+                            className="text-[11px] text-brand-dark hover:text-brand-medium font-bold px-2.5 py-1 rounded-xl bg-white hover:bg-emerald-50 border border-emerald-200 transition-all shadow-2xs"
+                          >
+                            {allFacSelected
+                              ? `✕ Deselect ${fac.code}`
+                              : `☑️ Select All in ${fac.code}`}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleBulkDeleteFacultyCourses(fac)}
+                            className="text-[11px] text-red-700 hover:text-red-800 font-bold px-2.5 py-1 rounded-xl bg-white hover:bg-red-50 border border-red-200 transition-all shadow-2xs"
+                            title={`Delete all courses in ${fac.code}`}
+                          >
+                            🗑️ Delete All in {fac.code}
+                          </button>
+                        </div>
                       )}
                       <span className="text-xs font-extrabold text-emerald-800 bg-emerald-50 px-3 py-1 rounded-xl border border-emerald-200 shrink-0">
                         {facCourses.length} Degree Program(s)
@@ -1280,7 +1457,7 @@ export default function FacultyManagementPage() {
                             <div className="space-y-1.5">
                               <div className="flex justify-between items-start">
                                 <div className="flex items-center space-x-2">
-                                  {isAdmin && (
+                                  {canBulkManage && (
                                     <input
                                       type="checkbox"
                                       checked={isSelected}
@@ -1306,13 +1483,18 @@ export default function FacultyManagementPage() {
                               )}
                             </div>
 
-                            <div className="pt-2 border-t border-emerald-100/80 flex items-center justify-between text-xs">
-                              <span className="text-[11px] text-emerald-800 font-bold">
-                                📖 {unitsCount} Course Unit(s)
-                              </span>
+                            <div className="pt-2 border-t border-emerald-100/80 flex items-center justify-between text-xs gap-1">
+                              <button
+                                type="button"
+                                onClick={() => handleOpenReviewUnitsModal(c)}
+                                className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-extrabold text-[11px] rounded-lg border border-emerald-200 transition-all flex items-center space-x-1 shrink-0 shadow-2xs"
+                                title="Review attached units or attach new units to this course"
+                              >
+                                <span>📖 Review Units ({unitsCount})</span>
+                              </button>
 
                               {isSecretaryOrStaff && (
-                                <div className="flex items-center space-x-1.5">
+                                <div className="flex items-center space-x-1.5 shrink-0">
                                   <button
                                     onClick={() => {
                                       setEditingCourse(c);
@@ -1326,15 +1508,15 @@ export default function FacultyManagementPage() {
                                       });
                                       setShowCourseModal(true);
                                     }}
-                                    className="px-2.5 py-1 bg-white hover:bg-emerald-50 text-brand-medium font-bold text-xs rounded-lg border border-emerald-200 transition-all"
+                                    className="px-2 py-1 bg-white hover:bg-emerald-50 text-brand-medium font-bold text-xs rounded-lg border border-emerald-200 transition-all shadow-2xs"
                                   >
                                     ✏️ Edit
                                   </button>
                                   <button
                                     onClick={() => handleDeleteCourse(c.id, c.code)}
-                                    className="px-2.5 py-1 bg-red-50 hover:bg-red-100 text-red-700 font-bold text-xs rounded-lg border border-red-200 transition-all"
+                                    className="px-2 py-1 bg-red-50 hover:bg-red-100 text-red-700 font-bold text-xs rounded-lg border border-red-200 transition-all shadow-2xs"
                                   >
-                                    🗑️ Delete
+                                    🗑️
                                   </button>
                                 </div>
                               )}
@@ -1685,7 +1867,7 @@ export default function FacultyManagementPage() {
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <h3 className="text-sm font-bold text-slate-850 uppercase tracking-wider">Faculty Course Units & Assigned Lecturers</h3>
               <div className="flex items-center gap-2">
-                {isAdmin && filteredCourseUnits.length > 0 && (
+                {canBulkManage && filteredCourseUnits.length > 0 && (
                   <button
                     type="button"
                     onClick={() => handleToggleSelectAllFilteredUnits(filteredCourseUnits)}
@@ -1715,7 +1897,7 @@ export default function FacultyManagementPage() {
             </div>
 
             {/* Sticky Bulk Action Bar for Course Units */}
-            {isAdmin && selectedUnitIds.length > 0 && (
+            {canBulkManage && selectedUnitIds.length > 0 && (
               <div className="sticky top-2 z-20 bg-gradient-to-r from-red-600 via-rose-600 to-red-700 text-white p-3.5 rounded-2xl shadow-xl border border-red-500/50 flex flex-wrap items-center justify-between gap-3 animate-fade-in">
                 <div className="flex items-center space-x-3">
                   <span className="w-8 h-8 rounded-xl bg-white/20 flex items-center justify-center text-sm font-bold shadow-inner">
@@ -1750,7 +1932,7 @@ export default function FacultyManagementPage() {
             )}
 
             {/* Search and Filters Toolbar */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-slate-50 p-3 rounded-xl border border-slate-200 text-xs">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 bg-slate-50 p-3 rounded-xl border border-slate-200 text-xs">
               <div>
                 <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Search Course Units</label>
                 <input
@@ -1763,16 +1945,32 @@ export default function FacultyManagementPage() {
               </div>
 
               <div>
+                <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Filter Faculty</label>
+                <select
+                  value={selectedUnitFacultyFilter}
+                  onChange={(e) => { setSelectedUnitFacultyFilter(e.target.value); setSelectedUnitCourseFilter('All'); }}
+                  className="w-full bg-white border border-slate-200 text-slate-800 font-bold rounded-lg px-2.5 py-1.5 focus:ring-1 focus:ring-brand-light"
+                >
+                  <option value="All">All Faculties ({faculties.length})</option>
+                  {faculties.map(f => (
+                    <option key={f.id} value={f.code}>[{f.code}] {f.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
                 <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Filter Program</label>
                 <select
                   value={selectedUnitCourseFilter}
                   onChange={(e) => setSelectedUnitCourseFilter(e.target.value)}
                   className="w-full bg-white border border-slate-200 text-slate-800 font-bold rounded-lg px-2.5 py-1.5 focus:ring-1 focus:ring-brand-light"
                 >
-                  <option value="All">All Course Programs ({courses.length})</option>
-                  {courses.map(c => (
-                    <option key={c.id} value={c.code}>[{c.code}] {c.name}</option>
-                  ))}
+                  <option value="All">All Course Programs</option>
+                  {courses
+                    .filter(c => selectedUnitFacultyFilter === 'All' || c.faculty_code === selectedUnitFacultyFilter || String(c.faculty) === String(selectedUnitFacultyFilter))
+                    .map(c => (
+                      <option key={c.id} value={c.code}>[{c.code}] {c.name}</option>
+                    ))}
                 </select>
               </div>
 
@@ -1801,7 +1999,7 @@ export default function FacultyManagementPage() {
                 <table className="w-full text-left text-xs border-collapse">
                   <thead>
                     <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 uppercase font-semibold">
-                      {isAdmin && (
+                      {canBulkManage && (
                         <th className="px-3 py-3 w-10 text-center">
                           <input
                             type="checkbox"
@@ -1831,7 +2029,7 @@ export default function FacultyManagementPage() {
                             isSelected ? 'bg-red-50/50 hover:bg-red-50/70 border-l-4 border-l-red-500' : 'hover:bg-slate-50'
                           }`}
                         >
-                          {isAdmin && (
+                          {canBulkManage && (
                             <td className="px-3 py-3 text-center" onClick={(e) => e.stopPropagation()}>
                               <input
                                 type="checkbox"
@@ -1988,10 +2186,13 @@ export default function FacultyManagementPage() {
                   (st.email || '').toLowerCase().includes(studentSearch.toLowerCase()) ||
                   (st.reg_number || st.registration_number || '').toLowerCase().includes(studentSearch.toLowerCase());
                 const matchesFaculty = studentFacultyFilter === 'All' || (st.faculty_code === studentFacultyFilter || String(st.faculty) === String(studentFacultyFilter));
+                const matchesCourse = studentCourseFilter === 'All' ||
+                  (st.assigned_courses || []).map(String).includes(studentCourseFilter) ||
+                  (st.assigned_course_codes || []).map(c => c.toUpperCase()).includes(studentCourseFilter.toUpperCase());
                 const matchesYear = studentYearFilter === 'All' || String(st.year_of_study || 1) === String(studentYearFilter);
                 const matchesEntryYear = studentEntryYearFilter === 'All' || String(st.entry_year || 2026) === String(studentEntryYearFilter);
                 const matchesIntake = studentIntakeFilter === 'All' || (st.intake || 'August Intake').toLowerCase().includes(studentIntakeFilter.toLowerCase());
-                return matchesSearch && matchesFaculty && matchesYear && matchesEntryYear && matchesIntake;
+                return matchesSearch && matchesFaculty && matchesCourse && matchesYear && matchesEntryYear && matchesIntake;
               });
 
               const totalStudentPages = Math.max(1, Math.ceil(filteredStudents.length / studentPageSize));
@@ -2056,7 +2257,7 @@ export default function FacultyManagementPage() {
                   </div>
 
                   {/* Search and Filters Toolbar */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 text-xs bg-slate-50 p-3 rounded-xl border border-slate-200">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 text-xs bg-slate-50 p-3 rounded-xl border border-slate-200">
                     <div>
                       <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Search Students</label>
                       <input
@@ -2079,6 +2280,22 @@ export default function FacultyManagementPage() {
                         {faculties.map(f => (
                           <option key={f.id} value={f.code}>[{f.code}] {f.name}</option>
                         ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Filter Course</label>
+                      <select
+                        value={studentCourseFilter}
+                        onChange={(e) => { setStudentCourseFilter(e.target.value); setStudentPage(1); }}
+                        className="w-full bg-white border border-slate-200 text-slate-800 font-bold rounded-lg px-2.5 py-1.5 focus:ring-1 focus:ring-brand-light"
+                      >
+                        <option value="All">All Courses ({courses.length})</option>
+                        {courses
+                          .filter(c => studentFacultyFilter === 'All' || c.faculty_code === studentFacultyFilter || String(c.faculty) === String(studentFacultyFilter))
+                          .map(c => (
+                            <option key={c.id} value={c.code}>[{c.code}] {c.name}</option>
+                          ))}
                       </select>
                     </div>
 
@@ -3549,6 +3766,326 @@ export default function FacultyManagementPage() {
                 </div>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: REVIEW & ATTACH COURSE UNITS FOR SELECTED COURSE */}
+      {showUnitsReviewModal && selectedReviewCourse && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 overflow-y-auto animate-fade-in">
+          <div className="bg-white rounded-3xl max-w-4xl w-full p-6 sm:p-8 space-y-6 shadow-2xl border border-slate-100 my-8 max-h-[90vh] overflow-y-auto custom-scrollbar">
+            {/* Modal Header */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-slate-100 gap-3">
+              <div className="space-y-1">
+                <div className="flex items-center space-x-2">
+                  <span className="px-2.5 py-0.5 bg-brand-light/10 text-brand-dark font-mono font-extrabold text-xs rounded-lg border border-brand-light/20">
+                    {selectedReviewCourse.code}
+                  </span>
+                  <span className="px-2 py-0.5 bg-slate-100 text-slate-700 font-extrabold text-[10px] rounded border border-slate-200">
+                    ⏱️ {selectedReviewCourse.duration_years || 3} Years
+                  </span>
+                  <span className="px-2 py-0.5 bg-emerald-50 text-emerald-800 font-bold text-[10px] rounded border border-emerald-200">
+                    {faculties.find(f => f.id === selectedReviewCourse.faculty)?.code || 'Faculty'}
+                  </span>
+                </div>
+                <h3 className="text-lg font-black text-slate-900">
+                  {selectedReviewCourse.name} - Attached Units Review
+                </h3>
+                <p className="text-xs text-slate-500 font-medium">
+                  Review curriculum units, manage lecturer allocations, or attach / detach units for this degree program.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowUnitsReviewModal(false)}
+                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center font-bold text-sm transition-all shrink-0 self-start sm:self-center"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Quick Stats Bar */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100">
+                <p className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Total Units</p>
+                <p className="text-xl font-black text-slate-800">{reviewUnitsList.length}</p>
+              </div>
+              <div className="bg-emerald-50/50 p-3 rounded-2xl border border-emerald-100">
+                <p className="text-[10px] uppercase font-bold text-emerald-700 tracking-wider">Total Credit Units</p>
+                <p className="text-xl font-black text-emerald-800">
+                  {reviewUnitsList.reduce((acc, u) => acc + (u.credit_units || 0), 0)} CU
+                </p>
+              </div>
+              <div className="bg-indigo-50/50 p-3 rounded-2xl border border-indigo-100">
+                <p className="text-[10px] uppercase font-bold text-indigo-700 tracking-wider">Assigned Lecturers</p>
+                <p className="text-xl font-black text-indigo-800">
+                  {new Set(reviewUnitsList.flatMap(u => (u.lecturer_details || []).map(l => l.id))).size}
+                </p>
+              </div>
+              <div className="bg-amber-50/50 p-3 rounded-2xl border border-amber-100">
+                <p className="text-[10px] uppercase font-bold text-amber-700 tracking-wider">Unassigned Units</p>
+                <p className="text-xl font-black text-amber-800">
+                  {reviewUnitsList.filter(u => !u.lecturer_details || u.lecturer_details.length === 0).length}
+                </p>
+              </div>
+            </div>
+
+            {/* Action Bar: Search, Filters & Action Toggles */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-50 p-3.5 rounded-2xl border border-slate-200">
+              <div className="flex flex-wrap items-center gap-2 flex-1">
+                <input
+                  type="text"
+                  placeholder="Filter unit code or name..."
+                  value={reviewSearchTerm}
+                  onChange={(e) => setReviewSearchTerm(e.target.value)}
+                  className="px-3 py-1.5 bg-white border border-slate-200 rounded-xl text-xs text-slate-800 font-medium focus:ring-1 focus:ring-brand-light flex-1 min-w-[140px]"
+                />
+                <select
+                  value={reviewYearFilter}
+                  onChange={(e) => setReviewYearFilter(e.target.value)}
+                  className="px-3 py-1.5 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:ring-1 focus:ring-brand-light"
+                >
+                  <option value="All">All Years</option>
+                  <option value="1">Year 1</option>
+                  <option value="2">Year 2</option>
+                  <option value="3">Year 3</option>
+                  <option value="4">Year 4</option>
+                </select>
+              </div>
+
+              {canBulkManage && (
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setShowInlineAddUnit(!showInlineAddUnit)}
+                    className="px-3 py-1.5 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-xl shadow-xs transition-all flex items-center space-x-1"
+                  >
+                    <span>{showInlineAddUnit ? '✕ Close Form' : '➕ Create New Unit'}</span>
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Inline Unit Creator Form */}
+            {showInlineAddUnit && canBulkManage && (
+              <form onSubmit={handleCreateAndAttachUnit} className="bg-emerald-50/60 p-4 rounded-2xl border border-emerald-200/80 space-y-3 animate-slide-up text-xs">
+                <div className="flex items-center justify-between">
+                  <h4 className="font-extrabold text-emerald-900 text-xs uppercase tracking-wide">
+                    ➕ Quick Add New Unit to {selectedReviewCourse.code}
+                  </h4>
+                  <span className="text-[10px] text-emerald-700 font-medium">Instantly attached to this course</span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-600 uppercase mb-1">Unit Code</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. CS102"
+                      value={newUnitInlineData.code}
+                      onChange={(e) => setNewUnitInlineData({ ...newUnitInlineData, code: e.target.value })}
+                      required
+                      className="w-full px-3 py-1.5 bg-white border border-emerald-200 rounded-xl text-slate-800 font-bold"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-600 uppercase mb-1">Unit Name</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Data Structures"
+                      value={newUnitInlineData.name}
+                      onChange={(e) => setNewUnitInlineData({ ...newUnitInlineData, name: e.target.value })}
+                      required
+                      className="w-full px-3 py-1.5 bg-white border border-emerald-200 rounded-xl text-slate-800 font-medium"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-600 uppercase mb-1">Credit Units</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={6}
+                      value={newUnitInlineData.credit_units}
+                      onChange={(e) => setNewUnitInlineData({ ...newUnitInlineData, credit_units: parseInt(e.target.value) || 3 })}
+                      className="w-full px-3 py-1.5 bg-white border border-emerald-200 rounded-xl text-slate-800 font-bold"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-600 uppercase mb-1">Year of Study</label>
+                    <select
+                      value={newUnitInlineData.year_of_study}
+                      onChange={(e) => setNewUnitInlineData({ ...newUnitInlineData, year_of_study: parseInt(e.target.value) || 1 })}
+                      className="w-full px-3 py-1.5 bg-white border border-emerald-200 rounded-xl text-slate-800 font-bold"
+                    >
+                      <option value={1}>Year 1</option>
+                      <option value={2}>Year 2</option>
+                      <option value={3}>Year 3</option>
+                      <option value={4}>Year 4</option>
+                    </select>
+                  </div>
+                </div>
+                <div className="flex justify-end gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setShowInlineAddUnit(false)}
+                    className="px-3 py-1 bg-white hover:bg-slate-100 text-slate-600 font-bold rounded-lg border border-slate-200"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={submitting}
+                    className="px-4 py-1 bg-brand-light hover:bg-brand-medium text-white font-bold rounded-lg shadow-2xs disabled:opacity-50"
+                  >
+                    {submitting ? 'Creating...' : 'Save & Attach'}
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {/* Attach Existing Unit Selector */}
+            {canBulkManage && (
+              <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                <div className="flex items-center space-x-2">
+                  <span className="text-base">🔗</span>
+                  <div>
+                    <p className="font-extrabold text-slate-800">Attach Existing Unit to {selectedReviewCourse.code}</p>
+                    <p className="text-[11px] text-slate-500 font-medium">Reassign or transfer an existing course unit to this degree program.</p>
+                  </div>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <select
+                    value={attachExistingUnitId}
+                    onChange={(e) => setAttachExistingUnitId(e.target.value)}
+                    className="px-3 py-1.5 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 min-w-[200px]"
+                  >
+                    <option value="">Select Existing Unit...</option>
+                    {courseUnits
+                      .filter(u => u.course !== selectedReviewCourse.id && u.course_code !== selectedReviewCourse.code)
+                      .map(u => (
+                        <option key={u.id} value={u.id}>
+                          [{u.code}] {u.name} (from {u.course_code || 'Other'})
+                        </option>
+                      ))}
+                  </select>
+                  <button
+                    type="button"
+                    disabled={!attachExistingUnitId || submitting}
+                    onClick={handleAttachExistingUnit}
+                    className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-900 text-white font-bold rounded-xl disabled:opacity-40 transition-all shrink-0"
+                  >
+                    {submitting ? 'Attaching...' : 'Attach to Course'}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Attached Units List Table */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <h4 className="text-xs font-extrabold uppercase tracking-wider text-slate-700">
+                  Current Course Units ({filteredReviewUnits.length})
+                </h4>
+              </div>
+
+              {loadingReviewUnits ? (
+                <div className="py-12 flex justify-center items-center">
+                  <div className="w-6 h-6 border-2 border-brand-light/20 border-t-brand-light rounded-full animate-spin"></div>
+                </div>
+              ) : filteredReviewUnits.length === 0 ? (
+                <div className="p-8 text-center bg-slate-50 rounded-2xl border border-slate-100 space-y-2">
+                  <p className="text-slate-500 text-xs font-medium italic">
+                    {reviewUnitsList.length === 0
+                      ? 'No course units attached to this degree program yet.'
+                      : 'No course units match your search or year filter.'}
+                  </p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto border border-slate-200 rounded-2xl">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-slate-50/80 border-b border-slate-200 font-extrabold text-slate-600 text-[11px] uppercase tracking-wider">
+                      <tr>
+                        <th className="px-4 py-2.5">Code</th>
+                        <th className="px-4 py-2.5">Unit Name</th>
+                        <th className="px-3 py-2.5 text-center">Year</th>
+                        <th className="px-3 py-2.5 text-center">Credits</th>
+                        <th className="px-4 py-2.5">Assigned Lecturer(s)</th>
+                        {canBulkManage && <th className="px-4 py-2.5 text-center">Actions</th>}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {filteredReviewUnits.map(unit => (
+                        <tr key={unit.id} className="hover:bg-slate-50/60 transition-colors">
+                          <td className="px-4 py-3 font-mono font-extrabold text-brand-dark">
+                            {unit.code}
+                          </td>
+                          <td className="px-4 py-3 font-bold text-slate-850">
+                            {unit.name}
+                          </td>
+                          <td className="px-3 py-3 text-center">
+                            <span className="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-blue-50 text-blue-700 border border-blue-200">
+                              Year {unit.year_of_study || 1}
+                            </span>
+                          </td>
+                          <td className="px-3 py-3 text-center font-bold text-slate-700">
+                            {unit.credit_units} CU
+                          </td>
+                          <td className="px-4 py-3">
+                            {unit.lecturer_details && unit.lecturer_details.length > 0 ? (
+                              <div className="flex flex-wrap gap-1">
+                                {unit.lecturer_details.map(l => (
+                                  <span key={l.id} className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                                    👨‍🏫 {l.first_name || l.username} {l.last_name}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : (
+                              <span className="text-slate-400 italic text-[11px]">Unassigned</span>
+                            )}
+                          </td>
+                          {canBulkManage && (
+                            <td className="px-4 py-3 text-center">
+                              <div className="flex items-center justify-center space-x-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedUnit(unit);
+                                    setSelectedLecturerId('');
+                                    setShowAssignModal(true);
+                                  }}
+                                  className="px-2 py-1 bg-white hover:bg-slate-100 text-brand-dark font-bold rounded-lg border border-slate-200 text-[10px] transition-all"
+                                  title="Assign lecturer to this unit"
+                                >
+                                  ⚡ Assign
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDetachUnitFromCourse(unit)}
+                                  className="px-2 py-1 bg-red-50 hover:bg-red-100 text-red-700 font-bold rounded-lg border border-red-200 text-[10px] transition-all"
+                                  title="Detach unit from course"
+                                >
+                                  ✂️ Detach
+                                </button>
+                              </div>
+                            </td>
+                          )}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="flex justify-end pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setShowUnitsReviewModal(false)}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition-all"
+              >
+                Done Reviewing
+              </button>
+            </div>
           </div>
         </div>
       )}

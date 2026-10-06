@@ -403,6 +403,23 @@ class AdminUserViewSet(viewsets.ModelViewSet):
             else:
                 qs = qs.filter(faculty__code__iexact=faculty_param.strip())
 
+        course_param = self.request.query_params.get('course') or self.request.query_params.get('course_id')
+        if course_param and str(course_param).strip() and str(course_param).strip() != 'All':
+            c_val = str(course_param).strip()
+            if c_val.isdigit():
+                course_filter = (
+                    models.Q(assigned_courses__id=int(c_val)) |
+                    models.Q(course_applications__course_id=int(c_val), course_applications__status='approved') |
+                    models.Q(assigned_course_units__course_id=int(c_val))
+                )
+            else:
+                course_filter = (
+                    models.Q(assigned_courses__code__iexact=c_val) |
+                    models.Q(course_applications__course__code__iexact=c_val, course_applications__status='approved') |
+                    models.Q(assigned_course_units__course__code__iexact=c_val)
+                )
+            qs = qs.filter(course_filter).distinct()
+
         if user.role == 'student':
             student_courses = Course.objects.filter(
                 models.Q(applications__student=user, applications__status='approved') |
@@ -1734,18 +1751,28 @@ class CourseViewSet(viewsets.ModelViewSet):
             return Course.objects.none()
         if user.role in ['dean', 'faculty_admin', 'faculty_secretary']:
             assigned_facs = get_user_assigned_faculties(user)
-            return Course.objects.filter(faculty__in=assigned_facs).order_by('code')
-        if user.role == 'lecturer':
-            return Course.objects.filter(
+            qs = Course.objects.filter(faculty__in=assigned_facs)
+        elif user.role == 'lecturer':
+            qs = Course.objects.filter(
                 models.Q(units__lecturers=user) | models.Q(faculty=user.faculty)
-            ).distinct().order_by('code')
-        return Course.objects.all().order_by('code')
+            ).distinct()
+        else:
+            qs = Course.objects.all()
+
+        faculty_param = self.request.query_params.get('faculty')
+        if faculty_param and str(faculty_param).strip() and str(faculty_param).strip() != 'All':
+            if str(faculty_param).strip().isdigit():
+                qs = qs.filter(faculty_id=int(faculty_param.strip()))
+            else:
+                qs = qs.filter(faculty__code__iexact=str(faculty_param).strip())
+
+        return qs.order_by('code')
 
     def get_permissions(self):
-        if self.action in ['list', 'retrieve']:
+        if self.action in ['list', 'retrieve', 'units']:
             return [permissions.IsAuthenticated()]
-        if self.action == 'bulk_delete':
-            return [permissions.IsAuthenticated(), (IsAdmin | IsPlatformCoordinator)()]
+        if self.action in ['bulk_delete', 'attach_units']:
+            return [permissions.IsAuthenticated(), (IsAdmin | IsPlatformCoordinator | IsFacultyAdmin)()]
         return [permissions.IsAuthenticated(), (IsAdmin | IsFacultyAdmin)()]
 
     def perform_create(self, serializer):
@@ -1774,39 +1801,153 @@ class CourseViewSet(viewsets.ModelViewSet):
         super().perform_destroy(instance)
         log_system_event(user, f"Course Deleted: {code} - {name}", level='INFO')
 
-    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, (IsAdmin | IsPlatformCoordinator)])
+    @action(detail=True, methods=['get'])
+    def units(self, request, pk=None):
+        course = self.get_object()
+        units = course.units.all().order_by('year_of_study', 'code')
+        return Response(CourseUnitSerializer(units, many=True).data)
+
+    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, (IsAdmin | IsPlatformCoordinator | IsFacultyAdmin)])
+    def attach_units(self, request, pk=None):
+        course = self.get_object()
+        user = request.user
+        if user.role in ['faculty_admin', 'faculty_secretary']:
+            assigned_facs = get_user_assigned_faculties(user)
+            if course.faculty and course.faculty not in assigned_facs:
+                return Response({'detail': 'Permission Denied: You cannot modify courses outside your assigned faculty.'}, status=status.HTTP_403_FORBIDDEN)
+
+        action_type = request.data.get('action', 'attach')
+        raw_unit_ids = request.data.get('unit_ids') or request.data.get('ids')
+        if request.data.get('unit_id'):
+            raw_unit_ids = [request.data.get('unit_id')]
+
+        # Support quick unit creation attached directly to this course
+        if not raw_unit_ids and request.data.get('code') and request.data.get('name'):
+            code = request.data.get('code').strip().upper()
+            name = request.data.get('name').strip()
+            credit_units = int(request.data.get('credit_units', 3))
+            year_of_study = int(request.data.get('year_of_study', 1))
+            new_unit = CourseUnit.objects.create(
+                course=course,
+                code=code,
+                name=name,
+                credit_units=credit_units,
+                year_of_study=year_of_study
+            )
+            msg = f"Created and attached unit {new_unit.code} to course {course.code}."
+            log_system_event(user, msg, level='INFO')
+            return Response({
+                'detail': msg,
+                'unit': CourseUnitSerializer(new_unit).data,
+                'units': CourseUnitSerializer(course.units.all().order_by('year_of_study', 'code'), many=True).data
+            }, status=status.HTTP_201_CREATED)
+
+        if not raw_unit_ids or not isinstance(raw_unit_ids, list):
+            return Response({'detail': 'Please provide unit_ids or new unit data (code, name).'}, status=status.HTTP_400_BAD_REQUEST)
+
+        unit_ids = []
+        for uid in raw_unit_ids:
+            try:
+                unit_ids.append(int(uid))
+            except (ValueError, TypeError):
+                pass
+
+        if not unit_ids:
+            return Response({'detail': 'No valid unit IDs provided.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        units = CourseUnit.objects.filter(id__in=unit_ids)
+        if units.count() == 0:
+            return Response({'detail': 'No matching course units found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        if user.role in ['faculty_admin', 'faculty_secretary']:
+            assigned_facs = get_user_assigned_faculties(user)
+            if units.exclude(course__faculty__in=assigned_facs).exists():
+                return Response({'detail': 'Permission Denied: You cannot modify course units outside your assigned faculty.'}, status=status.HTTP_403_FORBIDDEN)
+
+        if action_type == 'detach':
+            target_course_id = request.data.get('target_course_id')
+            if target_course_id:
+                try:
+                    target_course = Course.objects.get(id=int(target_course_id))
+                    if user.role in ['faculty_admin', 'faculty_secretary']:
+                        assigned_facs = get_user_assigned_faculties(user)
+                        if target_course.faculty and target_course.faculty not in assigned_facs:
+                            return Response({'detail': 'Permission Denied: Target course outside your assigned faculty.'}, status=status.HTTP_403_FORBIDDEN)
+                    units.update(course=target_course)
+                    msg = f"Reassigned {units.count()} unit(s) from {course.code} to {target_course.code}."
+                except Course.DoesNotExist:
+                    return Response({'detail': 'Target course not found.'}, status=status.HTTP_404_NOT_FOUND)
+            else:
+                count_det = units.count()
+                unit_codes = list(units.values_list('code', flat=True))
+                units.delete()
+                msg = f"Detached/deleted {count_det} unit(s) ({', '.join(unit_codes)}) from {course.code}."
+            log_system_event(user, msg, level='INFO')
+            return Response({
+                'detail': msg,
+                'units': CourseUnitSerializer(course.units.all().order_by('year_of_study', 'code'), many=True).data
+            })
+        else:
+            units.update(course=course)
+            unit_codes = list(units.values_list('code', flat=True))
+            msg = f"Successfully attached {units.count()} unit(s) ({', '.join(unit_codes)}) to course {course.code}."
+            log_system_event(user, msg, level='INFO')
+            return Response({
+                'detail': msg,
+                'units': CourseUnitSerializer(course.units.all().order_by('year_of_study', 'code'), many=True).data
+            })
+
+    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, (IsAdmin | IsPlatformCoordinator | IsFacultyAdmin)])
     def bulk_delete(self, request):
-        if request.user.role not in ['admin', 'platform_coordinator'] and not request.user.is_superuser:
+        user = request.user
+        if user.role not in ['admin', 'platform_coordinator', 'faculty_admin', 'faculty_secretary'] and not user.is_superuser:
             return Response(
-                {'detail': 'Permission Denied: Only system admin and platform coordinator can delete courses in bulk.'},
+                {'detail': 'Permission Denied: Only authorized administrators and faculty secretaries can delete courses in bulk.'},
                 status=status.HTTP_403_FORBIDDEN
             )
         raw_ids = request.data.get('course_ids') or request.data.get('ids', [])
-        if not raw_ids or not isinstance(raw_ids, list):
+        faculty_id = request.data.get('faculty_id') or request.data.get('faculty')
+
+        if not raw_ids and not faculty_id:
             return Response(
-                {'detail': 'Please provide a non-empty list of course_ids to delete.'},
+                {'detail': 'Please provide course_ids or faculty_id to delete.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
         course_ids = []
-        for item in raw_ids:
-            try:
-                course_ids.append(int(item))
-            except (ValueError, TypeError):
-                pass
+        if isinstance(raw_ids, list):
+            for item in raw_ids:
+                try:
+                    course_ids.append(int(item))
+                except (ValueError, TypeError):
+                    pass
 
-        if not course_ids:
-            return Response({'detail': 'No valid course IDs provided.'}, status=status.HTTP_400_BAD_REQUEST)
+        courses_to_delete = Course.objects.all()
+        if faculty_id:
+            if str(faculty_id).isdigit():
+                courses_to_delete = courses_to_delete.filter(faculty_id=int(faculty_id))
+            else:
+                courses_to_delete = courses_to_delete.filter(faculty__code__iexact=str(faculty_id).strip())
 
-        courses_to_delete = Course.objects.filter(id__in=course_ids)
+        if course_ids:
+            courses_to_delete = courses_to_delete.filter(id__in=course_ids)
+
+        if user.role in ['faculty_admin', 'faculty_secretary']:
+            assigned_facs = get_user_assigned_faculties(user)
+            if courses_to_delete.exclude(faculty__in=assigned_facs).exists():
+                return Response(
+                    {'detail': 'Permission Denied: You cannot delete courses outside your assigned faculty.'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
         count = courses_to_delete.count()
         if count == 0:
             return Response({'detail': 'No matching courses found to delete.'}, status=status.HTTP_404_NOT_FOUND)
 
         course_codes = list(courses_to_delete.values_list('code', flat=True))
         deleted_count, _ = courses_to_delete.delete()
-        msg = f"{request.user.username} deleted {count} course(s) in bulk: {', '.join(course_codes[:10])}{'...' if len(course_codes) > 10 else ''}."
-        log_system_event(request.user, "BULK_COURSE_DELETE_SUCCESS", level="AUDIT", details=msg)
+        msg = f"{user.username} deleted {count} course(s) in bulk: {', '.join(course_codes[:10])}{'...' if len(course_codes) > 10 else ''}."
+        log_system_event(user, "BULK_COURSE_DELETE_SUCCESS", level="AUDIT", details=msg)
         return Response({
             'detail': f'Successfully deleted {count} course(s).',
             'count': count,
@@ -1824,7 +1965,7 @@ class CourseUnitViewSet(viewsets.ModelViewSet):
         if self.action in ['upload_csv', 'bulk_upload', 'assign_lecturer']:
             return [permissions.IsAuthenticated(), (IsAdmin | IsPlatformCoordinator | IsFacultyAdmin | IsDean | IsRegistrar)()]
         if self.action == 'bulk_delete':
-            return [permissions.IsAuthenticated(), (IsAdmin | IsPlatformCoordinator)()]
+            return [permissions.IsAuthenticated(), (IsAdmin | IsPlatformCoordinator | IsFacultyAdmin)()]
         return [permissions.IsAuthenticated(), (IsAdmin | IsPlatformCoordinator | IsFacultyAdmin)()]
 
     def perform_content_negotiation(self, request, force=False):
@@ -1839,19 +1980,36 @@ class CourseUnitViewSet(viewsets.ModelViewSet):
             return CourseUnit.objects.none()
         if user.role in ['dean', 'faculty_admin', 'faculty_secretary']:
             assigned_facs = get_user_assigned_faculties(user)
-            return CourseUnit.objects.filter(course__faculty__in=assigned_facs).order_by('code')
-        if user.role == 'student':
+            qs = CourseUnit.objects.filter(course__faculty__in=assigned_facs)
+        elif user.role == 'student':
             student_courses = Course.objects.filter(
                 models.Q(applications__student=user, applications__status='approved') |
                 models.Q(assigned_students=user) |
                 models.Q(faculty=user.faculty)
             ).distinct()
-            return CourseUnit.objects.filter(course__in=student_courses).order_by('code')
+            qs = CourseUnit.objects.filter(course__in=student_courses)
         elif user.role == 'lecturer':
-            return CourseUnit.objects.filter(
+            qs = CourseUnit.objects.filter(
                 models.Q(lecturers=user) | models.Q(course__units__lecturers=user)
-            ).distinct().order_by('code')
-        return CourseUnit.objects.all().order_by('code')
+            ).distinct()
+        else:
+            qs = CourseUnit.objects.all()
+
+        faculty_param = self.request.query_params.get('faculty')
+        if faculty_param and str(faculty_param).strip() and str(faculty_param).strip() != 'All':
+            if str(faculty_param).strip().isdigit():
+                qs = qs.filter(course__faculty_id=int(faculty_param.strip()))
+            else:
+                qs = qs.filter(course__faculty__code__iexact=str(faculty_param).strip())
+
+        course_param = self.request.query_params.get('course')
+        if course_param and str(course_param).strip() and str(course_param).strip() != 'All':
+            if str(course_param).strip().isdigit():
+                qs = qs.filter(course_id=int(course_param.strip()))
+            else:
+                qs = qs.filter(course__code__iexact=str(course_param).strip())
+
+        return qs.order_by('code')
 
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsAdmin | IsPlatformCoordinator | IsFacultyAdmin | IsDean])
     def assign_lecturer(self, request, pk=None):
@@ -1894,39 +2052,64 @@ class CourseUnitViewSet(viewsets.ModelViewSet):
         super().perform_destroy(instance)
         log_system_event(user, f"Course Unit Deleted: {code} - {name}", level='INFO')
 
-    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, (IsAdmin | IsPlatformCoordinator)])
+    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, (IsAdmin | IsPlatformCoordinator | IsFacultyAdmin)])
     def bulk_delete(self, request):
-        if request.user.role not in ['admin', 'platform_coordinator'] and not request.user.is_superuser:
+        user = request.user
+        if user.role not in ['admin', 'platform_coordinator', 'faculty_admin', 'faculty_secretary'] and not user.is_superuser:
             return Response(
-                {'detail': 'Permission Denied: Only system admin and platform coordinator can delete course units in bulk.'},
+                {'detail': 'Permission Denied: Only authorized administrators and faculty secretaries can delete course units in bulk.'},
                 status=status.HTTP_403_FORBIDDEN
             )
         raw_ids = request.data.get('unit_ids') or request.data.get('course_unit_ids') or request.data.get('ids', [])
-        if not raw_ids or not isinstance(raw_ids, list):
+        faculty_id = request.data.get('faculty_id') or request.data.get('faculty')
+        course_id = request.data.get('course_id') or request.data.get('course')
+
+        if not raw_ids and not faculty_id and not course_id:
             return Response(
-                {'detail': 'Please provide a non-empty list of unit_ids to delete.'},
+                {'detail': 'Please provide unit_ids, faculty_id, or course_id to delete.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
         unit_ids = []
-        for item in raw_ids:
-            try:
-                unit_ids.append(int(item))
-            except (ValueError, TypeError):
-                pass
+        if isinstance(raw_ids, list):
+            for item in raw_ids:
+                try:
+                    unit_ids.append(int(item))
+                except (ValueError, TypeError):
+                    pass
 
-        if not unit_ids:
-            return Response({'detail': 'No valid course unit IDs provided.'}, status=status.HTTP_400_BAD_REQUEST)
+        units_to_delete = CourseUnit.objects.all()
+        if faculty_id:
+            if str(faculty_id).isdigit():
+                units_to_delete = units_to_delete.filter(course__faculty_id=int(faculty_id))
+            else:
+                units_to_delete = units_to_delete.filter(course__faculty__code__iexact=str(faculty_id).strip())
 
-        units_to_delete = CourseUnit.objects.filter(id__in=unit_ids)
+        if course_id:
+            if str(course_id).isdigit():
+                units_to_delete = units_to_delete.filter(course_id=int(course_id))
+            else:
+                units_to_delete = units_to_delete.filter(course__code__iexact=str(course_id).strip())
+
+        if unit_ids:
+            units_to_delete = units_to_delete.filter(id__in=unit_ids)
+
+        if user.role in ['faculty_admin', 'faculty_secretary']:
+            assigned_facs = get_user_assigned_faculties(user)
+            if units_to_delete.exclude(course__faculty__in=assigned_facs).exists():
+                return Response(
+                    {'detail': 'Permission Denied: You cannot delete course units outside your assigned faculty.'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
         count = units_to_delete.count()
         if count == 0:
             return Response({'detail': 'No matching course units found to delete.'}, status=status.HTTP_404_NOT_FOUND)
 
         unit_codes = list(units_to_delete.values_list('code', flat=True))
         deleted_count, _ = units_to_delete.delete()
-        msg = f"{request.user.username} deleted {count} course unit(s) in bulk: {', '.join(unit_codes[:10])}{'...' if len(unit_codes) > 10 else ''}."
-        log_system_event(request.user, "BULK_COURSE_UNIT_DELETE_SUCCESS", level="AUDIT", details=msg)
+        msg = f"{user.username} deleted {count} course unit(s) in bulk: {', '.join(unit_codes[:10])}{'...' if len(unit_codes) > 10 else ''}."
+        log_system_event(user, "BULK_COURSE_UNIT_DELETE_SUCCESS", level="AUDIT", details=msg)
         return Response({
             'detail': f'Successfully deleted {count} course unit(s).',
             'count': count,

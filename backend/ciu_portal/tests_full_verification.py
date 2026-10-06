@@ -377,6 +377,223 @@ def run_tests():
     assert not Course.objects.filter(id__in=[c_c.id, c_d.id]).exists(), "Courses c_c and c_d should be deleted!"
     print(f"✓ Platform Coordinator successfully bulk deleted {resp_coord_del_c.data.get('count')} courses.")
 
+    # 8. Test Course Filtering, Faculty Bulk Actions, and Course Units Review/Attachment
+    print("\n--- 8. Testing Course Filtering, Faculty Bulk Actions, and Course Units Review/Attachment ---")
+    
+    # Clean up any leftover records from previous test runs
+    Course.objects.filter(code__in=['ACC101', 'MKT101', 'DC1', 'DC2', 'UC1', 'SCS101', 'NUT101', 'SE301', 'SE302', 'SE303', 'DON101']).delete()
+    User.objects.filter(username__in=['student_acc_user', 'student_mkt_user', 'lecturer_acc_user', 'lecturer_mkt_user']).delete()
+    CourseUnit.objects.filter(code__in=['ACC_U101', 'MKT_U101', 'UD1', 'UD2', 'SUS101', 'SE302', 'SE303']).delete()
+
+    # 8a. Setup test faculties and courses for filtering
+    fac_bus, _ = Faculty.objects.get_or_create(code='FBUS', defaults={'name': 'Faculty of Business'})
+    course_acc = Course.objects.create(name='Accounting 101', code='ACC101', faculty=fac_bus)
+    course_mkt = Course.objects.create(name='Marketing 101', code='MKT101', faculty=fac_bus)
+
+    # Setup test students and lecturers
+    student_acc = User.objects.create(
+        username='student_acc_user',
+        email='student_acc@ciu.ac.ug',
+        role='student',
+        faculty=fac_bus
+    )
+    student_acc.assigned_courses.add(course_acc)
+
+    student_mkt = User.objects.create(
+        username='student_mkt_user',
+        email='student_mkt@ciu.ac.ug',
+        role='student',
+        faculty=fac_bus
+    )
+    student_mkt.assigned_courses.add(course_mkt)
+
+    lecturer_acc = User.objects.create(
+        username='lecturer_acc_user',
+        email='lecturer_acc@ciu.ac.ug',
+        role='lecturer',
+        faculty=fac_bus
+    )
+    unit_acc = CourseUnit.objects.create(
+        name='Financial Accounting',
+        code='ACC_U101',
+        course=course_acc
+    )
+    unit_acc.lecturers.add(lecturer_acc)
+
+    lecturer_mkt = User.objects.create(
+        username='lecturer_mkt_user',
+        email='lecturer_mkt@ciu.ac.ug',
+        role='lecturer',
+        faculty=fac_bus
+    )
+    unit_mkt = CourseUnit.objects.create(
+        name='Digital Marketing',
+        code='MKT_U101',
+        course=course_mkt
+    )
+    unit_mkt.lecturers.add(lecturer_mkt)
+
+    # Test User Filtering by Course in AdminUserViewSet
+    view_admin_users = AdminUserViewSet.as_view({'get': 'list'})
+
+    # Filter students by course ID
+    req_f_st = factory.get(f'/api/admin/users/?role=student&course={course_acc.id}')
+    force_authenticate(req_f_st, user=sys_admin)
+    resp_f_st = view_admin_users(req_f_st)
+    assert resp_f_st.status_code == 200, f"Filter students by course ID failed: {resp_f_st.status_code}"
+    st_ids = [u['id'] for u in resp_f_st.data]
+    assert student_acc.id in st_ids, "student_acc should be in filtered list for ACC101!"
+    assert student_mkt.id not in st_ids, "student_mkt must NOT be in filtered list for ACC101!"
+    print("✓ Student filtering by course ID works correctly.")
+
+    # Filter students by course code
+    req_f_st_code = factory.get(f'/api/admin/users/?role=student&course={course_acc.code}')
+    force_authenticate(req_f_st_code, user=sys_admin)
+    resp_f_st_code = view_admin_users(req_f_st_code)
+    assert resp_f_st_code.status_code == 200
+    st_ids_code = [u['id'] for u in resp_f_st_code.data]
+    assert student_acc.id in st_ids_code and student_mkt.id not in st_ids_code, "Student filtering by course code failed!"
+    print("✓ Student filtering by course code works correctly.")
+
+    # Filter lecturers by course ID
+    req_f_lec = factory.get(f'/api/admin/users/?role=lecturer&course={course_acc.id}')
+    force_authenticate(req_f_lec, user=sys_admin)
+    resp_f_lec = view_admin_users(req_f_lec)
+    assert resp_f_lec.status_code == 200
+    lec_ids = [u['id'] for u in resp_f_lec.data]
+    assert lecturer_acc.id in lec_ids, "lecturer_acc should be in filtered list for ACC101!"
+    assert lecturer_mkt.id not in lec_ids, "lecturer_mkt must NOT be in filtered list for ACC101!"
+    print("✓ Lecturer filtering by course ID works correctly.")
+
+    # Filter lecturers by course code
+    req_f_lec_code = factory.get(f'/api/admin/users/?role=lecturer&course={course_acc.code}')
+    force_authenticate(req_f_lec_code, user=sys_admin)
+    resp_f_lec_code = view_admin_users(req_f_lec_code)
+    assert resp_f_lec_code.status_code == 200
+    lec_ids_code = [u['id'] for u in resp_f_lec_code.data]
+    assert lecturer_acc.id in lec_ids_code and lecturer_mkt.id not in lec_ids_code, "Lecturer filtering by course code failed!"
+    print("✓ Lecturer filtering by course code works correctly.")
+
+    # 8b. Test Bulk Actions for Courses and Course Units by Faculty
+    # Bulk delete courses by faculty_id as sys_admin
+    fac_del_test, _ = Faculty.objects.get_or_create(code='FDEL', defaults={'name': 'Faculty to Delete'})
+    c_del_1 = Course.objects.create(name='Del Course 1', code='DC1', faculty=fac_del_test)
+    c_del_2 = Course.objects.create(name='Del Course 2', code='DC2', faculty=fac_del_test)
+    req_bulk_c_fac = factory.post('/api/courses/bulk_delete/', {'faculty_id': fac_del_test.id}, format='json')
+    force_authenticate(req_bulk_c_fac, user=sys_admin)
+    resp_bulk_c_fac = view_bulk_course(req_bulk_c_fac)
+    assert resp_bulk_c_fac.status_code == 200, f"Bulk delete courses by faculty failed: {resp_bulk_c_fac.data}"
+    assert resp_bulk_c_fac.data.get('count') == 2
+    assert not Course.objects.filter(faculty=fac_del_test).exists()
+    print("✓ Bulk deletion of courses by faculty succeeded.")
+
+    # Bulk delete course units by faculty_id
+    c_unit_fac = Course.objects.create(name='Unit Course', code='UC1', faculty=fac_bus)
+    u_del_1 = CourseUnit.objects.create(name='Unit Del 1', code='UD1', course=c_unit_fac)
+    u_del_2 = CourseUnit.objects.create(name='Unit Del 2', code='UD2', course=c_unit_fac)
+    req_bulk_u_fac = factory.post('/api/course-units/bulk_delete/', {'faculty_id': fac_bus.id}, format='json')
+    force_authenticate(req_bulk_u_fac, user=sys_admin)
+    resp_bulk_u_fac = view_bulk_unit(req_bulk_u_fac)
+    assert resp_bulk_u_fac.status_code == 200, f"Bulk delete units by faculty failed: {resp_bulk_u_fac.data}"
+    assert not CourseUnit.objects.filter(course__faculty=fac_bus).exists()
+    print("✓ Bulk deletion of course units by faculty succeeded.")
+
+    # Faculty Secretary scoped bulk action in assigned faculty vs unassigned faculty
+    c_sci_scoped = Course.objects.create(name='Science Course Scoped', code='SCS101', faculty=fac_sci)
+    u_sci_scoped = CourseUnit.objects.create(name='Science Unit Scoped', code='SUS101', course=c_sci_scoped)
+    
+    # Sec_sci deletes course unit in assigned fac_sci -> 200 OK
+    req_sec_u_del = factory.post('/api/course-units/bulk_delete/', {'unit_ids': [u_sci_scoped.id]}, format='json')
+    force_authenticate(req_sec_u_del, user=sec_sci)
+    resp_sec_u_del = view_bulk_unit(req_sec_u_del)
+    assert resp_sec_u_del.status_code == 200, f"Faculty Admin should be able to bulk delete units in their faculty: {resp_sec_u_del.data}"
+    assert not CourseUnit.objects.filter(id=u_sci_scoped.id).exists()
+    print("✓ Faculty Admin successfully bulk deleted course units within assigned faculty.")
+
+    # Sec_sci deletes course in assigned fac_sci -> 200 OK
+    req_sec_c_del = factory.post('/api/courses/bulk_delete/', {'course_ids': [c_sci_scoped.id]}, format='json')
+    force_authenticate(req_sec_c_del, user=sec_sci)
+    resp_sec_c_del = view_bulk_course(req_sec_c_del)
+    assert resp_sec_c_del.status_code == 200, f"Faculty Admin should be able to bulk delete courses in their faculty: {resp_sec_c_del.data}"
+    assert not Course.objects.filter(id=c_sci_scoped.id).exists()
+    print("✓ Faculty Admin successfully bulk deleted courses within assigned faculty.")
+
+    # Sec_sci attempts to delete course in fac_nur (unassigned) -> 403 Forbidden
+    c_nur_test = Course.objects.create(name='Nursing Unauth Test', code='NUT101', faculty=fac_nur)
+    req_sec_c_unauth = factory.post('/api/courses/bulk_delete/', {'course_ids': [c_nur_test.id]}, format='json')
+    force_authenticate(req_sec_c_unauth, user=sec_sci)
+    resp_sec_c_unauth = view_bulk_course(req_sec_c_unauth)
+    assert resp_sec_c_unauth.status_code == 403, f"Faculty Admin must be forbidden from deleting courses outside assigned faculty! Got {resp_sec_c_unauth.status_code}"
+    print("✓ Faculty Admin correctly forbidden from deleting courses outside assigned faculty (403 Forbidden).")
+
+    # 8c. Test Review and Attachment of Course Units to a Course
+    course_rev = Course.objects.create(name='Software Architecture', code='SE301', faculty=fac_sci)
+    course_donor = Course.objects.create(name='Donor Course', code='DON101', faculty=fac_sci)
+    view_units = CourseViewSet.as_view({'get': 'units'})
+    view_attach = CourseViewSet.as_view({'post': 'attach_units'})
+
+    # Initial review: 0 units
+    req_rev_init = factory.get(f'/api/courses/{course_rev.id}/units/')
+    force_authenticate(req_rev_init, user=sys_admin)
+    resp_rev_init = view_units(req_rev_init, pk=course_rev.id)
+    assert resp_rev_init.status_code == 200
+    assert len(resp_rev_init.data) == 0
+    print("✓ Review course units endpoint returns empty list for new course.")
+
+    # Attach existing unit
+    standalone_unit = CourseUnit.objects.create(name='Design Patterns', code='SE302', course=course_donor)
+    req_att_exist = factory.post(
+        f'/api/courses/{course_rev.id}/attach_units/',
+        {'unit_ids': [standalone_unit.id]},
+        format='json'
+    )
+    force_authenticate(req_att_exist, user=sec_sci)
+    resp_att_exist = view_attach(req_att_exist, pk=course_rev.id)
+    assert resp_att_exist.status_code == 200, f"Attach existing unit failed: {resp_att_exist.data}"
+    assert len(resp_att_exist.data['units']) == 1
+    assert resp_att_exist.data['units'][0]['code'] == 'SE302'
+    print("✓ Attach existing course unit succeeded.")
+
+    # Create & attach unit inline
+    req_att_new = factory.post(
+        f'/api/courses/{course_rev.id}/attach_units/',
+        {
+            'code': 'SE303',
+            'name': 'Cloud Native Systems',
+            'credit_units': 4,
+            'year_of_study': 3,
+            'semester': 1
+        },
+        format='json'
+    )
+    force_authenticate(req_att_new, user=sec_sci)
+    resp_att_new = view_attach(req_att_new, pk=course_rev.id)
+    assert resp_att_new.status_code in [200, 201], f"Create and attach unit inline failed: {resp_att_new.data}"
+    assert len(resp_att_new.data['units']) == 2
+    assert CourseUnit.objects.filter(code='SE303', course=course_rev).exists()
+    print("✓ Create & attach inline unit succeeded.")
+
+    # Review units again: now has 2 units
+    req_rev_updated = factory.get(f'/api/courses/{course_rev.id}/units/')
+    force_authenticate(req_rev_updated, user=sec_sci)
+    resp_rev_updated = view_units(req_rev_updated, pk=course_rev.id)
+    assert resp_rev_updated.status_code == 200
+    assert len(resp_rev_updated.data) == 2
+    print("✓ Review course units correctly reflects all attached units.")
+
+    # Detach unit
+    req_detach = factory.post(
+        f'/api/courses/{course_rev.id}/attach_units/',
+        {'action': 'detach', 'unit_ids': [standalone_unit.id]},
+        format='json'
+    )
+    force_authenticate(req_detach, user=sec_sci)
+    resp_detach = view_attach(req_detach, pk=course_rev.id)
+    assert resp_detach.status_code == 200, f"Detach unit failed: {resp_detach.data}"
+    assert len(resp_detach.data['units']) == 1
+    assert resp_detach.data['units'][0]['code'] == 'SE303'
+    print("✓ Detach course unit succeeded.")
+
     print("\n==================================================")
     print("✅ ALL SYSTEM VERIFICATION CHECKS PASSED SUCCESSFULLY!")
     print("==================================================")

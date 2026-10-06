@@ -22,7 +22,20 @@ class UserSerializer(serializers.ModelSerializer):
         read_only_fields = ('role', 'registration_number')
 
     def get_assigned_course_codes(self, obj):
-        return [c.code for c in obj.assigned_courses.all()]
+        codes = set(c.code for c in obj.assigned_courses.all())
+        if obj.role == 'lecturer':
+            for unit in obj.assigned_course_units.select_related('course').all():
+                if unit.course:
+                    codes.add(unit.course.code)
+        return sorted(list(codes))
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if instance.role == 'lecturer':
+            unit_course_ids = list(instance.assigned_course_units.filter(course__isnull=False).values_list('course_id', flat=True).distinct())
+            existing = set(data.get('assigned_courses') or [])
+            data['assigned_courses'] = sorted(list(existing.union(unit_course_ids)))
+        return data
 
     def get_is_test_cleared(self, obj):
         if obj.role != 'student': return True
@@ -79,7 +92,20 @@ class AdminUserSerializer(serializers.ModelSerializer):
         return user
 
     def get_assigned_course_codes(self, obj):
-        return [c.code for c in obj.assigned_courses.all()]
+        codes = set(c.code for c in obj.assigned_courses.all())
+        if obj.role == 'lecturer':
+            for unit in obj.assigned_course_units.select_related('course').all():
+                if unit.course:
+                    codes.add(unit.course.code)
+        return sorted(list(codes))
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if instance.role == 'lecturer':
+            unit_course_ids = list(instance.assigned_course_units.filter(course__isnull=False).values_list('course_id', flat=True).distinct())
+            existing = set(data.get('assigned_courses') or [])
+            data['assigned_courses'] = sorted(list(existing.union(unit_course_ids)))
+        return data
 
     def get_is_test_cleared(self, obj):
         if obj.role != 'student': return True
@@ -164,6 +190,7 @@ class CourseSerializer(serializers.ModelSerializer):
 class CourseUnitSerializer(serializers.ModelSerializer):
     course_code = serializers.CharField(source='course.code', read_only=True)
     course_name = serializers.CharField(source='course.name', read_only=True)
+    faculty_id = serializers.IntegerField(source='course.faculty.id', read_only=True, allow_null=True)
     faculty_code = serializers.CharField(source='course.faculty.code', read_only=True, allow_null=True)
     faculty_name = serializers.CharField(source='course.faculty.name', read_only=True, allow_null=True)
     lecturer_details = UserSerializer(source='lecturers', many=True, read_only=True)

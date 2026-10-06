@@ -1062,8 +1062,15 @@ export default function AdminPage() {
     // 6. Course filter
     if (userCourseFilter !== 'ALL') {
       const assignedIds = (u.assigned_courses || []).map(c => String(c));
-      const assignedCodes = u.assigned_course_codes || [];
-      if (!assignedIds.includes(userCourseFilter) && !assignedCodes.includes(userCourseFilter)) return false;
+      const assignedCodes = (u.assigned_course_codes || []).map(c => String(c).toUpperCase());
+      const selectedCourse = courses.find(c => String(c.id) === userCourseFilter || c.code?.toUpperCase() === userCourseFilter.toUpperCase());
+      const targetCode = (selectedCourse?.code || userCourseFilter).toUpperCase();
+      const targetId = selectedCourse ? String(selectedCourse.id) : userCourseFilter;
+
+      const matchesCode = assignedCodes.includes(targetCode);
+      const matchesId = assignedIds.includes(targetId);
+
+      if (!matchesCode && !matchesId) return false;
     }
 
     return true;
@@ -1299,11 +1306,10 @@ export default function AdminPage() {
                     onChange={(e) => { setUserCourseFilter(e.target.value); setCurrentPage(1); }}
                     className="w-full px-2.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:bg-white"
                   >
-                    <option value="ALL">All Courses</option>
-                    <option value="BIT2026">BIT - IT</option>
-                    <option value="BBA2026">BBA - Business</option>
-                    <option value="BCN2026">BCN - Nursing</option>
-                    <option value="BPH2026">BPH - Pharmacy</option>
+                    <option value="ALL">All Courses ({courses.length})</option>
+                    {courses.map(c => (
+                      <option key={c.id} value={c.code}>[{c.code}] {c.name}</option>
+                    ))}
                   </select>
                 </div>
 
@@ -1462,6 +1468,18 @@ export default function AdminPage() {
                                     {u.faculty_code}
                                   </span>
                                 )}
+                                {u.assigned_course_codes && u.assigned_course_codes.length > 0 && (
+                                  <span className="text-[10px] text-brand-dark font-extrabold bg-brand-light/10 px-1.5 py-0.5 rounded border border-brand-light/20" title={u.assigned_course_codes.join(', ')}>
+                                    📚 {u.assigned_course_codes.slice(0, 2).join(', ')}{u.assigned_course_codes.length > 2 ? ` +${u.assigned_course_codes.length - 2}` : ''}
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                            {u.role === 'lecturer' && u.assigned_course_codes && u.assigned_course_codes.length > 0 && (
+                              <div className="flex flex-wrap items-center gap-1 mt-1">
+                                <span className="text-[10px] text-indigo-800 font-extrabold bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-200" title={u.assigned_course_codes.join(', ')}>
+                                  👨‍🏫 Teaches: {u.assigned_course_codes.slice(0, 2).join(', ')}{u.assigned_course_codes.length > 2 ? ` +${u.assigned_course_codes.length - 2}` : ''}
+                                </span>
                               </div>
                             )}
                           </td>
