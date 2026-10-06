@@ -82,6 +82,10 @@ export default function FacultyManagementPage() {
     duration_years: 3
   });
 
+  // Bulk Deletion State for Courses & Course Units
+  const [selectedCourseIds, setSelectedCourseIds] = useState([]);
+  const [selectedUnitIds, setSelectedUnitIds] = useState([]);
+
   // Form State (Create/Edit Course Unit)
   const [showCourseUnitModal, setShowCourseUnitModal] = useState(false);
   const [editingCourseUnit, setEditingCourseUnit] = useState(null);
@@ -198,6 +202,8 @@ export default function FacultyManagementPage() {
       setFaculties(facs || []);
       setCourses(crs || []);
       setCourseUnits(units || []);
+      setSelectedCourseIds(prev => prev.filter(id => (crs || []).some(c => c.id === id)));
+      setSelectedUnitIds(prev => prev.filter(id => (units || []).some(u => u.id === id)));
       const userList = users || [];
       setLecturers(userList.filter(u => u.role === 'lecturer'));
       setDeans(userList.filter(u => u.role === 'dean'));
@@ -657,10 +663,73 @@ export default function FacultyManagementPage() {
         try {
           await api.delete(`/courses/${courseId}/`);
           setSuccessMsg(`Course ${courseCode} deleted successfully.`);
+          setSelectedCourseIds(prev => prev.filter(id => id !== courseId));
           closeConfirm();
           loadFacultyData();
         } catch (err) {
           setErrorMsg(err.response?.data?.detail || err.message || 'Failed to delete course.');
+          setConfirmModal(prev => ({ ...prev, loading: false }));
+        }
+      }
+    });
+  };
+
+  const handleToggleSelectCourse = (courseId) => {
+    setSelectedCourseIds(prev =>
+      prev.includes(courseId) ? prev.filter(id => id !== courseId) : [...prev, courseId]
+    );
+  };
+
+  const handleToggleSelectAllCourses = () => {
+    if (selectedCourseIds.length >= courses.length && courses.length > 0) {
+      setSelectedCourseIds([]);
+    } else {
+      setSelectedCourseIds(courses.map(c => c.id));
+    }
+  };
+
+  const handleToggleSelectAllFacCourses = (facId) => {
+    const facCourses = courses.filter(c => c.faculty === facId);
+    const facCourseIds = facCourses.map(c => c.id);
+    const allFacSelected = facCourseIds.length > 0 && facCourseIds.every(id => selectedCourseIds.includes(id));
+    if (allFacSelected) {
+      setSelectedCourseIds(prev => prev.filter(id => !facCourseIds.includes(id)));
+    } else {
+      setSelectedCourseIds(prev => Array.from(new Set([...prev, ...facCourseIds])));
+    }
+  };
+
+  const handleBulkDeleteCourses = () => {
+    if (selectedCourseIds.length === 0) return;
+    const count = selectedCourseIds.length;
+    showConfirm({
+      title: 'Bulk Delete Degree Courses',
+      description: (
+        <span>
+          Are you sure you want to permanently delete <strong className="text-red-700 font-bold">{count}</strong> selected course(s)?
+          <br />
+          <span className="text-xs text-red-600 block mt-2 font-medium">
+            ⚠️ Warning: This action cannot be reversed. Associated course units, class timetables, and assessments will also be permanently deleted.
+          </span>
+        </span>
+      ),
+      confirmText: `Delete ${count} Course(s)`,
+      variant: 'danger',
+      icon: '🗑️',
+      onConfirm: async () => {
+        setConfirmModal(prev => ({ ...prev, loading: true }));
+        setErrorMsg('');
+        setSuccessMsg('');
+        try {
+          const res = await api.post('/courses/bulk_delete/', {
+            course_ids: selectedCourseIds
+          });
+          setSuccessMsg(res?.detail || `Successfully deleted ${count} selected course(s).`);
+          setSelectedCourseIds([]);
+          closeConfirm();
+          loadFacultyData();
+        } catch (err) {
+          setErrorMsg(err.response?.data?.detail || err.message || 'Failed to delete selected courses.');
           setConfirmModal(prev => ({ ...prev, loading: false }));
         }
       }
@@ -749,10 +818,65 @@ export default function FacultyManagementPage() {
         try {
           await api.delete(`/course-units/${unitId}/`);
           setSuccessMsg(`Course Unit ${unitCode} deleted successfully.`);
+          setSelectedUnitIds(prev => prev.filter(id => id !== unitId));
           closeConfirm();
           loadFacultyData();
         } catch (err) {
           setErrorMsg(err.response?.data?.detail || err.message || 'Failed to delete course unit.');
+          setConfirmModal(prev => ({ ...prev, loading: false }));
+        }
+      }
+    });
+  };
+
+  const handleToggleSelectUnit = (unitId) => {
+    setSelectedUnitIds(prev =>
+      prev.includes(unitId) ? prev.filter(id => id !== unitId) : [...prev, unitId]
+    );
+  };
+
+  const handleToggleSelectAllFilteredUnits = (unitsToToggle = filteredCourseUnits) => {
+    const targetList = Array.isArray(unitsToToggle) && unitsToToggle.length > 0 ? unitsToToggle : filteredCourseUnits;
+    const targetIds = targetList.map(u => u.id);
+    const allSelected = targetIds.length > 0 && targetIds.every(id => selectedUnitIds.includes(id));
+    if (allSelected) {
+      setSelectedUnitIds(prev => prev.filter(id => !targetIds.includes(id)));
+    } else {
+      setSelectedUnitIds(prev => Array.from(new Set([...prev, ...targetIds])));
+    }
+  };
+
+  const handleBulkDeleteCourseUnits = () => {
+    if (selectedUnitIds.length === 0) return;
+    const count = selectedUnitIds.length;
+    showConfirm({
+      title: 'Bulk Delete Course Units',
+      description: (
+        <span>
+          Are you sure you want to permanently delete <strong className="text-red-700 font-bold">{count}</strong> selected course unit(s)?
+          <br />
+          <span className="text-xs text-red-600 block mt-2 font-medium">
+            ⚠️ Warning: This action cannot be reversed. Linked lecturer allocations, timetable records, and assessment questions will also be permanently removed.
+          </span>
+        </span>
+      ),
+      confirmText: `Delete ${count} Course Unit(s)`,
+      variant: 'danger',
+      icon: '🗑️',
+      onConfirm: async () => {
+        setConfirmModal(prev => ({ ...prev, loading: true }));
+        setErrorMsg('');
+        setSuccessMsg('');
+        try {
+          const res = await api.post('/course-units/bulk_delete/', {
+            unit_ids: selectedUnitIds
+          });
+          setSuccessMsg(res?.detail || `Successfully deleted ${count} selected course unit(s).`);
+          setSelectedUnitIds([]);
+          closeConfirm();
+          loadFacultyData();
+        } catch (err) {
+          setErrorMsg(err.response?.data?.detail || err.message || 'Failed to delete selected course units.');
           setConfirmModal(prev => ({ ...prev, loading: false }));
         }
       }
@@ -876,6 +1000,23 @@ export default function FacultyManagementPage() {
         return fac.code === 'SOBAT' || fac.code === 'FHS';
       }).slice(0, 1)
     : faculties;
+
+  // Filter course units according to year filter, program filter, and search text
+  const filteredCourseUnits = courseUnits.filter(u => {
+    const matchesYear = selectedUnitYearFilter === 'All' || (u.year_of_study || 1) === parseInt(selectedUnitYearFilter);
+    const matchesCourse = selectedUnitCourseFilter === 'All' || u.course_code === selectedUnitCourseFilter;
+    const s = unitSearchText.toLowerCase().trim();
+    const matchesSearch = !s ||
+      (u.code && u.code.toLowerCase().includes(s)) ||
+      (u.name && u.name.toLowerCase().includes(s)) ||
+      (u.course_code && u.course_code.toLowerCase().includes(s)) ||
+      (u.lecturer_details && u.lecturer_details.some(l =>
+        (l.first_name && l.first_name.toLowerCase().includes(s)) ||
+        (l.last_name && l.last_name.toLowerCase().includes(s)) ||
+        (l.username && l.username.toLowerCase().includes(s))
+      ));
+    return matchesYear && matchesCourse && matchesSearch;
+  });
 
   if (loading) {
     return (
@@ -1011,31 +1152,80 @@ export default function FacultyManagementPage() {
               <p className="text-slate-500 text-xs font-medium">Browse, view, and manage academic programs organized by respective university faculties.</p>
             </div>
             
-            {isSecretaryOrStaff && (
-              <button
-                onClick={() => {
-                  setEditingCourse(null);
-                  setCourseFormData({
-                    faculty: faculties[0]?.id || '',
-                    name: '',
-                    code: '',
-                    description: '',
-                    department: '',
-                    duration_years: 3
-                  });
-                  setShowCourseModal(true);
-                }}
-                className="px-4 py-2 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-xl shadow-sm transition-all flex items-center space-x-1.5 shrink-0"
-              >
-                <span>➕ Add New Course</span>
-              </button>
-            )}
+            <div className="flex items-center gap-2 shrink-0">
+              {isAdmin && courses.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleToggleSelectAllCourses}
+                  className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl border border-slate-200 transition-all flex items-center space-x-1.5"
+                  title="Select or deselect all courses across all faculties"
+                >
+                  <span>{selectedCourseIds.length >= courses.length && courses.length > 0 ? '✕ Deselect All Courses' : `☑️ Select All (${courses.length})`}</span>
+                </button>
+              )}
+              {isSecretaryOrStaff && (
+                <button
+                  onClick={() => {
+                    setEditingCourse(null);
+                    setCourseFormData({
+                      faculty: faculties[0]?.id || '',
+                      name: '',
+                      code: '',
+                      description: '',
+                      department: '',
+                      duration_years: 3
+                    });
+                    setShowCourseModal(true);
+                  }}
+                  className="px-4 py-2 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-xl shadow-sm transition-all flex items-center space-x-1.5 shrink-0"
+                >
+                  <span>➕ Add New Course</span>
+                </button>
+              )}
+            </div>
           </div>
+
+          {/* Sticky Bulk Action Bar for Courses */}
+          {isAdmin && selectedCourseIds.length > 0 && (
+            <div className="sticky top-2 z-20 bg-gradient-to-r from-red-600 via-rose-600 to-red-700 text-white p-3.5 rounded-2xl shadow-xl border border-red-500/50 flex flex-wrap items-center justify-between gap-3 animate-fade-in">
+              <div className="flex items-center space-x-3">
+                <span className="w-8 h-8 rounded-xl bg-white/20 flex items-center justify-center text-sm font-bold shadow-inner">
+                  📚
+                </span>
+                <div>
+                  <p className="text-xs font-black tracking-wide uppercase">
+                    {selectedCourseIds.length} Course{selectedCourseIds.length > 1 ? 's' : ''} Selected
+                  </p>
+                  <p className="text-[11px] text-red-100 font-medium">
+                    Ready for bulk administrative deletion. Linked course units, timetables, and assessments will also be removed.
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center space-x-2">
+                <button
+                  type="button"
+                  onClick={() => setSelectedCourseIds([])}
+                  className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-bold transition-all border border-white/20"
+                >
+                  Deselect All
+                </button>
+                <button
+                  type="button"
+                  onClick={handleBulkDeleteCourses}
+                  className="px-4 py-1.5 bg-white text-red-700 hover:bg-red-50 rounded-xl text-xs font-black shadow-md hover:shadow transition-all flex items-center space-x-1.5"
+                >
+                  <span>🗑️ Delete Selected Courses ({selectedCourseIds.length})</span>
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Faculty Groups View */}
           <div className="space-y-6">
             {faculties.map((fac) => {
               const facCourses = courses.filter(c => c.faculty === fac.id);
+              const facCourseIds = facCourses.map(c => c.id);
+              const allFacSelected = facCourseIds.length > 0 && facCourseIds.every(id => selectedCourseIds.includes(id));
               return (
                 <div key={fac.id} className="green-card rounded-3xl p-6 space-y-4 shadow-sm border border-emerald-100">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-emerald-100 pb-3 gap-2">
@@ -1051,9 +1241,22 @@ export default function FacultyManagementPage() {
                         </p>
                       </div>
                     </div>
-                    <span className="text-xs font-extrabold text-emerald-800 bg-emerald-50 px-3 py-1 rounded-xl border border-emerald-200 shrink-0">
-                      {facCourses.length} Degree Program(s)
-                    </span>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {isAdmin && facCourses.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => handleToggleSelectAllFacCourses(fac.id)}
+                          className="text-[11px] text-brand-dark hover:text-brand-medium font-bold px-2.5 py-1 rounded-xl bg-white hover:bg-emerald-50 border border-emerald-200 transition-all shadow-2xs"
+                        >
+                          {allFacSelected
+                            ? `✕ Deselect ${fac.code}`
+                            : `☑️ Select All in ${fac.code}`}
+                        </button>
+                      )}
+                      <span className="text-xs font-extrabold text-emerald-800 bg-emerald-50 px-3 py-1 rounded-xl border border-emerald-200 shrink-0">
+                        {facCourses.length} Degree Program(s)
+                      </span>
+                    </div>
                   </div>
 
                   {facCourses.length === 0 ? (
@@ -1064,13 +1267,32 @@ export default function FacultyManagementPage() {
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                       {facCourses.map((c) => {
                         const unitsCount = courseUnits.filter(u => u.course === c.id || u.course_code === c.code).length;
+                        const isSelected = selectedCourseIds.includes(c.id);
                         return (
-                          <div key={c.id} className="p-4 bg-gradient-to-br from-white to-emerald-50/30 rounded-2xl border border-emerald-200/80 shadow-sm flex flex-col justify-between space-y-3 hover:border-emerald-300 transition-all">
+                          <div
+                            key={c.id}
+                            className={`p-4 rounded-2xl border shadow-sm flex flex-col justify-between space-y-3 transition-all ${
+                              isSelected
+                                ? 'bg-red-50/30 border-red-400 ring-2 ring-red-400/30 shadow-md'
+                                : 'bg-gradient-to-br from-white to-emerald-50/30 border-emerald-200/80 hover:border-emerald-300'
+                            }`}
+                          >
                             <div className="space-y-1.5">
                               <div className="flex justify-between items-start">
-                                <span className="text-[10px] bg-brand-light/10 text-brand-medium font-bold px-2 py-0.5 rounded border border-brand-light/20">
-                                  {c.code}
-                                </span>
+                                <div className="flex items-center space-x-2">
+                                  {isAdmin && (
+                                    <input
+                                      type="checkbox"
+                                      checked={isSelected}
+                                      onChange={() => handleToggleSelectCourse(c.id)}
+                                      className="w-4 h-4 text-red-600 rounded border-slate-300 focus:ring-red-400 cursor-pointer"
+                                      title={`Select ${c.code} for bulk actions`}
+                                    />
+                                  )}
+                                  <span className="text-[10px] bg-brand-light/10 text-brand-medium font-bold px-2 py-0.5 rounded border border-brand-light/20">
+                                    {c.code}
+                                  </span>
+                                </div>
                                 <span className="text-[10px] bg-slate-100 text-slate-600 font-bold px-2 py-0.5 rounded border border-slate-200">
                                   ⏱️ {c.duration_years || 3} Years
                                 </span>
@@ -1259,6 +1481,41 @@ export default function FacultyManagementPage() {
             </div>
           )}
 
+          {/* Sticky Bulk Action Bar for Courses in Faculties Tab */}
+          {isAdmin && selectedCourseIds.length > 0 && (
+            <div className="sticky top-2 z-20 bg-gradient-to-r from-red-600 via-rose-600 to-red-700 text-white p-3.5 rounded-2xl shadow-xl border border-red-500/50 flex flex-wrap items-center justify-between gap-3 animate-fade-in">
+              <div className="flex items-center space-x-3">
+                <span className="w-8 h-8 rounded-xl bg-white/20 flex items-center justify-center text-sm font-bold shadow-inner">
+                  📚
+                </span>
+                <div>
+                  <p className="text-xs font-black tracking-wide uppercase">
+                    {selectedCourseIds.length} Course{selectedCourseIds.length > 1 ? 's' : ''} Selected
+                  </p>
+                  <p className="text-[11px] text-red-100 font-medium">
+                    Ready for bulk administrative deletion.
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center space-x-2">
+                <button
+                  type="button"
+                  onClick={() => setSelectedCourseIds([])}
+                  className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-bold transition-all border border-white/20"
+                >
+                  Deselect All
+                </button>
+                <button
+                  type="button"
+                  onClick={handleBulkDeleteCourses}
+                  className="px-4 py-1.5 bg-white text-red-700 hover:bg-red-50 rounded-xl text-xs font-black shadow-md hover:shadow transition-all flex items-center space-x-1.5"
+                >
+                  <span>🗑️ Delete Selected Courses ({selectedCourseIds.length})</span>
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {visibleFaculties.map((fac) => (
               <div key={fac.id} className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-4 flex flex-col justify-between hover:shadow-md transition-all">
@@ -1333,35 +1590,51 @@ export default function FacultyManagementPage() {
                       <p className="text-[11px] text-slate-400 italic">No courses added yet.</p>
                     ) : (
                       <div className="space-y-1.5 max-h-44 overflow-y-auto custom-scrollbar">
-                        {courses.filter(c => c.faculty === fac.id || c.faculty_code === fac.code).map(c => (
-                          <div key={c.id} className="p-2 bg-blue-50/50 rounded-lg border border-blue-100 flex items-center justify-between text-xs">
-                            <div>
-                              <span className="font-bold text-slate-800">{c.code}</span> - <span className="text-slate-600">{c.name}</span>
-                              <div className="flex items-center gap-2 text-[10px] text-slate-500 font-semibold mt-0.5">
-                                <span className="bg-blue-100 text-blue-800 px-1.5 py-0.2 rounded font-bold">⏱️ {c.duration_years || 3} Years</span>
-                                <span>📚 {c.units_count || courseUnits.filter(u => u.course === c.id || u.course_code === c.code).length} Units</span>
+                        {courses.filter(c => c.faculty === fac.id || c.faculty_code === fac.code).map(c => {
+                          const isSelected = selectedCourseIds.includes(c.id);
+                          return (
+                            <div key={c.id} className={`p-2 rounded-lg border flex items-center justify-between text-xs transition-all ${
+                              isSelected ? 'bg-red-50/60 border-red-300 ring-1 ring-red-300' : 'bg-blue-50/50 border-blue-100'
+                            }`}>
+                              <div className="flex items-center space-x-2">
+                                {isAdmin && (
+                                  <input
+                                    type="checkbox"
+                                    checked={isSelected}
+                                    onChange={() => handleToggleSelectCourse(c.id)}
+                                    className="w-3.5 h-3.5 text-red-600 rounded border-slate-300 focus:ring-red-400 cursor-pointer"
+                                    title={`Select ${c.code}`}
+                                  />
+                                )}
+                                <div>
+                                  <span className="font-bold text-slate-800">{c.code}</span> - <span className="text-slate-600">{c.name}</span>
+                                  <div className="flex items-center gap-2 text-[10px] text-slate-500 font-semibold mt-0.5">
+                                    <span className="bg-blue-100 text-blue-800 px-1.5 py-0.2 rounded font-bold">⏱️ {c.duration_years || 3} Years</span>
+                                    <span>📚 {c.units_count || courseUnits.filter(u => u.course === c.id || u.course_code === c.code).length} Units</span>
+                                  </div>
+                                </div>
                               </div>
+                              {isSecretaryOrStaff && (
+                                <div className="flex items-center space-x-1 shrink-0">
+                                  <button
+                                    onClick={() => handleOpenCourseModal(c)}
+                                    className="text-[10px] text-slate-600 hover:text-blue-600 font-bold px-1"
+                                    title="Edit course details"
+                                  >
+                                    ✏️
+                                  </button>
+                                  <button
+                                    onClick={() => handleDeleteCourse(c.id, c.code)}
+                                    className="text-[10px] text-red-500 hover:text-red-700 font-bold px-1"
+                                    title="Delete course"
+                                  >
+                                    🗑️
+                                  </button>
+                                </div>
+                              )}
                             </div>
-                            {isSecretaryOrStaff && (
-                              <div className="flex items-center space-x-1 shrink-0">
-                                <button
-                                  onClick={() => handleOpenCourseModal(c)}
-                                  className="text-[10px] text-slate-600 hover:text-blue-600 font-bold px-1"
-                                  title="Edit course details"
-                                >
-                                  ✏️
-                                </button>
-                                <button
-                                  onClick={() => handleDeleteCourse(c.id, c.code)}
-                                  className="text-[10px] text-red-500 hover:text-red-700 font-bold px-1"
-                                  title="Delete course"
-                                >
-                                  🗑️
-                                </button>
-                              </div>
-                            )}
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     )}
                   </div>
@@ -1412,6 +1685,16 @@ export default function FacultyManagementPage() {
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <h3 className="text-sm font-bold text-slate-850 uppercase tracking-wider">Faculty Course Units & Assigned Lecturers</h3>
               <div className="flex items-center gap-2">
+                {isAdmin && filteredCourseUnits.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => handleToggleSelectAllFilteredUnits(filteredCourseUnits)}
+                    className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg border border-slate-200 transition-all flex items-center space-x-1"
+                    title="Select or deselect all currently filtered course units"
+                  >
+                    <span>{filteredCourseUnits.length > 0 && filteredCourseUnits.every(u => selectedUnitIds.includes(u.id)) ? '✕ Deselect Units' : `☑️ Select Filtered (${filteredCourseUnits.length})`}</span>
+                  </button>
+                )}
                 {isSecretaryOrStaff && (
                   <button
                     onClick={() => handleOpenCourseUnitModal(null)}
@@ -1430,6 +1713,41 @@ export default function FacultyManagementPage() {
                 )}
               </div>
             </div>
+
+            {/* Sticky Bulk Action Bar for Course Units */}
+            {isAdmin && selectedUnitIds.length > 0 && (
+              <div className="sticky top-2 z-20 bg-gradient-to-r from-red-600 via-rose-600 to-red-700 text-white p-3.5 rounded-2xl shadow-xl border border-red-500/50 flex flex-wrap items-center justify-between gap-3 animate-fade-in">
+                <div className="flex items-center space-x-3">
+                  <span className="w-8 h-8 rounded-xl bg-white/20 flex items-center justify-center text-sm font-bold shadow-inner">
+                    📖
+                  </span>
+                  <div>
+                    <p className="text-xs font-black tracking-wide uppercase">
+                      {selectedUnitIds.length} Course Unit{selectedUnitIds.length > 1 ? 's' : ''} Selected
+                    </p>
+                    <p className="text-[11px] text-red-100 font-medium">
+                      Ready for bulk administrative deletion across degree programs.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedUnitIds([])}
+                    className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-bold transition-all border border-white/20"
+                  >
+                    Deselect All
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleBulkDeleteCourseUnits}
+                    className="px-4 py-1.5 bg-white text-red-700 hover:bg-red-50 rounded-xl text-xs font-black shadow-md hover:shadow transition-all flex items-center space-x-1.5"
+                  >
+                    <span>🗑️ Delete Selected Units ({selectedUnitIds.length})</span>
+                  </button>
+                </div>
+              </div>
+            )}
 
             {/* Search and Filters Toolbar */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-slate-50 p-3 rounded-xl border border-slate-200 text-xs">
@@ -1474,13 +1792,26 @@ export default function FacultyManagementPage() {
               </div>
             </div>
 
-            {courseUnits.length === 0 ? (
-              <p className="text-slate-400 text-xs py-8 text-center">No course units registered yet.</p>
+            {filteredCourseUnits.length === 0 ? (
+              <p className="text-slate-400 text-xs py-8 text-center italic bg-slate-50/50 rounded-xl border border-slate-100">
+                {courseUnits.length === 0 ? 'No course units registered yet.' : 'No course units match the selected filters.'}
+              </p>
             ) : (
               <div className="overflow-x-auto custom-scrollbar border border-slate-200 rounded-xl">
                 <table className="w-full text-left text-xs border-collapse">
                   <thead>
                     <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 uppercase font-semibold">
+                      {isAdmin && (
+                        <th className="px-3 py-3 w-10 text-center">
+                          <input
+                            type="checkbox"
+                            checked={filteredCourseUnits.length > 0 && filteredCourseUnits.every(u => selectedUnitIds.includes(u.id))}
+                            onChange={() => handleToggleSelectAllFilteredUnits(filteredCourseUnits)}
+                            className="w-4 h-4 text-red-600 rounded border-slate-300 focus:ring-red-400 cursor-pointer"
+                            title="Select / deselect all visible units"
+                          />
+                        </th>
+                      )}
                       <th className="px-3 py-3">Code</th>
                       <th className="px-3 py-3">Unit Name</th>
                       <th className="px-3 py-3">Course Program</th>
@@ -1491,24 +1822,26 @@ export default function FacultyManagementPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 text-slate-700">
-                    {courseUnits
-                      .filter(u => {
-                        const matchesYear = selectedUnitYearFilter === 'All' || (u.year_of_study || 1) === parseInt(selectedUnitYearFilter);
-                        const matchesCourse = selectedUnitCourseFilter === 'All' || u.course_code === selectedUnitCourseFilter;
-                        const s = unitSearchText.toLowerCase().trim();
-                        const matchesSearch = !s ||
-                          (u.code && u.code.toLowerCase().includes(s)) ||
-                          (u.name && u.name.toLowerCase().includes(s)) ||
-                          (u.course_code && u.course_code.toLowerCase().includes(s)) ||
-                          (u.lecturer_details && u.lecturer_details.some(l =>
-                            (l.first_name && l.first_name.toLowerCase().includes(s)) ||
-                            (l.last_name && l.last_name.toLowerCase().includes(s)) ||
-                            (l.username && l.username.toLowerCase().includes(s))
-                          ));
-                        return matchesYear && matchesCourse && matchesSearch;
-                      })
-                      .map((unit) => (
-                        <tr key={unit.id} className="hover:bg-slate-50 transition-all">
+                    {filteredCourseUnits.map((unit) => {
+                      const isSelected = selectedUnitIds.includes(unit.id);
+                      return (
+                        <tr
+                          key={unit.id}
+                          className={`transition-all ${
+                            isSelected ? 'bg-red-50/50 hover:bg-red-50/70 border-l-4 border-l-red-500' : 'hover:bg-slate-50'
+                          }`}
+                        >
+                          {isAdmin && (
+                            <td className="px-3 py-3 text-center" onClick={(e) => e.stopPropagation()}>
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => handleToggleSelectUnit(unit.id)}
+                                className="w-4 h-4 text-red-600 rounded border-slate-300 focus:ring-red-400 cursor-pointer"
+                                title={`Select ${unit.code}`}
+                              />
+                            </td>
+                          )}
                           <td className="px-3 py-3 font-extrabold text-brand-dark">{unit.code}</td>
                           <td className="px-3 py-3 font-bold text-slate-850">{unit.name}</td>
                           <td className="px-3 py-3">{unit.course_code}</td>
@@ -1572,7 +1905,8 @@ export default function FacultyManagementPage() {
                             </td>
                           )}
                         </tr>
-                      ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

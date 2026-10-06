@@ -1744,6 +1744,8 @@ class CourseViewSet(viewsets.ModelViewSet):
     def get_permissions(self):
         if self.action in ['list', 'retrieve']:
             return [permissions.IsAuthenticated()]
+        if self.action == 'bulk_delete':
+            return [permissions.IsAuthenticated(), (IsAdmin | IsPlatformCoordinator)()]
         return [permissions.IsAuthenticated(), (IsAdmin | IsFacultyAdmin)()]
 
     def perform_create(self, serializer):
@@ -1765,6 +1767,52 @@ class CourseViewSet(viewsets.ModelViewSet):
         course = serializer.save()
         log_system_event(user, f"Course Updated: {course.code} - {course.name}", level='INFO')
 
+    def perform_destroy(self, instance):
+        code = instance.code
+        name = instance.name
+        user = self.request.user
+        super().perform_destroy(instance)
+        log_system_event(user, f"Course Deleted: {code} - {name}", level='INFO')
+
+    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, (IsAdmin | IsPlatformCoordinator)])
+    def bulk_delete(self, request):
+        if request.user.role not in ['admin', 'platform_coordinator'] and not request.user.is_superuser:
+            return Response(
+                {'detail': 'Permission Denied: Only system admin and platform coordinator can delete courses in bulk.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        raw_ids = request.data.get('course_ids') or request.data.get('ids', [])
+        if not raw_ids or not isinstance(raw_ids, list):
+            return Response(
+                {'detail': 'Please provide a non-empty list of course_ids to delete.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        course_ids = []
+        for item in raw_ids:
+            try:
+                course_ids.append(int(item))
+            except (ValueError, TypeError):
+                pass
+
+        if not course_ids:
+            return Response({'detail': 'No valid course IDs provided.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        courses_to_delete = Course.objects.filter(id__in=course_ids)
+        count = courses_to_delete.count()
+        if count == 0:
+            return Response({'detail': 'No matching courses found to delete.'}, status=status.HTTP_404_NOT_FOUND)
+
+        course_codes = list(courses_to_delete.values_list('code', flat=True))
+        deleted_count, _ = courses_to_delete.delete()
+        msg = f"{request.user.username} deleted {count} course(s) in bulk: {', '.join(course_codes[:10])}{'...' if len(course_codes) > 10 else ''}."
+        log_system_event(request.user, "BULK_COURSE_DELETE_SUCCESS", level="AUDIT", details=msg)
+        return Response({
+            'detail': f'Successfully deleted {count} course(s).',
+            'count': count,
+            'deleted_codes': course_codes
+        })
+
 class CourseUnitViewSet(viewsets.ModelViewSet):
     serializer_class = CourseUnitSerializer
 
@@ -1775,6 +1823,8 @@ class CourseUnitViewSet(viewsets.ModelViewSet):
             return [permissions.AllowAny()]
         if self.action in ['upload_csv', 'bulk_upload', 'assign_lecturer']:
             return [permissions.IsAuthenticated(), (IsAdmin | IsPlatformCoordinator | IsFacultyAdmin | IsDean | IsRegistrar)()]
+        if self.action == 'bulk_delete':
+            return [permissions.IsAuthenticated(), (IsAdmin | IsPlatformCoordinator)()]
         return [permissions.IsAuthenticated(), (IsAdmin | IsPlatformCoordinator | IsFacultyAdmin)()]
 
     def perform_content_negotiation(self, request, force=False):
@@ -1836,6 +1886,52 @@ class CourseUnitViewSet(viewsets.ModelViewSet):
             return Response({'detail': 'Lecturer user not found.'}, status=status.HTTP_404_NOT_FOUND)
         except (ValueError, TypeError):
             return Response({'detail': 'Invalid lecturer_id format.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    def perform_destroy(self, instance):
+        code = instance.code
+        name = instance.name
+        user = self.request.user
+        super().perform_destroy(instance)
+        log_system_event(user, f"Course Unit Deleted: {code} - {name}", level='INFO')
+
+    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, (IsAdmin | IsPlatformCoordinator)])
+    def bulk_delete(self, request):
+        if request.user.role not in ['admin', 'platform_coordinator'] and not request.user.is_superuser:
+            return Response(
+                {'detail': 'Permission Denied: Only system admin and platform coordinator can delete course units in bulk.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        raw_ids = request.data.get('unit_ids') or request.data.get('course_unit_ids') or request.data.get('ids', [])
+        if not raw_ids or not isinstance(raw_ids, list):
+            return Response(
+                {'detail': 'Please provide a non-empty list of unit_ids to delete.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        unit_ids = []
+        for item in raw_ids:
+            try:
+                unit_ids.append(int(item))
+            except (ValueError, TypeError):
+                pass
+
+        if not unit_ids:
+            return Response({'detail': 'No valid course unit IDs provided.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        units_to_delete = CourseUnit.objects.filter(id__in=unit_ids)
+        count = units_to_delete.count()
+        if count == 0:
+            return Response({'detail': 'No matching course units found to delete.'}, status=status.HTTP_404_NOT_FOUND)
+
+        unit_codes = list(units_to_delete.values_list('code', flat=True))
+        deleted_count, _ = units_to_delete.delete()
+        msg = f"{request.user.username} deleted {count} course unit(s) in bulk: {', '.join(unit_codes[:10])}{'...' if len(unit_codes) > 10 else ''}."
+        log_system_event(request.user, "BULK_COURSE_UNIT_DELETE_SUCCESS", level="AUDIT", details=msg)
+        return Response({
+            'detail': f'Successfully deleted {count} course unit(s).',
+            'count': count,
+            'deleted_codes': unit_codes
+        })
 
     @action(detail=False, methods=['post'], url_path='bulk_upload', permission_classes=[permissions.IsAuthenticated, IsAdmin | IsPlatformCoordinator | IsFacultyAdmin | IsDean | IsRegistrar])
     def bulk_upload(self, request):

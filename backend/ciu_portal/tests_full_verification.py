@@ -215,8 +215,8 @@ def run_tests():
 
     # 6. Test Dean and Faculty Secretary Strict Faculty Scoping (Rule 7)
     print("\n--- 6. Testing Dean & Faculty Secretary Strict Scoping ---")
-    from ciu_portal.models import ClassTimetable, ExamTimetable
-    from ciu_portal.views import FacultyViewSet, CourseViewSet, TestViewSet, ExamViewSet, ClassTimetableViewSet, ExamTimetableViewSet, ReportsViewSet
+    from ciu_portal.models import ClassTimetable, ExamTimetable, CourseUnit
+    from ciu_portal.views import FacultyViewSet, CourseViewSet, CourseUnitViewSet, TestViewSet, ExamViewSet, ClassTimetableViewSet, ExamTimetableViewSet, ReportsViewSet
 
     fac_sci, _ = Faculty.objects.get_or_create(code='FACS', defaults={'name': 'Faculty of Science'})
     fac_nur, _ = Faculty.objects.get_or_create(code='FACN', defaults={'name': 'Faculty of Nursing'})
@@ -307,6 +307,75 @@ def run_tests():
     admin_fac_ids = [f['id'] for f in resp_admin.data]
     assert fac_sci.id in admin_fac_ids and fac_nur.id in admin_fac_ids, "System Admin must have unrestricted access to all faculties!"
     print("✓ System Admin retains unrestricted access across all faculties.")
+
+    # 7. Test Bulk Deletion of Courses and Course Units by System Admin and Platform Coordinator
+    print("\n--- 7. Testing Bulk Deletion of Courses and Course Units ---")
+    coord_user, _ = User.objects.get_or_create(
+        username='coord_test_user',
+        defaults={'role': 'platform_coordinator', 'email': 'coord@ciu.ac.ug'}
+    )
+
+    # Setup test courses
+    test_faculty, _ = Faculty.objects.get_or_create(code='TBULK', defaults={'name': 'Bulk Test Faculty'})
+    c_a = Course.objects.create(name='Bulk Course Alpha', code='BC_ALPHA', faculty=test_faculty)
+    c_b = Course.objects.create(name='Bulk Course Beta', code='BC_BETA', faculty=test_faculty)
+    c_c = Course.objects.create(name='Bulk Course Gamma', code='BC_GAMMA', faculty=test_faculty)
+    c_d = Course.objects.create(name='Bulk Course Delta', code='BC_DELTA', faculty=test_faculty)
+
+    # Setup test course units
+    u_a = CourseUnit.objects.create(name='Bulk Unit 1', code='BU101', course=c_a)
+    u_b = CourseUnit.objects.create(name='Bulk Unit 2', code='BU102', course=c_a)
+    u_c = CourseUnit.objects.create(name='Bulk Unit 3', code='BU103', course=c_c)
+    u_d = CourseUnit.objects.create(name='Bulk Unit 4', code='BU104', course=c_c)
+
+    view_bulk_course = CourseViewSet.as_view({'post': 'bulk_delete'})
+    view_bulk_unit = CourseUnitViewSet.as_view({'post': 'bulk_delete'})
+
+    # 7a. Non-admins (faculty admin, dean, lecturer) blocked from bulk deleting courses
+    req_unauth_c = factory.post('/api/courses/bulk_delete/', {'course_ids': [c_a.id, c_b.id]}, format='json')
+    force_authenticate(req_unauth_c, user=sec_sci)
+    resp_unauth_c = view_bulk_course(req_unauth_c)
+    assert resp_unauth_c.status_code == 403, f"Faculty Secretary must be forbidden from bulk deleting courses! Got {resp_unauth_c.status_code}"
+    print("✓ Faculty Admin correctly blocked from bulk deleting courses (403 Forbidden).")
+
+    # 7b. Non-admins blocked from bulk deleting course units
+    req_unauth_u = factory.post('/api/course-units/bulk_delete/', {'unit_ids': [u_a.id, u_b.id]}, format='json')
+    force_authenticate(req_unauth_u, user=sec_sci)
+    resp_unauth_u = view_bulk_unit(req_unauth_u)
+    assert resp_unauth_u.status_code == 403, f"Faculty Secretary must be forbidden from bulk deleting course units! Got {resp_unauth_u.status_code}"
+    print("✓ Faculty Admin correctly blocked from bulk deleting course units (403 Forbidden).")
+
+    # 7c. System Admin can bulk delete course units
+    req_admin_del_u = factory.post('/api/course-units/bulk_delete/', {'unit_ids': [u_a.id, u_b.id]}, format='json')
+    force_authenticate(req_admin_del_u, user=sys_admin)
+    resp_admin_del_u = view_bulk_unit(req_admin_del_u)
+    assert resp_admin_del_u.status_code == 200, f"System Admin bulk unit delete failed: {resp_admin_del_u.data}"
+    assert not CourseUnit.objects.filter(id__in=[u_a.id, u_b.id]).exists(), "Course units u_a and u_b should be deleted!"
+    print(f"✓ System Admin successfully bulk deleted {resp_admin_del_u.data.get('count')} course units.")
+
+    # 7d. Platform Coordinator can bulk delete course units
+    req_coord_del_u = factory.post('/api/course-units/bulk_delete/', {'unit_ids': [u_c.id, u_d.id]}, format='json')
+    force_authenticate(req_coord_del_u, user=coord_user)
+    resp_coord_del_u = view_bulk_unit(req_coord_del_u)
+    assert resp_coord_del_u.status_code == 200, f"Platform Coordinator bulk unit delete failed: {resp_coord_del_u.data}"
+    assert not CourseUnit.objects.filter(id__in=[u_c.id, u_d.id]).exists(), "Course units u_c and u_d should be deleted!"
+    print(f"✓ Platform Coordinator successfully bulk deleted {resp_coord_del_u.data.get('count')} course units.")
+
+    # 7e. System Admin can bulk delete courses
+    req_admin_del_c = factory.post('/api/courses/bulk_delete/', {'course_ids': [c_a.id, c_b.id]}, format='json')
+    force_authenticate(req_admin_del_c, user=sys_admin)
+    resp_admin_del_c = view_bulk_course(req_admin_del_c)
+    assert resp_admin_del_c.status_code == 200, f"System Admin bulk course delete failed: {resp_admin_del_c.data}"
+    assert not Course.objects.filter(id__in=[c_a.id, c_b.id]).exists(), "Courses c_a and c_b should be deleted!"
+    print(f"✓ System Admin successfully bulk deleted {resp_admin_del_c.data.get('count')} courses.")
+
+    # 7f. Platform Coordinator can bulk delete courses
+    req_coord_del_c = factory.post('/api/courses/bulk_delete/', {'course_ids': [c_c.id, c_d.id]}, format='json')
+    force_authenticate(req_coord_del_c, user=coord_user)
+    resp_coord_del_c = view_bulk_course(req_coord_del_c)
+    assert resp_coord_del_c.status_code == 200, f"Platform Coordinator bulk course delete failed: {resp_coord_del_c.data}"
+    assert not Course.objects.filter(id__in=[c_c.id, c_d.id]).exists(), "Courses c_c and c_d should be deleted!"
+    print(f"✓ Platform Coordinator successfully bulk deleted {resp_coord_del_c.data.get('count')} courses.")
 
     print("\n==================================================")
     print("✅ ALL SYSTEM VERIFICATION CHECKS PASSED SUCCESSFULLY!")
