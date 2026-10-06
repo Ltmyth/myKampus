@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { api } from '@/lib/api';
+import ConfirmationModal from '@/components/ConfirmationModal';
 
 export default function FacultyManagementPage() {
   const { user } = useAuth();
@@ -133,6 +134,45 @@ export default function FacultyManagementPage() {
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
   const [submitting, setSubmitting] = useState(false);
+
+  // Universal Confirmation Modal State
+  const [confirmModal, setConfirmModal] = useState({
+    isOpen: false,
+    title: '',
+    description: '',
+    confirmText: 'Confirm',
+    cancelText: 'Cancel',
+    variant: 'danger',
+    icon: null,
+    onConfirm: null,
+    loading: false
+  });
+
+  const showConfirm = ({
+    title,
+    description,
+    confirmText = 'Confirm',
+    cancelText = 'Cancel',
+    variant = 'danger',
+    icon = null,
+    onConfirm
+  }) => {
+    setConfirmModal({
+      isOpen: true,
+      title,
+      description,
+      confirmText,
+      cancelText,
+      variant,
+      icon,
+      onConfirm,
+      loading: false
+    });
+  };
+
+  const closeConfirm = () => {
+    setConfirmModal(prev => ({ ...prev, isOpen: false, onConfirm: null, loading: false }));
+  };
 
   const isExecutiveReadOnly = ['dvc', 'vc', 'dean'].includes(user?.role);
   const isAdmin = (user?.role === 'admin' || user?.role === 'platform_coordinator') && !isExecutiveReadOnly;
@@ -267,20 +307,30 @@ export default function FacultyManagementPage() {
     }
   };
 
-  const handleRemoveStudentFromFaculty = async (facultyId, studentId) => {
-    if (!confirm('Are you sure you want to remove this student from the faculty?')) return;
-    setErrorMsg('');
-    setSuccessMsg('');
-
-    try {
-      const res = await api.post(`/faculties/${facultyId}/remove_student/`, {
-        student_id: parseInt(studentId)
-      });
-      setSuccessMsg(res.detail || 'Student removed from faculty.');
-      loadFacultyData();
-    } catch (err) {
-      setErrorMsg(err.message || 'Failed to remove student from faculty.');
-    }
+  const handleRemoveStudentFromFaculty = (facultyId, studentId) => {
+    showConfirm({
+      title: 'Remove Student from Faculty',
+      description: 'Are you sure you want to remove this student from the faculty? Their faculty link will be disassociated.',
+      confirmText: 'Remove Student',
+      variant: 'warning',
+      icon: '⚠️',
+      onConfirm: async () => {
+        setConfirmModal(prev => ({ ...prev, loading: true }));
+        setErrorMsg('');
+        setSuccessMsg('');
+        try {
+          const res = await api.post(`/faculties/${facultyId}/remove_student/`, {
+            student_id: parseInt(studentId)
+          });
+          setSuccessMsg(res?.detail || 'Student removed from faculty.');
+          closeConfirm();
+          loadFacultyData();
+        } catch (err) {
+          setErrorMsg(err.response?.data?.detail || err.message || 'Failed to remove student from faculty.');
+          setConfirmModal(prev => ({ ...prev, loading: false }));
+        }
+      }
+    });
   };
 
   // --- CSV Upload Handler ---
@@ -469,18 +519,32 @@ export default function FacultyManagementPage() {
     }
   };
 
-  const handleDeleteFaculty = async (facultyId, facultyCode) => {
-    if (!confirm(`Are you sure you want to delete Faculty ${facultyCode}?`)) return;
-    setErrorMsg('');
-    setSuccessMsg('');
-
-    try {
-      await api.delete(`/faculties/${facultyId}/`);
-      setSuccessMsg(`Faculty ${facultyCode} deleted successfully.`);
-      loadFacultyData();
-    } catch (err) {
-      setErrorMsg(err.message || 'Failed to delete faculty.');
-    }
+  const handleDeleteFaculty = (facultyId, facultyCode) => {
+    showConfirm({
+      title: 'Delete Faculty Department',
+      description: (
+        <span>
+          Are you sure you want to permanently delete Faculty <strong className="text-slate-900 font-bold">{facultyCode}</strong>? This will remove all associated faculty records.
+        </span>
+      ),
+      confirmText: `Delete Faculty ${facultyCode}`,
+      variant: 'danger',
+      icon: '🗑️',
+      onConfirm: async () => {
+        setConfirmModal(prev => ({ ...prev, loading: true }));
+        setErrorMsg('');
+        setSuccessMsg('');
+        try {
+          await api.delete(`/faculties/${facultyId}/`);
+          setSuccessMsg(`Faculty ${facultyCode} deleted successfully.`);
+          closeConfirm();
+          loadFacultyData();
+        } catch (err) {
+          setErrorMsg(err.response?.data?.detail || err.message || 'Failed to delete faculty.');
+          setConfirmModal(prev => ({ ...prev, loading: false }));
+        }
+      }
+    });
   };
 
   const handleAssignDeanAction = async (facultyId, deanId) => {
@@ -575,18 +639,32 @@ export default function FacultyManagementPage() {
     }
   };
 
-  const handleDeleteCourse = async (courseId, courseCode) => {
-    if (!confirm(`Are you sure you want to delete Course ${courseCode}? This will also delete all linked course units.`)) return;
-    setErrorMsg('');
-    setSuccessMsg('');
-
-    try {
-      await api.delete(`/courses/${courseId}/`);
-      setSuccessMsg(`Course ${courseCode} deleted successfully.`);
-      loadFacultyData();
-    } catch (err) {
-      setErrorMsg(err.message || 'Failed to delete course.');
-    }
+  const handleDeleteCourse = (courseId, courseCode) => {
+    showConfirm({
+      title: 'Delete Degree Course',
+      description: (
+        <span>
+          Are you sure you want to permanently delete Course <strong className="text-slate-900 font-bold">{courseCode}</strong>? This will also remove all linked course units.
+        </span>
+      ),
+      confirmText: `Delete Course ${courseCode}`,
+      variant: 'danger',
+      icon: '🗑️',
+      onConfirm: async () => {
+        setConfirmModal(prev => ({ ...prev, loading: true }));
+        setErrorMsg('');
+        setSuccessMsg('');
+        try {
+          await api.delete(`/courses/${courseId}/`);
+          setSuccessMsg(`Course ${courseCode} deleted successfully.`);
+          closeConfirm();
+          loadFacultyData();
+        } catch (err) {
+          setErrorMsg(err.response?.data?.detail || err.message || 'Failed to delete course.');
+          setConfirmModal(prev => ({ ...prev, loading: false }));
+        }
+      }
+    });
   };
 
   // --- Course Unit CRUD Handlers ---
@@ -653,18 +731,32 @@ export default function FacultyManagementPage() {
     }
   };
 
-  const handleDeleteCourseUnit = async (unitId, unitCode) => {
-    if (!confirm(`Are you sure you want to delete Course Unit ${unitCode}?`)) return;
-    setErrorMsg('');
-    setSuccessMsg('');
-
-    try {
-      await api.delete(`/course-units/${unitId}/`);
-      setSuccessMsg(`Course Unit ${unitCode} deleted successfully.`);
-      loadFacultyData();
-    } catch (err) {
-      setErrorMsg(err.message || 'Failed to delete course unit.');
-    }
+  const handleDeleteCourseUnit = (unitId, unitCode) => {
+    showConfirm({
+      title: 'Delete Course Unit',
+      description: (
+        <span>
+          Are you sure you want to permanently delete Course Unit <strong className="text-slate-900 font-bold">{unitCode}</strong>?
+        </span>
+      ),
+      confirmText: `Delete Unit ${unitCode}`,
+      variant: 'danger',
+      icon: '🗑️',
+      onConfirm: async () => {
+        setConfirmModal(prev => ({ ...prev, loading: true }));
+        setErrorMsg('');
+        setSuccessMsg('');
+        try {
+          await api.delete(`/course-units/${unitId}/`);
+          setSuccessMsg(`Course Unit ${unitCode} deleted successfully.`);
+          closeConfirm();
+          loadFacultyData();
+        } catch (err) {
+          setErrorMsg(err.response?.data?.detail || err.message || 'Failed to delete course unit.');
+          setConfirmModal(prev => ({ ...prev, loading: false }));
+        }
+      }
+    });
   };
 
   // --- Lecturer Assignment & Timetable Handlers ---
@@ -745,15 +837,26 @@ export default function FacultyManagementPage() {
     }
   };
 
-  const handleDeleteTimetable = async (id) => {
-    if (!confirm('Are you sure you want to delete this timetable entry?')) return;
-    try {
-      await api.delete(`/class-timetables/${id}/`);
-      setSuccessMsg('Class timetable slot removed.');
-      loadFacultyData();
-    } catch (err) {
-      setErrorMsg('Failed to delete timetable slot.');
-    }
+  const handleDeleteTimetable = (id) => {
+    showConfirm({
+      title: 'Delete Class Timetable Slot',
+      description: 'Are you sure you want to delete this timetable entry? This schedule entry will be removed permanently.',
+      confirmText: 'Delete Slot',
+      variant: 'danger',
+      icon: '🗑️',
+      onConfirm: async () => {
+        setConfirmModal(prev => ({ ...prev, loading: true }));
+        try {
+          await api.delete(`/class-timetables/${id}/`);
+          setSuccessMsg('Class timetable slot removed.');
+          closeConfirm();
+          loadFacultyData();
+        } catch (err) {
+          setErrorMsg(err.response?.data?.detail || err.message || 'Failed to delete timetable slot.');
+          setConfirmModal(prev => ({ ...prev, loading: false }));
+        }
+      }
+    });
   };
 
   // Filter timetables according to day filter and course filter
@@ -3115,6 +3218,20 @@ export default function FacultyManagementPage() {
           </div>
         </div>
       )}
+
+      {/* Universal Fluid Confirmation Modal */}
+      <ConfirmationModal
+        isOpen={confirmModal.isOpen}
+        onClose={closeConfirm}
+        onConfirm={confirmModal.onConfirm}
+        title={confirmModal.title}
+        description={confirmModal.description}
+        confirmText={confirmModal.confirmText}
+        cancelText={confirmModal.cancelText}
+        variant={confirmModal.variant}
+        icon={confirmModal.icon}
+        loading={confirmModal.loading}
+      />
 
     </div>
   );

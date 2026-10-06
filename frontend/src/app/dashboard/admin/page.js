@@ -3,6 +3,8 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { api } from '@/lib/api';
+import ConfirmationModal from '@/components/ConfirmationModal';
+import BulkPasswordResetModal from '@/components/BulkPasswordResetModal';
 
 export default function AdminPage() {
   const { user } = useAuth();
@@ -125,6 +127,71 @@ export default function AdminPage() {
   // Cleared Faculty Data
   const [clearedFacultyData, setClearedFacultyData] = useState(null);
   const [loadingCleared, setLoadingCleared] = useState(false);
+
+  // Universal Confirmation Modal State
+  const [confirmModal, setConfirmModal] = useState({
+    isOpen: false,
+    title: '',
+    description: '',
+    confirmText: 'Confirm',
+    cancelText: 'Cancel',
+    variant: 'danger',
+    icon: null,
+    onConfirm: null,
+    loading: false
+  });
+
+  const showConfirm = ({
+    title,
+    description,
+    confirmText = 'Confirm',
+    cancelText = 'Cancel',
+    variant = 'danger',
+    icon = null,
+    onConfirm
+  }) => {
+    setConfirmModal({
+      isOpen: true,
+      title,
+      description,
+      confirmText,
+      cancelText,
+      variant,
+      icon,
+      onConfirm,
+      loading: false
+    });
+  };
+
+  const closeConfirm = () => {
+    setConfirmModal(prev => ({ ...prev, isOpen: false, onConfirm: null, loading: false }));
+  };
+
+  // Bulk Password Reset Modal State
+  const [showBulkResetModal, setShowBulkResetModal] = useState(false);
+  const [submittingBulkReset, setSubmittingBulkReset] = useState(false);
+
+  // Fluid Proctor Action Modal State
+  const [proctorModal, setProctorModal] = useState({
+    isOpen: false,
+    studentId: null,
+    actionType: 'warning',
+    message: '',
+    loading: false
+  });
+
+  // Fluid Escape key dismiss for existing modals
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' && !submitting && !proctorModal.loading) {
+        if (resetUserObj) setResetUserObj(null);
+        if (editingUser) setEditingUser(null);
+        if (proctorModal.isOpen) setProctorModal(prev => ({ ...prev, isOpen: false }));
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [resetUserObj, editingUser, submitting, proctorModal.isOpen, proctorModal.loading]);
 
   useEffect(() => {
     if (user && (user.role === 'admin' || user.role === 'platform_coordinator')) {
@@ -281,17 +348,28 @@ export default function AdminPage() {
     }
   };
 
-  const handleRevokeClearance = async (id) => {
-    if (!confirm('Are you sure you want to revoke this temporary clearance?')) return;
-    setErrorMsg('');
-    setSuccessMsg('');
-    try {
-      await api.post(`/temporary-clearances/${id}/revoke/`);
-      setSuccessMsg('Temporary clearance revoked.');
-      loadTemporaryClearances();
-    } catch (err) {
-      setErrorMsg('Failed to revoke temporary clearance.');
-    }
+  const handleRevokeClearance = (id) => {
+    showConfirm({
+      title: 'Revoke Temporary Clearance',
+      description: 'Are you sure you want to revoke this student\'s temporary clearance? The student will immediately lose test and exam clearance privileges.',
+      confirmText: 'Revoke Clearance',
+      variant: 'warning',
+      icon: '⚠️',
+      onConfirm: async () => {
+        setConfirmModal(prev => ({ ...prev, loading: true }));
+        setErrorMsg('');
+        setSuccessMsg('');
+        try {
+          await api.post(`/temporary-clearances/${id}/revoke/`);
+          setSuccessMsg('Temporary clearance revoked successfully.');
+          closeConfirm();
+          loadTemporaryClearances();
+        } catch (err) {
+          setErrorMsg(err.response?.data?.detail || err.message || 'Failed to revoke temporary clearance.');
+          setConfirmModal(prev => ({ ...prev, loading: false }));
+        }
+      }
+    });
   };
 
   const handleExtendClearance = async (id, days) => {
@@ -386,43 +464,59 @@ export default function AdminPage() {
     }
   };
 
-  const handleBulkDeleteUsers = async () => {
+  const handleBulkDeleteUsers = () => {
     if (selectedUserIds.length === 0) return;
-    if (!confirm(`Are you sure you want to delete ${selectedUserIds.length} selected user account(s)?`)) return;
-    setErrorMsg('');
-    setSuccessMsg('');
-    setSubmitting(true);
-    try {
-      const res = await api.post('/admin/users/bulk_delete/', { user_ids: selectedUserIds });
-      setSuccessMsg(res?.detail || `Deleted ${selectedUserIds.length} selected user account(s).`);
-      setSelectedUserIds([]);
-      loadAdminData();
-    } catch (err) {
-      setErrorMsg(err.response?.data?.detail || err.message || 'Failed to delete selected users.');
-    } finally {
-      setSubmitting(false);
-    }
+
+    showConfirm({
+      title: 'Bulk Delete User Accounts',
+      description: (
+        <span>
+          Are you sure you want to permanently delete <strong className="text-red-700 font-bold">{selectedUserIds.length}</strong> selected user account(s)? This action cannot be reversed.
+        </span>
+      ),
+      confirmText: `Delete ${selectedUserIds.length} Accounts`,
+      variant: 'danger',
+      icon: '🗑️',
+      onConfirm: async () => {
+        setConfirmModal(prev => ({ ...prev, loading: true }));
+        setErrorMsg('');
+        setSuccessMsg('');
+        try {
+          const res = await api.post('/admin/users/bulk_delete/', { user_ids: selectedUserIds });
+          setSuccessMsg(res?.detail || `Deleted ${selectedUserIds.length} selected user account(s).`);
+          setSelectedUserIds([]);
+          closeConfirm();
+          loadAdminData();
+        } catch (err) {
+          setErrorMsg(err.response?.data?.detail || err.message || 'Failed to delete selected users.');
+          setConfirmModal(prev => ({ ...prev, loading: false }));
+        }
+      }
+    });
   };
 
-  const handleBulkResetPasswords = async () => {
+  const handleBulkResetPasswords = () => {
     if (selectedUserIds.length === 0) return;
-    const newPass = prompt(`Enter a new password to apply to all ${selectedUserIds.length} selected user account(s):`, 'CIU2026Password!');
-    if (!newPass) return;
+    setShowBulkResetModal(true);
+  };
+
+  const handleConfirmBulkReset = async (newPassword) => {
     setErrorMsg('');
     setSuccessMsg('');
-    setSubmitting(true);
+    setSubmittingBulkReset(true);
     try {
       const res = await api.post('/admin/users/bulk_reset_passwords/', {
         user_ids: selectedUserIds,
-        new_password: newPass.trim()
+        new_password: newPassword
       });
       setSuccessMsg(res?.detail || `Successfully reset passwords for ${selectedUserIds.length} selected user account(s)!`);
       setSelectedUserIds([]);
+      setShowBulkResetModal(false);
       loadAdminData();
     } catch (err) {
       setErrorMsg(err.response?.data?.detail || err.message || 'Failed to reset passwords for selected users.');
     } finally {
-      setSubmitting(false);
+      setSubmittingBulkReset(false);
     }
   };
 
@@ -484,27 +578,35 @@ export default function AdminPage() {
     }
   };
 
-  const handleIssueProctorWarning = async (studentId, actionType) => {
-    const msg = prompt(
-      actionType === 'terminate'
-        ? 'Enter reason for terminating candidate exam attempt:'
-        : 'Enter warning alert message for candidate:',
-      actionType === 'terminate' ? 'Violation of proctoring rules' : 'Please remain visible in front of webcam stream'
-    );
-    if (!msg) return;
+  const handleOpenProctorModal = (studentId, actionType) => {
+    setProctorModal({
+      isOpen: true,
+      studentId,
+      actionType,
+      message: actionType === 'terminate' ? 'Violation of proctoring rules' : 'Please remain visible in front of webcam stream',
+      loading: false
+    });
+  };
 
+  const handleConfirmProctorAction = async (e) => {
+    e?.preventDefault();
+    if (!proctorModal.message.trim() || proctorModal.loading) return;
+
+    setProctorModal(prev => ({ ...prev, loading: true }));
     setErrorMsg('');
     setSuccessMsg('');
     try {
       const res = await api.post('/proctoring-monitor/issue_warning/', {
-        student_id: studentId,
-        message: msg,
-        action: actionType
+        student_id: proctorModal.studentId,
+        message: proctorModal.message.trim(),
+        action: proctorModal.actionType
       });
-      setSuccessMsg(res.detail);
+      setSuccessMsg(res?.detail || 'Proctor action dispatched successfully.');
+      setProctorModal({ isOpen: false, studentId: null, actionType: 'warning', message: '', loading: false });
       fetchLiveProctorFeeds();
     } catch (err) {
-      setErrorMsg(err.message || 'Failed to issue proctor warning.');
+      setErrorMsg(err.response?.data?.detail || err.message || 'Failed to issue proctor action.');
+      setProctorModal(prev => ({ ...prev, loading: false }));
     }
   };
 
@@ -562,17 +664,28 @@ export default function AdminPage() {
     }
   };
 
-  const handleDeleteInvite = async (id) => {
-    if (!confirm('Are you sure you want to delete this invitation token?')) return;
-    setErrorMsg('');
-    setSuccessMsg('');
-    try {
-      await api.delete(`/invitations/${id}/`);
-      setSuccessMsg('Invitation token deleted successfully.');
-      loadAdminData();
-    } catch (err) {
-      setErrorMsg(err.message || 'Failed to delete invitation token.');
-    }
+  const handleDeleteInvite = (id) => {
+    showConfirm({
+      title: 'Delete Invitation Token',
+      description: 'Are you sure you want to delete this invitation token? Anyone holding this token will no longer be able to use it to register.',
+      confirmText: 'Delete Token',
+      variant: 'danger',
+      icon: '🗑️',
+      onConfirm: async () => {
+        setConfirmModal(prev => ({ ...prev, loading: true }));
+        setErrorMsg('');
+        setSuccessMsg('');
+        try {
+          await api.delete(`/invitations/${id}/`);
+          setSuccessMsg('Invitation token deleted successfully.');
+          closeConfirm();
+          loadAdminData();
+        } catch (err) {
+          setErrorMsg(err.response?.data?.detail || err.message || 'Failed to delete invitation token.');
+          setConfirmModal(prev => ({ ...prev, loading: false }));
+        }
+      }
+    });
   };
 
   const handleStartEdit = (u) => {
@@ -841,7 +954,7 @@ export default function AdminPage() {
     }
   };
 
-  const handleDeleteUser = async (id) => {
+  const handleDeleteUser = (id) => {
     if (user && user.id === id) {
       setErrorMsg('You cannot delete your own active administrator account.');
       return;
@@ -851,17 +964,32 @@ export default function AdminPage() {
       setErrorMsg('Platform Coordinators cannot delete System Administrator accounts.');
       return;
     }
-    if (!confirm(`Are you sure you want to delete user account "${target?.username || id}"?`)) return;
-    setErrorMsg('');
-    setSuccessMsg('');
 
-    try {
-      const res = await api.delete(`/admin/users/${id}/`);
-      setSuccessMsg(res?.detail || 'User deleted successfully.');
-      loadAdminData();
-    } catch (err) {
-      setErrorMsg(err.response?.data?.detail || err.message || 'Failed to delete user.');
-    }
+    showConfirm({
+      title: 'Delete User Account',
+      description: (
+        <span>
+          Are you sure you want to permanently delete user account <strong className="text-slate-900 font-bold">"{target?.username || id}"</strong> ({target?.role || 'user'})? This will erase their profile and credentials.
+        </span>
+      ),
+      confirmText: 'Delete Account',
+      variant: 'danger',
+      icon: '🗑️',
+      onConfirm: async () => {
+        setConfirmModal(prev => ({ ...prev, loading: true }));
+        setErrorMsg('');
+        setSuccessMsg('');
+        try {
+          const res = await api.delete(`/admin/users/${id}/`);
+          setSuccessMsg(res?.detail || `User account "${target?.username || id}" deleted successfully.`);
+          closeConfirm();
+          loadAdminData();
+        } catch (err) {
+          setErrorMsg(err.response?.data?.detail || err.message || 'Failed to delete user.');
+          setConfirmModal(prev => ({ ...prev, loading: false }));
+        }
+      }
+    });
   };
 
   const downloadAuditLogsCSV = () => {
@@ -2103,14 +2231,14 @@ export default function AdminPage() {
 
                   <div className="flex items-center space-x-2 pt-2 border-t border-slate-100">
                     <button
-                      onClick={() => handleIssueProctorWarning(feed.student, 'warning')}
-                      className="flex-1 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 text-[10px] font-bold rounded-lg border border-amber-200 transition-all"
+                      onClick={() => handleOpenProctorModal(feed.student, 'warning')}
+                      className="flex-1 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 text-[10px] font-bold rounded-lg border border-amber-200 transition-all cursor-pointer"
                     >
                       ⚠️ Warn Candidate
                     </button>
                     <button
-                      onClick={() => handleIssueProctorWarning(feed.student, 'terminate')}
-                      className="flex-1 py-1 bg-red-50 hover:bg-red-100 text-red-700 text-[10px] font-bold rounded-lg border border-red-200 transition-all"
+                      onClick={() => handleOpenProctorModal(feed.student, 'terminate')}
+                      className="flex-1 py-1 bg-red-50 hover:bg-red-100 text-red-700 text-[10px] font-bold rounded-lg border border-red-200 transition-all cursor-pointer"
                     >
                       🛑 Terminate
                     </button>
@@ -3160,6 +3288,153 @@ export default function AdminPage() {
                   className="px-5 py-2 bg-brand-dark hover:bg-slate-850 text-white font-bold rounded-xl transition-all shadow-md disabled:opacity-50 flex items-center space-x-1.5"
                 >
                   <span>{uploadingBulkCourseUnits ? 'Processing Units File...' : '⚡ Import Course Units'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Universal Fluid Confirmation Modal */}
+      <ConfirmationModal
+        isOpen={confirmModal.isOpen}
+        onClose={closeConfirm}
+        onConfirm={confirmModal.onConfirm}
+        title={confirmModal.title}
+        description={confirmModal.description}
+        confirmText={confirmModal.confirmText}
+        cancelText={confirmModal.cancelText}
+        variant={confirmModal.variant}
+        icon={confirmModal.icon}
+        loading={confirmModal.loading}
+      />
+
+      {/* Universal Fluid Bulk Password Reset Modal */}
+      <BulkPasswordResetModal
+        isOpen={showBulkResetModal}
+        onClose={() => setShowBulkResetModal(false)}
+        onConfirm={handleConfirmBulkReset}
+        selectedCount={selectedUserIds.length}
+        loading={submittingBulkReset}
+      />
+
+      {/* Fluid Proctor Action Modal */}
+      {proctorModal.isOpen && (
+        <div
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-fade-in"
+          onClick={() => {
+            if (!proctorModal.loading) setProctorModal(prev => ({ ...prev, isOpen: false }));
+          }}
+        >
+          <div
+            className="bg-white rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl border border-slate-200"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+          >
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <div className="flex items-center space-x-2.5">
+                <span className={`text-2xl p-2 rounded-2xl border ${proctorModal.actionType === 'terminate' ? 'bg-red-50 border-red-200 text-red-600' : 'bg-amber-50 border-amber-200 text-amber-600'}`}>
+                  {proctorModal.actionType === 'terminate' ? '🛑' : '⚠️'}
+                </span>
+                <div>
+                  <h3 className="font-bold text-slate-900 text-base">
+                    {proctorModal.actionType === 'terminate' ? 'Terminate Exam Attempt' : 'Issue Proctor Warning'}
+                  </h3>
+                  <p className="text-slate-500 text-xs">
+                    {proctorModal.actionType === 'terminate'
+                      ? 'Immediately end candidate active session'
+                      : 'Display alert toast directly on candidate screen'}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={proctorModal.loading}
+                onClick={() => setProctorModal(prev => ({ ...prev, isOpen: false }))}
+                className="text-slate-400 hover:text-slate-700 text-lg font-bold p-1 cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleConfirmProctorAction} className="space-y-4 text-xs">
+              <div>
+                <label className="block text-slate-700 font-bold uppercase mb-1">
+                  {proctorModal.actionType === 'terminate' ? 'Termination Reason' : 'Alert Message'}
+                </label>
+                <textarea
+                  rows={3}
+                  value={proctorModal.message}
+                  onChange={(e) => setProctorModal(prev => ({ ...prev, message: e.target.value }))}
+                  placeholder="Enter message for candidate..."
+                  className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-900 focus:bg-white focus:ring-2 focus:ring-brand-light/20 resize-none"
+                  required
+                  autoFocus
+                />
+              </div>
+
+              {/* Quick Preset Message Buttons */}
+              <div className="space-y-1.5">
+                <span className="text-[10px] uppercase font-bold text-slate-400">Quick Presets:</span>
+                <div className="flex flex-wrap gap-1.5">
+                  {(proctorModal.actionType === 'terminate'
+                    ? [
+                        'Violation of proctoring rules',
+                        'Unauthorized assistance detected',
+                        'Persistent screen tab-switching',
+                        'Candidate left camera frame'
+                      ]
+                    : [
+                        'Please remain visible in front of webcam stream',
+                        'Multiple faces detected in frame',
+                        'Excessive tab switching detected',
+                        'Audio background noise detected'
+                      ]
+                  ).map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => setProctorModal(prev => ({ ...prev, message: preset }))}
+                      className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-[10px] font-semibold transition-all cursor-pointer"
+                    >
+                      {preset}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end space-x-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  disabled={proctorModal.loading}
+                  onClick={() => setProctorModal(prev => ({ ...prev, isOpen: false }))}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition-all cursor-pointer disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={proctorModal.loading || !proctorModal.message.trim()}
+                  className={`px-5 py-2 text-white font-bold rounded-xl transition-all shadow-sm flex items-center space-x-1.5 cursor-pointer disabled:opacity-50 ${
+                    proctorModal.actionType === 'terminate'
+                      ? 'bg-red-600 hover:bg-red-700'
+                      : 'bg-amber-600 hover:bg-amber-700'
+                  }`}
+                >
+                  {proctorModal.loading && (
+                    <svg className="animate-spin -ml-1 mr-1.5 h-3.5 w-3.5 text-white" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                  )}
+                  <span>
+                    {proctorModal.loading
+                      ? 'Processing...'
+                      : proctorModal.actionType === 'terminate'
+                      ? 'Terminate Attempt'
+                      : 'Send Warning'}
+                  </span>
                 </button>
               </div>
             </form>

@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { api, formatUgandanTime, getUgandanISOString, toUgandanDatetimeLocal, getUgandanNowDatetimeLocal } from '@/lib/api';
 import { useRouter } from 'next/navigation';
+import ConfirmationModal from '@/components/ConfirmationModal';
 
 export default function ExamsPage() {
   const { user } = useAuth();
@@ -18,6 +19,45 @@ export default function ExamsPage() {
   const [faculties, setFaculties] = useState([]);
   const [proctoringSetting, setProctoringSetting] = useState({ is_proctoring_enabled: true });
   const [loading, setLoading] = useState(true);
+
+  // Universal Confirmation Modal State
+  const [confirmModal, setConfirmModal] = useState({
+    isOpen: false,
+    title: '',
+    description: '',
+    confirmText: 'Confirm',
+    cancelText: 'Cancel',
+    variant: 'danger',
+    icon: null,
+    onConfirm: null,
+    loading: false
+  });
+
+  const showConfirm = ({
+    title,
+    description,
+    confirmText = 'Confirm',
+    cancelText = 'Cancel',
+    variant = 'danger',
+    icon = null,
+    onConfirm
+  }) => {
+    setConfirmModal({
+      isOpen: true,
+      title,
+      description,
+      confirmText,
+      cancelText,
+      variant,
+      icon,
+      onConfirm,
+      loading: false
+    });
+  };
+
+  const closeConfirm = () => {
+    setConfirmModal(prev => ({ ...prev, isOpen: false, onConfirm: null, loading: false }));
+  };
 
   // Active Tab: 'exams', 'timetables', 'submissions'
   const [activeTab, setActiveTab] = useState('exams');
@@ -221,23 +261,34 @@ export default function ExamsPage() {
   const [editExamDueDate, setEditExamDueDate] = useState('');
   const [editExamIsActive, setEditExamIsActive] = useState(true);
 
-  const handleDeleteExam = async (examItem) => {
+  const handleDeleteExam = (examItem) => {
     if (isExecutiveReadOnly) return;
     if (isLecturer && examItem.is_approved_by_dean) {
       setErrorMsg('Permission Denied: Approved exams cannot be deleted by the lecturer.');
       return;
     }
-    if (!confirm('Are you sure you want to delete this exam paper?')) return;
-    setErrorMsg('');
-    setSuccessMsg('');
-    try {
-      await api.delete(`/exams/${examItem.id}/`);
-      setSuccessMsg('Exam paper deleted successfully.');
-      if (selectedExam?.id === examItem.id) setSelectedExam(null);
-      loadExamData();
-    } catch (err) {
-      setErrorMsg(err.message || 'Failed to delete exam paper.');
-    }
+    showConfirm({
+      title: 'Delete Exam Paper',
+      description: `Are you sure you want to delete "${examItem.title || 'this exam'}"? All scheduled slots and student attempts tied to this exam will be permanently removed.`,
+      confirmText: 'Delete Exam',
+      variant: 'danger',
+      icon: '🗑️',
+      onConfirm: async () => {
+        setConfirmModal(prev => ({ ...prev, loading: true }));
+        setErrorMsg('');
+        setSuccessMsg('');
+        try {
+          await api.delete(`/exams/${examItem.id}/`);
+          setSuccessMsg('Exam paper deleted successfully.');
+          if (selectedExam?.id === examItem.id) setSelectedExam(null);
+          closeConfirm();
+          loadExamData();
+        } catch (err) {
+          setErrorMsg(err.response?.data?.detail || err.message || 'Failed to delete exam paper.');
+          setConfirmModal(prev => ({ ...prev, loading: false }));
+        }
+      }
+    });
   };
 
   const handleOpenEditExamModal = (exam) => {
@@ -328,17 +379,28 @@ export default function ExamsPage() {
     }
   };
 
-  const handleDeleteExamScorecardQuestion = async (examId, qId) => {
-    if (!confirm('Are you sure you want to delete this question from the exam paper?')) return;
-    try {
-      await api.delete(`/exam-questions/${qId}/`);
-      setSuccessMsg('Question deleted from exam scorecard.');
-      const updated = await api.get(`/exams/${examId}/preview_scorecard/`);
-      setExamScorecardPreviewData(updated);
-      loadExamData();
-    } catch (err) {
-      setErrorMsg(err.message || 'Failed to delete question.');
-    }
+  const handleDeleteExamScorecardQuestion = (examId, qId) => {
+    showConfirm({
+      title: 'Delete Question',
+      description: 'Are you sure you want to delete this question from the exam paper?',
+      confirmText: 'Delete Question',
+      variant: 'danger',
+      icon: '🗑️',
+      onConfirm: async () => {
+        setConfirmModal(prev => ({ ...prev, loading: true }));
+        try {
+          await api.delete(`/exam-questions/${qId}/`);
+          setSuccessMsg('Question deleted from exam scorecard.');
+          const updated = await api.get(`/exams/${examId}/preview_scorecard/`);
+          setExamScorecardPreviewData(updated);
+          closeConfirm();
+          loadExamData();
+        } catch (err) {
+          setErrorMsg(err.response?.data?.detail || err.message || 'Failed to delete question.');
+          setConfirmModal(prev => ({ ...prev, loading: false }));
+        }
+      }
+    });
   };
 
   const handleCreateExam = async (e) => {
@@ -573,16 +635,27 @@ ANSWER: C`;
     }
   };
 
-  const handleDeleteExamTimetable = async (id) => {
+  const handleDeleteExamTimetable = (id) => {
     if (isExecutiveReadOnly) return;
-    if (!confirm('Are you sure you want to delete this exam timetable slot?')) return;
-    try {
-      await api.delete(`/exam-timetables/${id}/`);
-      setSuccessMsg('Exam timetable entry removed.');
-      loadExamData();
-    } catch (err) {
-      setErrorMsg('Failed to remove exam timetable entry.');
-    }
+    showConfirm({
+      title: 'Delete Exam Timetable Slot',
+      description: 'Are you sure you want to delete this exam timetable slot?',
+      confirmText: 'Delete Slot',
+      variant: 'danger',
+      icon: '🗑️',
+      onConfirm: async () => {
+        setConfirmModal(prev => ({ ...prev, loading: true }));
+        try {
+          await api.delete(`/exam-timetables/${id}/`);
+          setSuccessMsg('Exam timetable entry removed.');
+          closeConfirm();
+          loadExamData();
+        } catch (err) {
+          setErrorMsg(err.response?.data?.detail || err.message || 'Failed to remove exam timetable entry.');
+          setConfirmModal(prev => ({ ...prev, loading: false }));
+        }
+      }
+    });
   };
 
   const startExam = async (examId) => {
@@ -2388,6 +2461,20 @@ ANSWER: C`;
           </div>
         </div>
       )}
+
+      {/* Universal Fluid Confirmation Modal */}
+      <ConfirmationModal
+        isOpen={confirmModal.isOpen}
+        onClose={closeConfirm}
+        onConfirm={confirmModal.onConfirm}
+        title={confirmModal.title}
+        description={confirmModal.description}
+        confirmText={confirmModal.confirmText}
+        cancelText={confirmModal.cancelText}
+        variant={confirmModal.variant}
+        icon={confirmModal.icon}
+        loading={confirmModal.loading}
+      />
 
     </div>
   );

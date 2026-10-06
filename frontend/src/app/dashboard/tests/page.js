@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { api, formatUgandanTime, getUgandanISOString, toUgandanDatetimeLocal, getUgandanNowDatetimeLocal } from '@/lib/api';
 import { useRouter } from 'next/navigation';
+import ConfirmationModal from '@/components/ConfirmationModal';
 
 export default function TestPortalPage() {
   const { user } = useAuth();
@@ -15,6 +16,45 @@ export default function TestPortalPage() {
   const [attempts, setAttempts] = useState([]);
   const [proctoringSetting, setProctoringSetting] = useState({ is_proctoring_enabled: true });
   const [loading, setLoading] = useState(true);
+
+  // Universal Confirmation Modal State
+  const [confirmModal, setConfirmModal] = useState({
+    isOpen: false,
+    title: '',
+    description: '',
+    confirmText: 'Confirm',
+    cancelText: 'Cancel',
+    variant: 'danger',
+    icon: null,
+    onConfirm: null,
+    loading: false
+  });
+
+  const showConfirm = ({
+    title,
+    description,
+    confirmText = 'Confirm',
+    cancelText = 'Cancel',
+    variant = 'danger',
+    icon = null,
+    onConfirm
+  }) => {
+    setConfirmModal({
+      isOpen: true,
+      title,
+      description,
+      confirmText,
+      cancelText,
+      variant,
+      icon,
+      onConfirm,
+      loading: false
+    });
+  };
+
+  const closeConfirm = () => {
+    setConfirmModal(prev => ({ ...prev, isOpen: false, onConfirm: null, loading: false }));
+  };
 
   // Filters & Tabs
   const [activeTab, setActiveTab] = useState('catalog'); // 'catalog', 'builder', 'analytics', 'history'
@@ -189,23 +229,34 @@ export default function TestPortalPage() {
     }
   };
 
-  const handleDeleteTest = async (testItem) => {
+  const handleDeleteTest = (testItem) => {
     if (isExecutiveReadOnly) return;
     if (isLecturer && testItem.lecturer !== user.id && testItem.lecturer_name !== user.username) {
       setErrorMsg('Permission Denied: You can only delete tests created by you.');
       return;
     }
-    if (!confirm('Are you sure you want to delete this test paper?')) return;
-    setErrorMsg('');
-    setSuccessMsg('');
-    try {
-      await api.delete(`/tests/${testItem.id}/`);
-      setSuccessMsg('Test paper deleted successfully.');
-      if (selectedTest?.id === testItem.id) setSelectedTest(null);
-      loadPortalData();
-    } catch (err) {
-      setErrorMsg(err.message || 'Failed to delete test paper.');
-    }
+    showConfirm({
+      title: 'Delete Test Paper',
+      description: `Are you sure you want to delete "${testItem.title || 'this test'}"? Student submissions and score records will be permanently removed.`,
+      confirmText: 'Delete Test',
+      variant: 'danger',
+      icon: '🗑️',
+      onConfirm: async () => {
+        setConfirmModal(prev => ({ ...prev, loading: true }));
+        setErrorMsg('');
+        setSuccessMsg('');
+        try {
+          await api.delete(`/tests/${testItem.id}/`);
+          setSuccessMsg('Test paper deleted successfully.');
+          if (selectedTest?.id === testItem.id) setSelectedTest(null);
+          closeConfirm();
+          loadPortalData();
+        } catch (err) {
+          setErrorMsg(err.response?.data?.detail || err.message || 'Failed to delete test paper.');
+          setConfirmModal(prev => ({ ...prev, loading: false }));
+        }
+      }
+    });
   };
 
   const handleOpenEditTestModal = (testItem) => {
@@ -435,17 +486,28 @@ ANSWER: C`;
     }
   };
 
-  const handleDeleteScorecardQuestion = async (testId, qId) => {
-    if (!confirm('Are you sure you want to delete this question from the scorecard?')) return;
-    try {
-      await api.delete(`/test-questions/${qId}/`);
-      setSuccessMsg('Question deleted from scorecard.');
-      const updated = await api.get(`/tests/${testId}/preview_scorecard/`);
-      setScorecardPreviewData(updated);
-      loadPortalData();
-    } catch (err) {
-      setErrorMsg(err.message || 'Failed to delete question.');
-    }
+  const handleDeleteScorecardQuestion = (testId, qId) => {
+    showConfirm({
+      title: 'Delete Question',
+      description: 'Are you sure you want to delete this question from the scorecard?',
+      confirmText: 'Delete Question',
+      variant: 'danger',
+      icon: '🗑️',
+      onConfirm: async () => {
+        setConfirmModal(prev => ({ ...prev, loading: true }));
+        try {
+          await api.delete(`/test-questions/${qId}/`);
+          setSuccessMsg('Question deleted from scorecard.');
+          const updated = await api.get(`/tests/${testId}/preview_scorecard/`);
+          setScorecardPreviewData(updated);
+          closeConfirm();
+          loadPortalData();
+        } catch (err) {
+          setErrorMsg(err.response?.data?.detail || err.message || 'Failed to delete question.');
+          setConfirmModal(prev => ({ ...prev, loading: false }));
+        }
+      }
+    });
   };
 
   const handleToggleResultsRelease = async (testItem) => {
@@ -2355,6 +2417,20 @@ ANSWER: C`;
           </div>
         </div>
       )}
+
+      {/* Universal Fluid Confirmation Modal */}
+      <ConfirmationModal
+        isOpen={confirmModal.isOpen}
+        onClose={closeConfirm}
+        onConfirm={confirmModal.onConfirm}
+        title={confirmModal.title}
+        description={confirmModal.description}
+        confirmText={confirmModal.confirmText}
+        cancelText={confirmModal.cancelText}
+        variant={confirmModal.variant}
+        icon={confirmModal.icon}
+        loading={confirmModal.loading}
+      />
 
     </div>
   );
