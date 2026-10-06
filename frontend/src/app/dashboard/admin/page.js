@@ -84,9 +84,13 @@ export default function AdminPage() {
   const [editLastName, setEditLastName] = useState('');
   const [editPhone, setEditPhone] = useState('');
   const [editRole, setEditRole] = useState('student');
+  const [editPassword, setEditPassword] = useState('');
   const [editTuitionPaid, setEditTuitionPaid] = useState(100.0);
   const [editRegNumber, setEditRegNumber] = useState('');
   const [editYearOfStudy, setEditYearOfStudy] = useState(1);
+  const [editSemester, setEditSemester] = useState(1);
+  const [editIntake, setEditIntake] = useState('August Intake');
+  const [editEntryYear, setEditEntryYear] = useState(2026);
   const [editFaculty, setEditFaculty] = useState('');
   const [editAssignedCourses, setEditAssignedCourses] = useState([]);
 
@@ -104,6 +108,14 @@ export default function AdminPage() {
   const [bulkStaffDefaultPassword, setBulkStaffDefaultPassword] = useState('Kampus@2026');
   const [uploadingBulkStaff, setUploadingBulkStaff] = useState(false);
   const [bulkStaffResult, setBulkStaffResult] = useState(null);
+
+  // Bulk Course Units State (Excel .xls / .xlsx / .csv)
+  const [showBulkCourseUnitsModal, setShowBulkCourseUnitsModal] = useState(false);
+  const [bulkCourseUnitsFile, setBulkCourseUnitsFile] = useState(null);
+  const [bulkCourseUnitsFacultyId, setBulkCourseUnitsFacultyId] = useState('');
+  const [bulkCourseUnitsCourseId, setBulkCourseUnitsCourseId] = useState('');
+  const [uploadingBulkCourseUnits, setUploadingBulkCourseUnits] = useState(false);
+  const [bulkCourseUnitsResult, setBulkCourseUnitsResult] = useState(null);
 
   // Form state (Reset Password)
   const [resetUserObj, setResetUserObj] = useState(null);
@@ -347,16 +359,30 @@ export default function AdminPage() {
   };
 
   const handleToggleSelectUser = (id) => {
+    const target = users.find(u => u.id === id);
+    if (user?.role === 'platform_coordinator' && (target?.role === 'admin' || target?.username === 'admin')) {
+      setErrorMsg('Platform Coordinators cannot select System Administrator accounts for batch operations.');
+      return;
+    }
+    if (user && id === user.id) {
+      setErrorMsg('You cannot select your own active administrator account for batch deletion.');
+      return;
+    }
     setSelectedUserIds(prev =>
       prev.includes(id) ? prev.filter(uId => uId !== id) : [...prev, id]
     );
   };
 
   const handleToggleSelectAllUsers = () => {
-    if (selectedUserIds.length === users.length) {
+    const selectableUsers = users.filter(u => {
+      if (user?.role === 'platform_coordinator' && (u.role === 'admin' || u.username === 'admin')) return false;
+      if (user && u.id === user.id) return false;
+      return true;
+    });
+    if (selectedUserIds.length >= selectableUsers.length && selectableUsers.length > 0) {
       setSelectedUserIds([]);
     } else {
-      setSelectedUserIds(users.map(u => u.id));
+      setSelectedUserIds(selectableUsers.map(u => u.id));
     }
   };
 
@@ -368,11 +394,11 @@ export default function AdminPage() {
     setSubmitting(true);
     try {
       const res = await api.post('/admin/users/bulk_delete/', { user_ids: selectedUserIds });
-      setSuccessMsg(res.detail || `Deleted ${selectedUserIds.length} selected user account(s).`);
+      setSuccessMsg(res?.detail || `Deleted ${selectedUserIds.length} selected user account(s).`);
       setSelectedUserIds([]);
       loadAdminData();
     } catch (err) {
-      setErrorMsg(err.message || 'Failed to delete selected users.');
+      setErrorMsg(err.response?.data?.detail || err.message || 'Failed to delete selected users.');
     } finally {
       setSubmitting(false);
     }
@@ -390,11 +416,11 @@ export default function AdminPage() {
         user_ids: selectedUserIds,
         new_password: newPass.trim()
       });
-      setSuccessMsg(res.detail || `Successfully reset passwords for ${selectedUserIds.length} selected user account(s)!`);
+      setSuccessMsg(res?.detail || `Successfully reset passwords for ${selectedUserIds.length} selected user account(s)!`);
       setSelectedUserIds([]);
       loadAdminData();
     } catch (err) {
-      setErrorMsg(err.message || 'Failed to reset passwords for selected users.');
+      setErrorMsg(err.response?.data?.detail || err.message || 'Failed to reset passwords for selected users.');
     } finally {
       setSubmitting(false);
     }
@@ -550,6 +576,10 @@ export default function AdminPage() {
   };
 
   const handleStartEdit = (u) => {
+    if (user?.role === 'platform_coordinator' && (u.role === 'admin' || u.username === 'admin')) {
+      setErrorMsg('Platform Coordinators cannot edit or modify System Administrator credentials.');
+      return;
+    }
     setEditingUser(u);
     setEditUsername(u.username);
     setEditEmail(u.email);
@@ -557,9 +587,13 @@ export default function AdminPage() {
     setEditLastName(u.last_name || '');
     setEditPhone(u.phone || '');
     setEditRole(u.role);
+    setEditPassword('');
     setEditTuitionPaid(u.tuition_paid_percentage ?? 100.0);
     setEditRegNumber(u.reg_number || u.registration_number || '');
     setEditYearOfStudy(u.year_of_study || 1);
+    setEditSemester(u.semester || 1);
+    setEditIntake(u.intake || 'August Intake');
+    setEditEntryYear(u.entry_year || 2026);
     setEditFaculty(u.faculty || '');
     setEditAssignedCourses(u.assigned_courses || []);
     setErrorMsg('');
@@ -572,31 +606,47 @@ export default function AdminPage() {
       setErrorMsg('Username and email are required.');
       return;
     }
+    if (user?.role === 'platform_coordinator' && (editingUser?.role === 'admin' || editingUser?.username === 'admin')) {
+      setErrorMsg('Platform Coordinators cannot edit or modify System Administrator credentials.');
+      return;
+    }
+    if (user?.role === 'platform_coordinator' && editRole === 'admin') {
+      setErrorMsg('Platform Coordinators cannot assign or elevate accounts to System Administrator.');
+      return;
+    }
     setErrorMsg('');
     setSuccessMsg('');
     setSubmitting(true);
 
     try {
       const payload = {
-        username: editUsername,
-        email: editEmail,
-        first_name: editFirstName,
-        last_name: editLastName,
-        phone: editPhone,
+        username: editUsername.trim(),
+        email: editEmail.trim(),
+        first_name: editFirstName.trim(),
+        last_name: editLastName.trim(),
+        phone: editPhone ? editPhone.trim().slice(0, 20) : '',
         role: editRole,
-        tuition_paid_percentage: parseFloat(editTuitionPaid),
-        reg_number: editRegNumber,
+        tuition_paid_percentage: parseFloat(editTuitionPaid ?? 100.0),
+        reg_number: editRegNumber.trim(),
         year_of_study: parseInt(editYearOfStudy || 1),
+        semester: parseInt(editSemester || 1),
+        intake: editIntake,
+        entry_year: parseInt(editEntryYear || 2026),
         faculty: editFaculty ? parseInt(editFaculty) : null,
         assigned_courses: editAssignedCourses ? editAssignedCourses.map(id => parseInt(id)) : []
       };
 
+      if (editPassword && editPassword.trim()) {
+        payload.password = editPassword.trim();
+        payload.new_password = editPassword.trim();
+      }
+
       await api.patch(`/admin/users/${editingUser.id}/`, payload);
-      setSuccessMsg('User details, year of study & course assignments updated successfully!');
+      setSuccessMsg(`User account "${editUsername}" updated successfully!`);
       setEditingUser(null);
       loadAdminData();
     } catch (err) {
-      setErrorMsg(err.message || 'Failed to update user.');
+      setErrorMsg(err.response?.data?.detail || err.message || 'Failed to update user.');
     } finally {
       setSubmitting(false);
     }
@@ -650,31 +700,74 @@ export default function AdminPage() {
       }
       formData.append('default_password', bulkStaffDefaultPassword || 'Kampus@2026');
 
-      const rawBaseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000/api';
+      const rawBaseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api';
       const API_BASE_URL = rawBaseUrl.replace(/\/$/, '');
-      const token = localStorage.getItem('token');
 
-      const res = await fetch(`${API_BASE_URL}/admin/users/bulk_onboard_staff/`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`
-        },
-        body: formData
-      });
-
-      const data = await res.json();
-      if (res.ok) {
-        setSuccessMsg(data.detail || `Bulk Staff Onboarding: Successfully onboarded ${data.created_count} staff accounts!`);
-        setBulkStaffResult(data);
-        setBulkStaffFile(null);
-        await loadAdminData();
-      } else {
-        setErrorMsg(data.detail || 'Failed to process bulk staff onboarding file.');
-      }
+      const data = await api.post('/admin/users/bulk_onboard_staff/', formData);
+      setSuccessMsg(data.detail || `Bulk Staff Onboarding: Successfully processed staff roster!`);
+      setBulkStaffResult(data);
+      setBulkStaffFile(null);
+      await loadAdminData();
     } catch (err) {
       setErrorMsg(err.message || 'Failed to onboard staff from file.');
     } finally {
       setUploadingBulkStaff(false);
+    }
+  };
+
+  const handleBulkCourseUnitsUpload = async (e) => {
+    e.preventDefault();
+    if (!bulkCourseUnitsFile) {
+      setErrorMsg('Please select an Excel (.xlsx/.xls) or CSV file containing course units.');
+      return;
+    }
+    setUploadingBulkCourseUnits(true);
+    setErrorMsg('');
+    setSuccessMsg('');
+    setBulkCourseUnitsResult(null);
+
+    try {
+      const formData = new FormData();
+      formData.append('file', bulkCourseUnitsFile);
+      if (bulkCourseUnitsFacultyId) formData.append('faculty_code', bulkCourseUnitsFacultyId);
+      if (bulkCourseUnitsCourseId) formData.append('course_code', bulkCourseUnitsCourseId);
+
+      const data = await api.post('/course-units/bulk_upload/', formData);
+      setSuccessMsg(data.detail || `Course Units Bulk Import: Successfully processed ${data.count} units!`);
+      setBulkCourseUnitsResult(data);
+      setBulkCourseUnitsFile(null);
+      await loadAdminData();
+    } catch (err) {
+      setErrorMsg(err.message || 'Failed to bulk import course units.');
+    } finally {
+      setUploadingBulkCourseUnits(false);
+    }
+  };
+
+  const handleDownloadCourseUnitsSample = async (format = 'xlsx') => {
+    try {
+      const tokensStr = localStorage.getItem('ciu_tokens');
+      let token = '';
+      if (tokensStr) {
+        try { token = JSON.parse(tokensStr).access; } catch (e) {}
+      }
+      const rawBaseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api';
+      const API_BASE_URL = rawBaseUrl.replace(/\/$/, '');
+      const res = await fetch(`${API_BASE_URL}/course-units/sample_file/?format=${format}`, {
+        headers: token ? { 'Authorization': `Bearer ${token}` } : {}
+      });
+      if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = format === 'xlsx' ? 'sample_course_units.xlsx' : 'sample_course_units.csv';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.warn('Fallback download:', err);
     }
   };
 
@@ -749,16 +842,25 @@ export default function AdminPage() {
   };
 
   const handleDeleteUser = async (id) => {
-    if (!confirm('Are you sure you want to delete this user?')) return;
+    if (user && user.id === id) {
+      setErrorMsg('You cannot delete your own active administrator account.');
+      return;
+    }
+    const target = users.find(u => u.id === id);
+    if (user?.role === 'platform_coordinator' && (target?.role === 'admin' || target?.username === 'admin')) {
+      setErrorMsg('Platform Coordinators cannot delete System Administrator accounts.');
+      return;
+    }
+    if (!confirm(`Are you sure you want to delete user account "${target?.username || id}"?`)) return;
     setErrorMsg('');
     setSuccessMsg('');
 
     try {
-      await api.delete(`/admin/users/${id}/`);
-      setSuccessMsg('User deleted successfully.');
+      const res = await api.delete(`/admin/users/${id}/`);
+      setSuccessMsg(res?.detail || 'User deleted successfully.');
       loadAdminData();
     } catch (err) {
-      setErrorMsg('Failed to delete user.');
+      setErrorMsg(err.response?.data?.detail || err.message || 'Failed to delete user.');
     }
   };
 
@@ -846,7 +948,12 @@ export default function AdminPage() {
   const paginatedUsers = filteredUsers.slice(startIndex, startIndex + pageSize);
 
   const handleToggleSelectAllPaginated = () => {
-    const pageIds = paginatedUsers.map(u => u.id);
+    const selectablePageUsers = paginatedUsers.filter(u => {
+      if (user?.role === 'platform_coordinator' && (u.role === 'admin' || u.username === 'admin')) return false;
+      if (user && u.id === user.id) return false;
+      return true;
+    });
+    const pageIds = selectablePageUsers.map(u => u.id);
     const allPageSelected = pageIds.length > 0 && pageIds.every(id => selectedUserIds.includes(id));
     if (allPageSelected) {
       setSelectedUserIds(prev => prev.filter(id => !pageIds.includes(id)));
@@ -998,7 +1105,14 @@ export default function AdminPage() {
                   onClick={() => setShowBulkStaffModal(true)}
                   className="px-3.5 py-1.5 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-xl shadow-sm transition-all flex items-center space-x-1.5"
                 >
-                  <span>📥 Bulk Onboard Staff (Excel/CSV)</span>
+                  <span>👔 Bulk Onboard Staff</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowBulkCourseUnitsModal(true)}
+                  className="px-3.5 py-1.5 bg-brand-dark hover:bg-slate-850 text-white text-xs font-bold rounded-xl shadow-sm transition-all flex items-center space-x-1.5"
+                >
+                  <span>📚 Bulk Upload Course Units</span>
                 </button>
                 <button
                   type="button"
@@ -1195,8 +1309,10 @@ export default function AdminPage() {
                             <input
                               type="checkbox"
                               checked={selectedUserIds.includes(u.id)}
+                              disabled={(user?.role === 'platform_coordinator' && (u.role === 'admin' || u.username === 'admin')) || (user && u.id === user.id)}
                               onChange={() => handleToggleSelectUser(u.id)}
-                              className="rounded border-slate-300 text-brand-dark focus:ring-brand-light cursor-pointer"
+                              className="rounded border-slate-300 text-brand-dark focus:ring-brand-light cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                              title={(user?.role === 'platform_coordinator' && (u.role === 'admin' || u.username === 'admin')) ? 'Platform Coordinators cannot select System Admin accounts' : (user && u.id === user.id) ? 'Cannot select own active account' : 'Select user'}
                             />
                           </td>
                           <td className="px-4 py-3 font-semibold text-slate-850">
@@ -1237,31 +1353,36 @@ export default function AdminPage() {
                               </span>
                             )}
                           </td>
-                          <td className="px-4 py-3 text-center space-x-1">
-                            <button
-                              onClick={() => handleStartEdit(u)}
-                              className="px-2.5 py-1 bg-white border border-emerald-200 hover:bg-emerald-50 text-slate-800 text-[11px] font-bold rounded-lg transition-all shadow-2xs"
-                            >
-                              Edit
-                            </button>
-                            {user?.role === 'platform_coordinator' && u.role === 'admin' ? (
-                              <span className="text-[10px] text-slate-400 font-semibold italic px-2 py-0.5 bg-slate-100 rounded border border-slate-200" title="Platform Coordinator cannot reset Admin password or delete Admin user">
+                          <td className="px-4 py-3 text-center space-x-1 whitespace-nowrap">
+                            {user?.role === 'platform_coordinator' && (u.role === 'admin' || u.username === 'admin') ? (
+                              <span className="text-[10px] text-slate-400 font-semibold italic px-2.5 py-1 bg-slate-100 rounded-lg border border-slate-200 inline-block" title="Platform Coordinators cannot edit or delete System Admin credentials">
                                 🛡️ Admin Protected
                               </span>
                             ) : (
                               <>
                                 <button
-                                  onClick={() => { setResetUserObj(u); setNewPasswordInput(''); setShowResetPassVisibility(false); }}
-                                  className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 text-[11px] font-bold rounded-lg border border-amber-200 transition-all shadow-2xs"
+                                  onClick={() => handleStartEdit(u)}
+                                  className="px-2.5 py-1 bg-white border border-emerald-200 hover:bg-emerald-50 text-slate-800 text-[11px] font-bold rounded-lg transition-all shadow-2xs"
+                                  title="Edit user details and credentials"
                                 >
-                                  Reset Pass
+                                  ✏️ Edit
                                 </button>
                                 <button
-                                  onClick={() => handleDeleteUser(u.id)}
-                                  className="px-2 py-1 bg-red-50 hover:bg-red-100 text-red-700 text-[11px] font-bold rounded-lg border border-red-200 transition-all shadow-2xs"
+                                  onClick={() => { setResetUserObj(u); setNewPasswordInput(''); setShowResetPassVisibility(false); }}
+                                  className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 text-[11px] font-bold rounded-lg border border-amber-200 transition-all shadow-2xs"
+                                  title="Quick reset user password"
                                 >
-                                  Delete
+                                  🔑 Reset Pass
                                 </button>
+                                {user?.id !== u.id && (
+                                  <button
+                                    onClick={() => handleDeleteUser(u.id)}
+                                    className="px-2.5 py-1 bg-red-50 hover:bg-red-100 text-red-700 text-[11px] font-bold rounded-lg border border-red-200 transition-all shadow-2xs"
+                                    title="Delete user account"
+                                  >
+                                    🗑️ Delete
+                                  </button>
+                                )}
                               </>
                             )}
                           </td>
@@ -2322,11 +2443,38 @@ export default function AdminPage() {
                     <option value="dvc">Chancellor (DVC)</option>
                     <option value="vc">Vice-Chancellor (VC)</option>
                     <option value="platform_coordinator">Platform Coordinator</option>
-                    <option value="admin">System Admin</option>
+                    {user?.role === 'admin' && (
+                      <option value="admin">System Admin</option>
+                    )}
                   </select>
                 </div>
                 <div>
-                  <label className="block text-slate-700 font-bold uppercase mb-1 text-[10px]">Registration Number</label>
+                  <label className="block text-slate-700 font-bold uppercase mb-1 text-[10px]">Phone Contact</label>
+                  <input
+                    type="text"
+                    value={editPhone}
+                    onChange={(e) => setEditPhone(e.target.value)}
+                    placeholder="e.g. 0770000000"
+                    maxLength={20}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-mono"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-slate-700 font-bold uppercase mb-1 text-[10px]">New Password (Optional)</label>
+                  <input
+                    type="password"
+                    value={editPassword}
+                    onChange={(e) => setEditPassword(e.target.value)}
+                    placeholder="Leave blank to keep current"
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl"
+                  />
+                  <p className="text-[10px] text-slate-400 mt-0.5">Leave blank to maintain current password.</p>
+                </div>
+                <div>
+                  <label className="block text-slate-700 font-bold uppercase mb-1 text-[10px]">{editRole === 'student' ? 'Registration Number' : 'Staff / ID Number'}</label>
                   <input
                     type="text"
                     value={editRegNumber}
@@ -2337,7 +2485,7 @@ export default function AdminPage() {
                 </div>
               </div>
 
-              {editRole === 'student' && (
+              {editRole === 'student' ? (
                 <>
                   <div className="grid grid-cols-2 gap-3">
                     <div>
@@ -2355,6 +2503,20 @@ export default function AdminPage() {
                     </div>
 
                     <div>
+                      <label className="block text-slate-700 font-bold uppercase mb-1 text-[10px]">Current Semester</label>
+                      <select
+                        value={editSemester}
+                        onChange={(e) => setEditSemester(e.target.value)}
+                        className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800"
+                      >
+                        <option value={1}>Semester 1</option>
+                        <option value={2}>Semester 2</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
                       <label className="block text-slate-700 font-bold uppercase mb-1 text-[10px]">Assigned Faculty</label>
                       <select
                         value={editFaculty}
@@ -2365,6 +2527,19 @@ export default function AdminPage() {
                         {faculties.map(f => (
                           <option key={f.id} value={f.id}>{f.code} - {f.name}</option>
                         ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-slate-700 font-bold uppercase mb-1 text-[10px]">Intake</label>
+                      <select
+                        value={editIntake}
+                        onChange={(e) => setEditIntake(e.target.value)}
+                        className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800"
+                      >
+                        <option value="August Intake">August Intake</option>
+                        <option value="January Intake">January Intake</option>
+                        <option value="May Intake">May Intake</option>
                       </select>
                     </div>
                   </div>
@@ -2408,6 +2583,51 @@ export default function AdminPage() {
                       className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold text-brand-dark"
                     />
                     <p className="text-[10px] text-slate-500 mt-0.5">50% clears student for Tests; 100% clears student for Exams.</p>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-slate-700 font-bold uppercase mb-1 text-[10px]">Faculty Department</label>
+                      <select
+                        value={editFaculty}
+                        onChange={(e) => setEditFaculty(e.target.value)}
+                        className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800"
+                      >
+                        <option value="">-- No Faculty --</option>
+                        {faculties.map(f => (
+                          <option key={f.id} value={f.id}>{f.code} - {f.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-700 font-bold uppercase mb-1 text-[10px]">Assigned Degree Courses</label>
+                    <div className="max-h-28 overflow-y-auto custom-scrollbar border border-slate-200 rounded-xl p-2 bg-slate-50 space-y-1">
+                      {courses.map(c => {
+                        const isChecked = editAssignedCourses.includes(c.id);
+                        return (
+                          <label key={c.id} className="flex items-center space-x-2 p-1 hover:bg-white rounded cursor-pointer text-xs">
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setEditAssignedCourses(prev => [...prev, c.id]);
+                                } else {
+                                  setEditAssignedCourses(prev => prev.filter(id => id !== c.id));
+                                }
+                              }}
+                              className="rounded text-brand-dark focus:ring-brand-light cursor-pointer"
+                            />
+                            <span className="font-bold text-slate-800">{c.code}</span>
+                            <span className="text-slate-600">({c.name})</span>
+                          </label>
+                        );
+                      })}
+                    </div>
                   </div>
                 </>
               )}
@@ -2780,6 +3000,166 @@ export default function AdminPage() {
                   className="px-5 py-2 bg-brand-light hover:bg-brand-medium text-white font-bold rounded-xl transition-all shadow-md disabled:opacity-50 flex items-center space-x-1.5"
                 >
                   <span>{uploadingBulkStaff ? 'Processing Staff File...' : '⚡ Onboard Staff Now'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: BULK COURSE UNITS ONBOARDING */}
+      {showBulkCourseUnitsModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fade-in">
+          <div className="bg-white rounded-3xl max-w-xl w-full p-6 space-y-5 shadow-2xl border border-slate-100 max-h-[90vh] overflow-y-auto custom-scrollbar">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <div className="flex items-center space-x-2">
+                <span className="text-2xl">📚</span>
+                <div>
+                  <h3 className="text-base font-extrabold text-slate-850">Bulk Upload Course Units</h3>
+                  <p className="text-[11px] text-slate-500 font-medium">Auto-link units to their respective Courses & Faculties from Excel (.xlsx, .xls) or CSV</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => { setShowBulkCourseUnitsModal(false); setBulkCourseUnitsResult(null); }}
+                className="text-slate-400 hover:text-slate-700 text-lg font-bold"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleBulkCourseUnitsUpload} className="space-y-4 text-xs">
+              {/* File Upload Box */}
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
+                  Course Units File (.xlsx, .xls, .csv) *
+                </label>
+                <div className="border-2 border-dashed border-slate-300 hover:border-brand-light rounded-2xl p-4 text-center bg-slate-50/50 transition-all">
+                  <input
+                    type="file"
+                    accept=".xls,.xlsx,.csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"
+                    onChange={(e) => setBulkCourseUnitsFile(e.target.files[0])}
+                    className="hidden"
+                    id="bulk_cu_file_input"
+                  />
+                  <label htmlFor="bulk_cu_file_input" className="cursor-pointer space-y-1 block">
+                    <span className="text-2xl block">📑</span>
+                    <span className="font-bold text-brand-dark hover:underline block text-xs">
+                      {bulkCourseUnitsFile ? `Selected: ${bulkCourseUnitsFile.name} (${(bulkCourseUnitsFile.size / 1024).toFixed(1)} KB)` : 'Click to select Course Units Excel (.xlsx / .xls) or CSV'}
+                    </span>
+                    <span className="text-[10px] text-slate-400 block">
+                      Recognizes Unit Code, Unit Name, Course Code, Faculty Code, Credit Units, Year of Study, Lecturer Email
+                    </span>
+                  </label>
+                </div>
+              </div>
+
+              {/* Fallback Selection Grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-50 p-3 rounded-xl border border-slate-200">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Fallback Faculty (Optional)</label>
+                  <select
+                    value={bulkCourseUnitsFacultyId}
+                    onChange={(e) => setBulkCourseUnitsFacultyId(e.target.value)}
+                    className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl font-bold text-slate-800"
+                  >
+                    <option value="">-- Auto-detect from file --</option>
+                    {faculties.map(f => (
+                      <option key={f.id} value={f.code}>[{f.code}] {f.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Fallback Course (Optional)</label>
+                  <select
+                    value={bulkCourseUnitsCourseId}
+                    onChange={(e) => setBulkCourseUnitsCourseId(e.target.value)}
+                    className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl font-bold text-slate-800"
+                  >
+                    <option value="">-- Auto-detect from file --</option>
+                    {courses.map(c => (
+                      <option key={c.id} value={c.code}>[{c.code}] {c.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Sample Download Action */}
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-2 text-[11px] bg-emerald-50/70 p-2.5 rounded-xl border border-emerald-200">
+                <div className="flex items-center space-x-2">
+                  <span>📋</span>
+                  <span className="text-emerald-900 font-bold">Standard Course Units Template:</span>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <button
+                    type="button"
+                    onClick={() => handleDownloadCourseUnitsSample('xlsx')}
+                    className="px-2.5 py-1 bg-emerald-700 hover:bg-emerald-800 text-white font-bold rounded-lg transition-all shadow-xs flex items-center space-x-1"
+                  >
+                    <span>📥 Sample Excel (.xlsx)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDownloadCourseUnitsSample('csv')}
+                    className="px-2.5 py-1 bg-white hover:bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold rounded-lg transition-all shadow-xs flex items-center space-x-1"
+                  >
+                    <span>📄 Sample CSV (.csv)</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Result Summary (if any) */}
+              {bulkCourseUnitsResult && (
+                <div className="space-y-2 bg-slate-50 p-3 rounded-xl border border-slate-200">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="px-2.5 py-0.5 rounded-full text-xs font-black bg-emerald-100 text-emerald-800">
+                      ✅ {bulkCourseUnitsResult.created_count} Created
+                    </span>
+                    <span className="px-2.5 py-0.5 rounded-full text-xs font-black bg-blue-100 text-blue-800">
+                      🔄 {bulkCourseUnitsResult.updated_count} Updated
+                    </span>
+                    {bulkCourseUnitsResult.courses_created > 0 && (
+                      <span className="px-2.5 py-0.5 rounded-full text-xs font-black bg-purple-100 text-purple-800">
+                        🎓 {bulkCourseUnitsResult.courses_created} Courses Linked
+                      </span>
+                    )}
+                    <span className="text-xs text-slate-500 font-bold">
+                      (Total rows: {bulkCourseUnitsResult.total_rows})
+                    </span>
+                  </div>
+
+                  {bulkCourseUnitsResult.units?.length > 0 && (
+                    <div className="max-h-28 overflow-y-auto custom-scrollbar border border-slate-200 bg-white rounded-lg p-2 text-[11px] space-y-1">
+                      <p className="font-bold text-slate-800">Imported Units Preview:</p>
+                      {bulkCourseUnitsResult.units.slice(0, 10).map((u, idx) => (
+                        <p key={idx} className="text-slate-600">
+                          • <strong className="text-brand-dark">{u.code}</strong> - {u.name} (Course: {u.course}, Faculty: {u.faculty || 'General'})
+                        </p>
+                      ))}
+                      {bulkCourseUnitsResult.units.length > 10 && (
+                        <p className="text-slate-400 italic">+ {bulkCourseUnitsResult.units.length - 10} more course units</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Footer Actions */}
+              <div className="flex items-center justify-end space-x-2 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => { setShowBulkCourseUnitsModal(false); setBulkCourseUnitsResult(null); }}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition-all"
+                >
+                  Close
+                </button>
+                <button
+                  type="submit"
+                  disabled={uploadingBulkCourseUnits || !bulkCourseUnitsFile}
+                  className="px-5 py-2 bg-brand-dark hover:bg-slate-850 text-white font-bold rounded-xl transition-all shadow-md disabled:opacity-50 flex items-center space-x-1.5"
+                >
+                  <span>{uploadingBulkCourseUnits ? 'Processing Units File...' : '⚡ Import Course Units'}</span>
                 </button>
               </div>
             </form>

@@ -94,11 +94,12 @@ export default function FacultyManagementPage() {
   });
   const [selectedUnitYearFilter, setSelectedUnitYearFilter] = useState('All');
 
-  // CSV Import State
+  // Course Units Import State (Excel & CSV)
   const [showCsvModal, setShowCsvModal] = useState(false);
   const [csvFile, setCsvFile] = useState(null);
   const [csvText, setCsvText] = useState('');
   const [csvTargetCourse, setCsvTargetCourse] = useState('');
+  const [csvTargetFaculty, setCsvTargetFaculty] = useState('');
 
   // Form State (Create Class Timetable)
   const [showTimetableModal, setShowTimetableModal] = useState(false);
@@ -303,17 +304,47 @@ export default function FacultyManagementPage() {
       if (csvTargetCourse) {
         formData.append('course_code', csvTargetCourse);
       }
+      if (csvTargetFaculty) {
+        formData.append('faculty_code', csvTargetFaculty);
+      }
 
-      const res = await api.post('/course-units/upload_csv/', formData);
-      setSuccessMsg(res.detail || 'Course units imported from CSV successfully!');
+      const res = await api.post('/course-units/bulk_upload/', formData);
+      setSuccessMsg(res.detail || 'Course units imported successfully!');
       setShowCsvModal(false);
       setCsvFile(null);
       setCsvText('');
       loadFacultyData();
     } catch (err) {
-      setErrorMsg(err.message || 'Failed to import CSV course units.');
+      setErrorMsg(err.message || 'Failed to import course units.');
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const downloadSampleCourseUnits = async (format = 'xlsx') => {
+    try {
+      const tokensStr = localStorage.getItem('ciu_tokens');
+      let token = '';
+      if (tokensStr) {
+        try { token = JSON.parse(tokensStr).access; } catch (e) {}
+      }
+      const rawBaseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api';
+      const API_BASE_URL = rawBaseUrl.replace(/\/$/, '');
+      const res = await fetch(`${API_BASE_URL}/course-units/sample_file/?format=${format}`, {
+        headers: token ? { 'Authorization': `Bearer ${token}` } : {}
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = format === 'xlsx' ? 'sample_course_units.xlsx' : 'sample_course_units.csv';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+    } catch (e) {
+      downloadSampleCsv('curriculum');
     }
   };
 
@@ -2092,42 +2123,62 @@ export default function FacultyManagementPage() {
         </div>
       )}
 
-      {/* MODAL: UPLOAD CSV COURSE UNITS */}
+      {/* MODAL: UPLOAD COURSE UNITS (EXCEL & CSV) */}
       {showCsvModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4 animate-fade-in">
           <div className="bg-white rounded-3xl max-w-lg w-full p-6 space-y-5 shadow-2xl border border-slate-100">
             <div className="flex justify-between items-center border-b border-slate-100 pb-3">
-              <h3 className="text-base font-bold text-slate-850">Upload Course Units CSV Package</h3>
+              <div>
+                <h3 className="text-base font-bold text-slate-850">Bulk Upload Course Units</h3>
+                <p className="text-[11px] text-slate-500 font-medium">Auto-link units to their respective Courses & Faculties from Excel (.xlsx, .xls) or CSV</p>
+              </div>
               <button onClick={() => setShowCsvModal(false)} className="text-slate-400 hover:text-slate-600 font-bold">✕</button>
             </div>
 
             <form onSubmit={handleUploadCsvUnits} className="space-y-4 text-xs">
               <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl space-y-2 text-emerald-800">
-                <p className="font-bold">Supported CSV Header Formats:</p>
+                <p className="font-bold">Supported Header Formats (Excel & CSV):</p>
                 <div className="space-y-1 font-mono text-[11px]">
-                  <code className="block bg-white px-2 py-0.5 rounded border border-emerald-200">Year,Semester,Course Code,Course Name,Credit Units</code>
-                  <code className="block bg-white px-2 py-0.5 rounded border border-emerald-200">code,name,credit_units,course_code</code>
+                  <code className="block bg-white px-2 py-0.5 rounded border border-emerald-200">Unit Code, Unit Name, Course Code, Faculty Code, Year of Study, Credit Units, Lecturer Email</code>
+                  <code className="block bg-white px-2 py-0.5 rounded border border-emerald-200">Year, Semester, Course Code, Course Name, Credit Units</code>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-slate-700 font-bold uppercase mb-1">Fallback Faculty (Optional)</label>
+                  <select
+                    value={csvTargetFaculty}
+                    onChange={(e) => setCsvTargetFaculty(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-semibold text-xs"
+                  >
+                    <option value="">-- Auto-detect from file --</option>
+                    {faculties.map(f => (
+                      <option key={f.id} value={f.code}>[{f.code}] {f.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-slate-700 font-bold uppercase mb-1">Fallback Course (Optional)</label>
+                  <select
+                    value={csvTargetCourse}
+                    onChange={(e) => setCsvTargetCourse(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-semibold text-xs"
+                  >
+                    <option value="">-- Auto-detect from file --</option>
+                    {courses.map(c => (
+                      <option key={c.id} value={c.code}>[{c.code}] {c.name}</option>
+                    ))}
+                  </select>
                 </div>
               </div>
 
               <div>
-                <label className="block text-slate-700 font-bold uppercase mb-1">Target Course Program (If missing from CSV)</label>
-                <select
-                  value={csvTargetCourse}
-                  onChange={(e) => setCsvTargetCourse(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-semibold text-xs"
-                >
-                  {courses.map(c => (
-                    <option key={c.id} value={c.code}>[{c.code}] {c.name}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-slate-700 font-bold uppercase mb-1">Select CSV File</label>
+                <label className="block text-slate-700 font-bold uppercase mb-1">Select Excel (.xlsx, .xls) or CSV File</label>
                 <input
                   type="file"
-                  accept=".csv"
+                  accept=".xls,.xlsx,.csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"
                   onChange={(e) => setCsvFile(e.target.files[0])}
                   className="w-full text-xs text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-bold file:bg-brand-light/10 file:text-brand-dark hover:file:bg-brand-light/20"
                 />
@@ -2144,7 +2195,7 @@ export default function FacultyManagementPage() {
                   rows={4}
                   value={csvText}
                   onChange={(e) => setCsvText(e.target.value)}
-                  placeholder="Year,Semester,Course Code,Course Name,Credit Units&#10;Year 1,Semester 1,BML 1101-T,ENGLISH LANGUAGE AND SCIENTIFIC WRITING,3"
+                  placeholder="Unit Code,Unit Name,Course Code,Faculty Code,Year of Study,Credit Units&#10;BIT2104,Cloud Infrastructure Systems,BIT2026,FST,2,4&#10;BSN1101,Foundations of Nursing Care,BSN2026,FHS,1,3"
                   className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-mono text-[11px] resize-none"
                 />
               </div>
@@ -2153,18 +2204,18 @@ export default function FacultyManagementPage() {
                 <div className="flex items-center space-x-2">
                   <button
                     type="button"
-                    onClick={() => downloadSampleCsv('curriculum')}
-                    className="text-brand-light hover:text-brand-medium text-[11px] font-bold underline"
+                    onClick={() => downloadSampleCourseUnits('xlsx')}
+                    className="text-brand-dark hover:text-brand-medium text-[11px] font-bold underline flex items-center space-x-1"
                   >
-                    📥 Sample Curriculum CSV
+                    <span>📥 Sample Excel (.xlsx)</span>
                   </button>
                   <span className="text-slate-300">|</span>
                   <button
                     type="button"
-                    onClick={() => downloadSampleCsv('standard')}
-                    className="text-brand-light hover:text-brand-medium text-[11px] font-bold underline"
+                    onClick={() => downloadSampleCourseUnits('csv')}
+                    className="text-brand-light hover:text-brand-medium text-[11px] font-bold underline flex items-center space-x-1"
                   >
-                    📥 Standard CSV
+                    <span>📄 Sample CSV (.csv)</span>
                   </button>
                 </div>
 
@@ -2179,7 +2230,7 @@ export default function FacultyManagementPage() {
                   <button
                     type="submit"
                     disabled={submitting}
-                    className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-md"
+                    className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-md disabled:opacity-50"
                   >
                     {submitting ? 'Importing...' : 'Upload & Import Units'}
                   </button>
@@ -3009,10 +3060,10 @@ export default function FacultyManagementPage() {
               </div>
 
               <div>
-                <label className="block text-slate-700 font-bold uppercase mb-1">Select CSV File</label>
+                <label className="block text-slate-700 font-bold uppercase mb-1">Select Excel (.xlsx, .xls) or CSV File</label>
                 <input
                   type="file"
-                  accept=".csv"
+                  accept=".xls,.xlsx,.csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"
                   onChange={(e) => setStudentCsvFile(e.target.files[0])}
                   className="w-full text-xs text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-bold file:bg-brand-light/10 file:text-brand-dark hover:file:bg-brand-light/20"
                 />

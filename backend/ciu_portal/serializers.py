@@ -53,20 +53,28 @@ class AdminUserSerializer(serializers.ModelSerializer):
         model = User
         fields = ('id', 'username', 'email', 'password', 'first_name', 'last_name', 'role', 'phone', 'tuition_paid_percentage', 'faculty', 'faculty_name', 'faculty_code', 'assigned_courses', 'assigned_course_codes', 'reg_number', 'registration_number', 'year_of_study', 'semester', 'entry_year', 'intake', 'must_change_password', 'is_test_cleared', 'is_exam_cleared', 'clearance_source')
 
+    def validate_phone(self, value):
+        if value:
+            return str(value).strip()[:20]
+        return value
+
     def create(self, validated_data):
         password = validated_data.pop('password', None)
         user = super().create(validated_data)
-        if password:
-            user.set_password(password)
+        if password and str(password).strip():
+            user.set_password(str(password).strip())
             user.must_change_password = True
             user.save()
         return user
 
     def update(self, instance, validated_data):
         password = validated_data.pop('password', None)
+        assigned_courses = validated_data.pop('assigned_courses', None)
         user = super().update(instance, validated_data)
-        if password:
-            user.set_password(password)
+        if assigned_courses is not None:
+            user.assigned_courses.set(assigned_courses)
+        if password and str(password).strip():
+            user.set_password(str(password).strip())
             user.save()
         return user
 

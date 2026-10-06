@@ -227,6 +227,134 @@ def generate_csv_response(filename, headers, sample_rows):
         writer.writerow(r)
     return response
 
+def parse_tabular_file(uploaded_file=None, raw_content=None):
+    """
+    Universally parses Excel (.xlsx, .xls) and CSV files or raw CSV text into a list of row dicts.
+    Handles multiple sheets, trailing empty cells/rows, encoding variations, and header formatting.
+    """
+    rows = []
+    if uploaded_file:
+        file_bytes = uploaded_file.read()
+        filename = getattr(uploaded_file, 'name', '').lower()
+        is_excel = False
+
+        # Attempt modern Excel (.xlsx) with openpyxl
+        if filename.endswith('.xlsx') or file_bytes.startswith(b'PK\x03\x04'):
+            is_excel = True
+            try:
+                import openpyxl
+                import io
+                wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
+                for ws in wb.worksheets:
+                    iter_rows = list(ws.iter_rows(values_only=True))
+                    if not iter_rows:
+                        continue
+                    headers = [re.sub(r'[\s_]+', ' ', str(c or '').strip().lower().replace('.', '')) for c in iter_rows[0]]
+                    for row_data in iter_rows[1:]:
+                        row_vals = [clean_sheet_cell(c) for c in row_data]
+                        if not any(row_vals):
+                            continue
+                        row_dict = {headers[i]: row_vals[i] for i in range(min(len(headers), len(row_vals))) if headers[i]}
+                        if row_dict:
+                            rows.append(row_dict)
+            except Exception:
+                try:
+                    import xlrd
+                    wb = xlrd.open_workbook(file_contents=file_bytes)
+                    for sheet_name in wb.sheet_names():
+                        ws = wb.sheet_by_name(sheet_name)
+                        if ws.nrows < 2:
+                            continue
+                        headers = [re.sub(r'[\s_]+', ' ', str(cell).strip().lower().replace('.', '')) for cell in ws.row_values(0)]
+                        for r_idx in range(1, ws.nrows):
+                            row_vals = [clean_sheet_cell(c) for c in ws.row_values(r_idx)]
+                            if not any(row_vals):
+                                continue
+                            row_dict = {headers[i]: row_vals[i] for i in range(min(len(headers), len(row_vals))) if headers[i]}
+                            if row_dict:
+                                rows.append(row_dict)
+                except Exception:
+                    pass
+
+        # Attempt legacy Excel (.xls) with xlrd
+        elif filename.endswith('.xls') or file_bytes.startswith(b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1'):
+            is_excel = True
+            try:
+                import xlrd
+                wb = xlrd.open_workbook(file_contents=file_bytes)
+                for sheet_name in wb.sheet_names():
+                    ws = wb.sheet_by_name(sheet_name)
+                    if ws.nrows < 2:
+                        continue
+                    headers = [re.sub(r'[\s_]+', ' ', str(cell).strip().lower().replace('.', '')) for cell in ws.row_values(0)]
+                    for r_idx in range(1, ws.nrows):
+                        row_vals = [clean_sheet_cell(c) for c in ws.row_values(r_idx)]
+                        if not any(row_vals):
+                            continue
+                        row_dict = {headers[i]: row_vals[i] for i in range(min(len(headers), len(row_vals))) if headers[i]}
+                        if row_dict:
+                            rows.append(row_dict)
+            except Exception:
+                try:
+                    import openpyxl
+                    import io
+                    wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
+                    for ws in wb.worksheets:
+                        iter_rows = list(ws.iter_rows(values_only=True))
+                        if not iter_rows:
+                            continue
+                        headers = [re.sub(r'[\s_]+', ' ', str(c or '').strip().lower().replace('.', '')) for c in iter_rows[0]]
+                        for row_data in iter_rows[1:]:
+                            row_vals = [clean_sheet_cell(c) for c in row_data]
+                            if not any(row_vals):
+                                continue
+                            row_dict = {headers[i]: row_vals[i] for i in range(min(len(headers), len(row_vals))) if headers[i]}
+                            if row_dict:
+                                rows.append(row_dict)
+                except Exception:
+                    pass
+
+        # If not parsed as Excel or failed, parse as CSV
+        if not rows and not is_excel:
+            text_str = None
+            for enc in ['utf-8-sig', 'utf-8', 'latin-1', 'cp1252', 'iso-8859-1']:
+                try:
+                    text_str = file_bytes.decode(enc)
+                    break
+                except UnicodeDecodeError:
+                    continue
+            if text_str is None:
+                text_str = file_bytes.decode('utf-8', errors='ignore')
+
+            import io
+            reader = csv.reader(io.StringIO(text_str))
+            header = None
+            for r in reader:
+                if not r or not any(str(c).strip() for c in r):
+                    continue
+                if header is None:
+                    header = [re.sub(r'[\s_]+', ' ', c.strip().lower().replace('.', '')) for c in r]
+                    continue
+                row_dict = {header[i]: clean_sheet_cell(r[i]) for i in range(min(len(header), len(r))) if header[i]}
+                if row_dict:
+                    rows.append(row_dict)
+
+    elif raw_content:
+        import io
+        reader = csv.reader(io.StringIO(str(raw_content)))
+        header = None
+        for r in reader:
+            if not r or not any(str(c).strip() for c in r):
+                continue
+            if header is None:
+                header = [re.sub(r'[\s_]+', ' ', c.strip().lower().replace('.', '')) for c in r]
+                continue
+            row_dict = {header[i]: clean_sheet_cell(r[i]) for i in range(min(len(header), len(r))) if header[i]}
+            if row_dict:
+                rows.append(row_dict)
+
+    return rows
+
 # 4. System Admin User Management ViewSet
 class AdminUserViewSet(viewsets.ModelViewSet):
     serializer_class = AdminUserSerializer
@@ -242,7 +370,7 @@ class AdminUserViewSet(viewsets.ModelViewSet):
             return [permissions.IsAuthenticated(), (IsAdmin | IsPlatformCoordinator | IsFacultyAdmin | IsRegistrar)()]
         if self.action in ['bulk_onboard_staff']:
             return [permissions.IsAuthenticated(), (IsAdmin | IsPlatformCoordinator)()]
-        return [permissions.IsAuthenticated(), IsAdmin()]
+        return [permissions.IsAuthenticated(), (IsAdmin | IsPlatformCoordinator)()]
 
     def perform_content_negotiation(self, request, force=False):
         if self.action in ['sample_student_file', 'sample_staff_file', 'sample_allocation_csv', 'sample_student_csv', 'sample_student_excel', 'sample_staff_csv', 'sample_staff_excel']:
@@ -347,24 +475,92 @@ class AdminUserViewSet(viewsets.ModelViewSet):
             'barred_count': barred_count
         })
 
+    def create(self, request, *args, **kwargs):
+        if request.user.role == 'platform_coordinator' and request.data.get('role') == 'admin':
+            return Response(
+                {'detail': 'Platform Coordinators cannot create System Administrator accounts.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        return super().create(request, *args, **kwargs)
+
     def update(self, request, *args, **kwargs):
         user_obj = self.get_object()
-        if request.user.role == 'platform_coordinator' and user_obj.role == 'admin':
-            if 'password' in request.data or 'new_password' in request.data:
-                return Response({'detail': 'Platform Coordinator cannot reset or change System Admin password.'}, status=status.HTTP_403_FORBIDDEN)
-        return super().update(request, *args, **kwargs)
+        is_coordinator = request.user.role == 'platform_coordinator'
+        is_target_admin = (
+            user_obj.role == 'admin' or
+            getattr(user_obj, 'is_superuser', False) or
+            user_obj.username.lower() == 'admin'
+        )
+
+        # Platform Coordinator cannot edit or modify System Admin accounts or credentials
+        if is_coordinator and is_target_admin:
+            return Response(
+                {'detail': 'Platform Coordinators cannot edit or modify System Administrator accounts or credentials.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        # Platform Coordinator cannot elevate any user to admin
+        if is_coordinator and request.data.get('role') == 'admin':
+            return Response(
+                {'detail': 'Platform Coordinators cannot assign or elevate accounts to System Administrator.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        response = super().update(request, *args, **kwargs)
+
+        # If a new password was provided in payload, ensure it is saved
+        raw_pass = request.data.get('password') or request.data.get('new_password')
+        if raw_pass and str(raw_pass).strip():
+            user_obj.refresh_from_db()
+            user_obj.set_password(str(raw_pass).strip())
+            user_obj.save()
+            log_system_event(request.user, "ADMIN_USER_PASSWORD_UPDATED", level="AUDIT", details=f"Password updated for user {user_obj.username}.")
+
+        log_system_event(request.user, "USER_UPDATE_SUCCESS", level="AUDIT", details=f"User {user_obj.username} profile updated by {request.user.username}.")
+        return response
+
+    def partial_update(self, request, *args, **kwargs):
+        kwargs['partial'] = True
+        return self.update(request, *args, **kwargs)
 
     def destroy(self, request, *args, **kwargs):
         user_obj = self.get_object()
-        if request.user.role == 'platform_coordinator' and user_obj.role == 'admin':
-            return Response({'detail': 'Platform Coordinator cannot delete System Admin accounts.'}, status=status.HTTP_403_FORBIDDEN)
-        return super().destroy(request, *args, **kwargs)
+        if request.user.id == user_obj.id:
+            return Response(
+                {'detail': 'You cannot delete your own active administrator account.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
-    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsAdmin])
+        is_target_admin = (
+            user_obj.role == 'admin' or
+            getattr(user_obj, 'is_superuser', False) or
+            user_obj.username.lower() == 'admin'
+        )
+        if request.user.role == 'platform_coordinator' and is_target_admin:
+            return Response(
+                {'detail': 'Platform Coordinators cannot delete System Administrator accounts.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        username = user_obj.username
+        role = user_obj.role
+        user_obj.delete()
+        log_system_event(request.user, "USER_DELETE_SUCCESS", level="AUDIT", details=f"{request.user.username} deleted user account {username} ({role}).")
+        return Response({'detail': f'User account {username} deleted successfully.'}, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, (IsAdmin | IsPlatformCoordinator)])
     def reset_password(self, request, pk=None):
         user_obj = self.get_object()
-        if request.user.role == 'platform_coordinator' and user_obj.role == 'admin':
-            return Response({'detail': 'Platform Coordinator cannot reset System Admin password.'}, status=status.HTTP_403_FORBIDDEN)
+        is_target_admin = (
+            user_obj.role == 'admin' or
+            getattr(user_obj, 'is_superuser', False) or
+            user_obj.username.lower() == 'admin'
+        )
+        if request.user.role == 'platform_coordinator' and is_target_admin:
+            return Response(
+                {'detail': 'Platform Coordinators cannot reset System Administrator password.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
         new_password = (request.data.get('new_password') or request.data.get('password') or '').strip()
         if not new_password:
             return Response({'detail': 'New password parameter is required.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -378,7 +574,7 @@ class AdminUserViewSet(viewsets.ModelViewSet):
             'new_password': new_password
         })
 
-    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsAdmin])
+    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, (IsAdmin | IsPlatformCoordinator)])
     def bulk_delete(self, request):
         user_ids = request.data.get('user_ids', [])
         if not user_ids or not isinstance(user_ids, list):
@@ -387,15 +583,15 @@ class AdminUserViewSet(viewsets.ModelViewSet):
         user_ids = [uid for uid in user_ids if uid != request.user.id]
         qs = User.objects.filter(id__in=user_ids)
         if request.user.role == 'platform_coordinator':
-            qs = qs.exclude(role='admin')
+            qs = qs.exclude(models.Q(role='admin') | models.Q(is_superuser=True) | models.Q(username__iexact='admin'))
         deleted_count, _ = qs.delete()
-        log_system_event(request.user, "BULK_USER_DELETE_SUCCESS", level="AUDIT", details=f"Admin deleted {deleted_count} user accounts in bulk.")
+        log_system_event(request.user, "BULK_USER_DELETE_SUCCESS", level="AUDIT", details=f"{request.user.username} deleted {deleted_count} user accounts in bulk.")
         return Response({
             'detail': f'Successfully deleted {deleted_count} selected user accounts.',
             'count': deleted_count
         })
 
-    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsAdmin])
+    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, (IsAdmin | IsPlatformCoordinator)])
     def bulk_reset_passwords(self, request):
         user_ids = request.data.get('user_ids', [])
         new_password = (request.data.get('new_password') or request.data.get('password') or '').strip()
@@ -406,7 +602,7 @@ class AdminUserViewSet(viewsets.ModelViewSet):
 
         users_to_update = User.objects.filter(id__in=user_ids)
         if request.user.role == 'platform_coordinator':
-            users_to_update = users_to_update.exclude(role='admin')
+            users_to_update = users_to_update.exclude(models.Q(role='admin') | models.Q(is_superuser=True) | models.Q(username__iexact='admin'))
 
         updated_count = 0
         for u in users_to_update:
@@ -466,42 +662,26 @@ class AdminUserViewSet(viewsets.ModelViewSet):
             'count': updated_count
         })
 
-    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsAdmin | IsFacultyAdmin | IsRegistrar])
+    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsAdmin | IsPlatformCoordinator | IsFacultyAdmin | IsRegistrar])
     def bulk_allocate_csv(self, request):
-        csv_file = request.FILES.get('file') or request.FILES.get('csv_file')
-        csv_text = request.data.get('csv_text')
+        uploaded_file = request.FILES.get('file') or request.FILES.get('csv_file') or request.FILES.get('excel_file')
+        raw_content = request.data.get('content') or request.data.get('csv_text') or request.data.get('csv_content')
 
-        if not csv_file and not csv_text:
-            return Response({'detail': 'Please upload a CSV file or provide csv_text data.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not uploaded_file and not raw_content:
+            return Response({'detail': 'Please upload an Excel (.xlsx/.xls) or CSV (.csv) file or provide csv_text data.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        lines = []
-        if csv_file:
-            decoded = csv_file.read().decode('utf-8-sig', errors='ignore')
-            lines = decoded.splitlines()
-        elif csv_text:
-            lines = csv_text.splitlines()
+        rows = parse_tabular_file(uploaded_file=uploaded_file, raw_content=raw_content)
+        if not rows:
+            return Response({'detail': 'No allocation rows found in the uploaded file.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        reader = csv.reader(lines)
-        header = None
         allocated_count = 0
         duplicate_count = 0
         not_found_count = 0
         total_rows = 0
         seen_entries = set()
 
-        for row in reader:
-            if not row or not any(row):
-                continue
-            if header is None:
-                header = [c.strip().lower() for c in row]
-                continue
-
+        for row_dict in rows:
             total_rows += 1
-            row_dict = {}
-            for i, val in enumerate(row):
-                if i < len(header):
-                    row_dict[header[i]] = val.strip()
-
             reg_num = (row_dict.get('reg_number') or row_dict.get('reg_no') or row_dict.get('reg no') or
                        row_dict.get('registration_number') or row_dict.get('student_id') or
                        row_dict.get('username') or row_dict.get('email') or '')
@@ -517,7 +697,7 @@ class AdminUserViewSet(viewsets.ModelViewSet):
                 continue
 
             # Deduplication key across file batch
-            batch_key = (reg_num.lower(), faculty_code.lower(), course_code.lower(), str(year_val_raw), str(semester_raw))
+            batch_key = (str(reg_num).lower(), str(faculty_code).lower(), str(course_code).lower(), str(year_val_raw), str(semester_raw))
             if batch_key in seen_entries:
                 duplicate_count += 1
                 continue
@@ -678,7 +858,7 @@ class AdminUserViewSet(viewsets.ModelViewSet):
         ]
         return generate_excel_response('sample_staff_list.xlsx', headers, sample_rows, sheet_title="Staff Onboarding")
 
-    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsAdmin])
+    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsAdmin | IsPlatformCoordinator])
     def bulk_onboard_staff(self, request):
         uploaded_file = request.FILES.get('file') or request.FILES.get('staff_file') or request.FILES.get('excel_file') or request.FILES.get('csv_file')
         raw_content = request.data.get('content') or request.data.get('csv_content')
@@ -689,84 +869,19 @@ class AdminUserViewSet(viewsets.ModelViewSet):
         if not uploaded_file and not raw_content:
             return Response({'detail': 'Please provide an Excel (.xls, .xlsx) or CSV file containing staff members.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        rows = []
-        filename = getattr(uploaded_file, 'name', '').lower() if uploaded_file else ''
-
-        if uploaded_file:
-            file_bytes = uploaded_file.read()
-            if filename.endswith('.xls') or file_bytes.startswith(b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1'):
-                # Process with xlrd (.xls legacy Excel format)
-                try:
-                    import xlrd
-                    book = xlrd.open_workbook(file_contents=file_bytes)
-                    sheet = book.sheet_by_index(0)
-                    if sheet.nrows > 0:
-                        headers = [str(sheet.cell_value(0, c)).strip().lower().replace('_', ' ') for c in range(sheet.ncols)]
-                        for r in range(1, sheet.nrows):
-                            row_vals = [sheet.cell_value(r, c) for c in range(sheet.ncols)]
-                            if any(str(v).strip() for v in row_vals):
-                                rows.append(dict(zip(headers, row_vals)))
-                except Exception as e:
-                    return Response({'detail': f'Failed to parse .xls Excel file: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
-
-            elif filename.endswith('.xlsx') or file_bytes.startswith(b'PK\x03\x04'):
-                # Process with openpyxl (.xlsx modern Excel format)
-                try:
-                    import openpyxl
-                    import io
-                    wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
-                    sheet = wb.active
-                    iter_rows = list(sheet.iter_rows(values_only=True))
-                    if iter_rows:
-                        headers = [str(c or '').strip().lower().replace('_', ' ') for c in iter_rows[0]]
-                        for row_vals in iter_rows[1:]:
-                            if any(str(v or '').strip() for v in row_vals):
-                                rows.append(dict(zip(headers, row_vals)))
-                except Exception as e:
-                    return Response({'detail': f'Failed to parse .xlsx Excel file: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
-
-            else:
-                # Process as CSV / text
-                try:
-                    import io
-                    text_str = None
-                    for encoding in ['utf-8-sig', 'utf-8', 'latin-1', 'cp1252']:
-                        try:
-                            text_str = file_bytes.decode(encoding)
-                            break
-                        except UnicodeDecodeError:
-                            continue
-                    if text_str is None:
-                        text_str = file_bytes.decode('utf-8', errors='ignore')
-                    
-                    reader = csv.reader(io.StringIO(text_str))
-                    lines = [r for r in reader if any(cell.strip() for cell in r)]
-                    if lines:
-                        headers = [c.strip().lower().replace('_', ' ') for c in lines[0]]
-                        for row_vals in lines[1:]:
-                            rows.append(dict(zip(headers, row_vals)))
-                except Exception as e:
-                    return Response({'detail': f'Failed to parse CSV file: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
-
-        elif raw_content:
-            import io
-            reader = csv.reader(io.StringIO(raw_content))
-            lines = [r for r in reader if any(cell.strip() for cell in r)]
-            if lines:
-                headers = [c.strip().lower().replace('_', ' ') for c in lines[0]]
-                for row_vals in lines[1:]:
-                    rows.append(dict(zip(headers, row_vals)))
-
+        rows = parse_tabular_file(uploaded_file=uploaded_file, raw_content=raw_content)
         if not rows:
             return Response({'detail': 'No staff rows found in the uploaded file.'}, status=status.HTTP_400_BAD_REQUEST)
 
         default_faculty = None
         if default_faculty_id:
-            default_faculty = Faculty.objects.filter(id=default_faculty_id).first()
+            default_faculty = Faculty.objects.filter(models.Q(id=int(default_faculty_id) if str(default_faculty_id).isdigit() else 0) | models.Q(code__iexact=str(default_faculty_id).strip())).first()
 
         created_users = []
+        updated_users = []
         skipped_users = []
         created_count = 0
+        updated_count = 0
         skipped_count = 0
 
         from django.contrib.auth.hashers import make_password
@@ -784,8 +899,6 @@ class AdminUserViewSet(viewsets.ModelViewSet):
             for k, v in row.items():
                 k_clean = str(k).strip().lower()
                 val_str = str(v).strip() if v is not None else ''
-                if isinstance(v, float) and v.is_integer():
-                    val_str = str(int(v))
 
                 if any(x in k_clean for x in ['employee name', 'staff name', 'full name', 'name']) and not any(x in k_clean for x in ['user', 'login']):
                     raw_name = raw_name or val_str
@@ -838,14 +951,32 @@ class AdminUserViewSet(viewsets.ModelViewSet):
                     target_faculty = fac
 
             # Deduplication: Check if username already exists
-            if User.objects.filter(username__iexact=username).exists():
-                skipped_count += 1
-                skipped_users.append({
-                    'username': username,
-                    'email': email,
-                    'name': raw_name or f"{first_name} {last_name}".strip(),
-                    'reason': f"Username '{username}' already exists in system"
-                })
+            existing_user = User.objects.filter(username__iexact=username).first()
+            if existing_user:
+                did_update = False
+                if target_faculty and not existing_user.faculty:
+                    existing_user.faculty = target_faculty
+                    did_update = True
+                if raw_phone and not existing_user.phone:
+                    existing_user.phone = raw_phone[:20]
+                    did_update = True
+                if did_update:
+                    existing_user.save()
+                    updated_count += 1
+                    updated_users.append({
+                        'username': username,
+                        'name': f"{existing_user.first_name} {existing_user.last_name}".strip(),
+                        'role': existing_user.role,
+                        'faculty': existing_user.faculty.code if existing_user.faculty else None
+                    })
+                else:
+                    skipped_count += 1
+                    skipped_users.append({
+                        'username': username,
+                        'email': email,
+                        'name': raw_name or f"{first_name} {last_name}".strip(),
+                        'reason': f"Username '{username}' already exists in system"
+                    })
                 continue
 
             try:
@@ -854,7 +985,7 @@ class AdminUserViewSet(viewsets.ModelViewSet):
                     email=email,
                     first_name=first_name,
                     last_name=last_name,
-                    phone=raw_phone[:30] if raw_phone else '',
+                    phone=raw_phone[:20] if raw_phone else '',
                     role=target_role,
                     faculty=target_faculty,
                     password=hashed_default_pwd,
@@ -881,15 +1012,17 @@ class AdminUserViewSet(viewsets.ModelViewSet):
                     'reason': f"Database error: {str(e)}"
                 })
 
-        msg = f"Bulk Staff Onboarding: Successfully onboarded {created_count} staff accounts ({skipped_count} skipped/duplicates)."
+        msg = f"Bulk Staff Onboarding: Successfully processed staff roster ({created_count} created, {updated_count} updated, {skipped_count} skipped/duplicates)."
         log_system_event(request.user, "BULK_STAFF_ONBOARDING_SUCCESS", level="AUDIT", details=msg)
 
         return Response({
             'detail': msg,
             'total_rows': len(rows),
             'created_count': created_count,
+            'updated_count': updated_count,
             'skipped_count': skipped_count,
             'created_users': created_users,
+            'updated_users': updated_users,
             'skipped_users': skipped_users
         })
 
@@ -1638,9 +1771,17 @@ class CourseUnitViewSet(viewsets.ModelViewSet):
     def get_permissions(self):
         if self.action in ['list', 'retrieve']:
             return [permissions.IsAuthenticated()]
-        if self.action == 'assign_lecturer':
-            return [permissions.IsAuthenticated(), (IsAdmin | IsFacultyAdmin)()]
-        return [permissions.IsAuthenticated(), (IsAdmin | IsFacultyAdmin)()]
+        if self.action in ['sample_csv', 'sample_excel', 'sample_file']:
+            return [permissions.AllowAny()]
+        if self.action in ['upload_csv', 'bulk_upload', 'assign_lecturer']:
+            return [permissions.IsAuthenticated(), (IsAdmin | IsPlatformCoordinator | IsFacultyAdmin | IsDean | IsRegistrar)()]
+        return [permissions.IsAuthenticated(), (IsAdmin | IsPlatformCoordinator | IsFacultyAdmin)()]
+
+    def perform_content_negotiation(self, request, force=False):
+        if self.action in ['sample_csv', 'sample_excel', 'sample_file']:
+            from rest_framework.renderers import JSONRenderer
+            return (JSONRenderer(), 'application/json')
+        return super().perform_content_negotiation(request, force=force)
 
     def get_queryset(self):
         user = self.request.user
@@ -1662,7 +1803,7 @@ class CourseUnitViewSet(viewsets.ModelViewSet):
             ).distinct().order_by('code')
         return CourseUnit.objects.all().order_by('code')
 
-    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsAdmin | IsFacultyAdmin])
+    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsAdmin | IsPlatformCoordinator | IsFacultyAdmin | IsDean])
     def assign_lecturer(self, request, pk=None):
         unit = self.get_object()
         lecturer_id = request.data.get('lecturer_id')
@@ -1696,152 +1837,268 @@ class CourseUnitViewSet(viewsets.ModelViewSet):
         except (ValueError, TypeError):
             return Response({'detail': 'Invalid lecturer_id format.'}, status=status.HTTP_400_BAD_REQUEST)
 
-    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsAdmin | IsFacultyAdmin])
-    def upload_csv(self, request):
-        csv_file = request.FILES.get('file') or request.FILES.get('csv_file')
-        csv_text = request.data.get('csv_text')
+    @action(detail=False, methods=['post'], url_path='bulk_upload', permission_classes=[permissions.IsAuthenticated, IsAdmin | IsPlatformCoordinator | IsFacultyAdmin | IsDean | IsRegistrar])
+    def bulk_upload(self, request):
+        uploaded_file = request.FILES.get('file') or request.FILES.get('excel_file') or request.FILES.get('csv_file')
+        raw_content = request.data.get('content') or request.data.get('csv_text') or request.data.get('csv_content')
+        default_course_code = request.data.get('course_code') or request.data.get('default_course_code')
+        default_faculty_code = request.data.get('faculty_code') or request.data.get('faculty_id') or request.data.get('faculty')
 
-        if not csv_file and not csv_text:
-            return Response({'detail': 'Please upload a CSV file or provide csv_text data.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not uploaded_file and not raw_content:
+            return Response({'detail': 'Please upload an Excel (.xlsx, .xls) or CSV (.csv) file.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        lines = []
-        if csv_file:
-            decoded = csv_file.read().decode('utf-8-sig', errors='ignore')
-            lines = decoded.splitlines()
-        elif csv_text:
-            lines = csv_text.splitlines()
+        rows = parse_tabular_file(uploaded_file=uploaded_file, raw_content=raw_content)
+        if not rows:
+            return Response({'detail': 'No course unit records found in uploaded file.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        reader = csv.reader(lines)
-        header = None
+        # Resolve default faculty & course if provided in request
+        default_faculty = None
+        if default_faculty_code:
+            default_faculty = Faculty.objects.filter(
+                models.Q(code__iexact=str(default_faculty_code).strip()) |
+                models.Q(name__icontains=str(default_faculty_code).strip()) |
+                models.Q(id=int(default_faculty_code) if str(default_faculty_code).isdigit() else 0)
+            ).first()
+
+        default_course = None
+        if default_course_code:
+            default_course = Course.objects.filter(
+                models.Q(code__iexact=str(default_course_code).strip()) |
+                models.Q(name__icontains=str(default_course_code).strip()) |
+                models.Q(id=int(default_course_code) if str(default_course_code).isdigit() else 0)
+            ).first()
+
         created_count = 0
         updated_count = 0
         duplicate_count = 0
+        courses_created = 0
         total_rows = 0
         seen_signatures = set()
+        created_units_summary = []
 
-        for row in reader:
-            if not row or not any(row):
-                continue
-            if header is None:
-                header = [c.strip().lower() for c in row]
+        for row in rows:
+            raw_code = ''
+            raw_name = ''
+            raw_course_code = ''
+            raw_course_name = ''
+            raw_faculty_ref = ''
+            raw_cu = ''
+            raw_yos = ''
+            raw_lecturer = ''
+
+            for k, v in row.items():
+                k_clean = str(k).strip().lower()
+                val_str = str(v).strip() if v is not None else ''
+
+                if any(x in k_clean for x in ['unit code', 'course unit code', 'cu code']) or (k_clean == 'code'):
+                    raw_code = raw_code or val_str
+                elif any(x in k_clean for x in ['unit name', 'course unit name', 'unit title', 'subject']) or (k_clean in ['title', 'unit']):
+                    raw_name = raw_name or val_str
+                elif any(x in k_clean for x in ['course code', 'program code', 'program', 'degree code', 'prog']):
+                    raw_course_code = raw_course_code or val_str
+                elif any(x in k_clean for x in ['course name', 'program name', 'degree name']):
+                    raw_course_name = raw_course_name or val_str
+                elif any(x in k_clean for x in ['faculty code', 'faculty', 'school', 'department']):
+                    raw_faculty_ref = raw_faculty_ref or val_str
+                elif any(x in k_clean for x in ['credit unit', 'credit units', 'credits', 'cu']):
+                    raw_cu = raw_cu or val_str
+                elif any(x in k_clean for x in ['year of study', 'year', 'yos', 'level']):
+                    raw_yos = raw_yos or val_str
+                elif any(x in k_clean for x in ['lecturer', 'instructor', 'teacher', 'staff']):
+                    raw_lecturer = raw_lecturer or val_str
+
+            # Fallback for standard curriculum format: "Year, Semester, Course Code, Course Name, Credit Units"
+            if not raw_code:
+                for k, v in row.items():
+                    k_clean = str(k).strip().lower()
+                    if 'code' in k_clean and v and not any(x in k_clean for x in ['faculty', 'user']):
+                        raw_code = str(v).strip()
+                        break
+            if not raw_name:
+                for k, v in row.items():
+                    k_clean = str(k).strip().lower()
+                    if 'name' in k_clean and v and not any(x in k_clean for x in ['faculty', 'user', 'employee']):
+                        raw_name = str(v).strip()
+                        break
+
+            if not raw_code or not raw_name:
                 continue
 
             total_rows += 1
-            row_dict = {}
-            for i, val in enumerate(row):
-                if i < len(header):
-                    row_dict[header[i]] = val.strip()
 
-            code = (row_dict.get('course code') or row_dict.get('code') or row_dict.get('unit_code') or
-                    row_dict.get('unit code') or '')
-            name = (row_dict.get('course name') or row_dict.get('name') or row_dict.get('unit_name') or
-                    row_dict.get('unit name') or '')
-            course_code = (row_dict.get('course_code') or row_dict.get('program_code') or row_dict.get('program') or
-                           row_dict.get('course') or request.data.get('course_code') or '')
-            credit_units = (row_dict.get('credit units') or row_dict.get('credit_units') or
-                            row_dict.get('credits') or '3')
-            year_of_study = (row_dict.get('year_of_study') or row_dict.get('year') or
-                             row_dict.get('year of study') or '1')
-            lecturer_ref = (row_dict.get('lecturer_email') or row_dict.get('lecturer') or
-                            row_dict.get('lecturer_username') or '')
+            # Credit units parsing
+            try:
+                cu_val = int(float(raw_cu)) if raw_cu else 3
+            except (ValueError, TypeError):
+                cu_val = 3
 
-            if not code or not name:
+            # Year of study parsing
+            try:
+                cleaned_yr = re.sub(r'[^\d]', '', str(raw_yos))
+                yr_val = int(cleaned_yr) if cleaned_yr and int(cleaned_yr) in [1, 2, 3, 4] else 1
+            except (ValueError, TypeError):
+                yr_val = 1
+
+            # 1. Resolve Faculty
+            target_faculty = None
+            if raw_faculty_ref:
+                target_faculty = (Faculty.objects.filter(code__iexact=raw_faculty_ref).first() or
+                                  Faculty.objects.filter(name__iexact=raw_faculty_ref).first() or
+                                  Faculty.objects.filter(name__icontains=raw_faculty_ref).first())
+                if not target_faculty and len(raw_faculty_ref) <= 20:
+                    target_faculty = Faculty.objects.create(code=raw_faculty_ref.upper().strip(), name=raw_faculty_ref.strip())
+            if not target_faculty and default_faculty:
+                target_faculty = default_faculty
+
+            # 2. Resolve Course
+            target_course = None
+            if raw_course_code:
+                target_course = (Course.objects.filter(code__iexact=raw_course_code).first() or
+                                 Course.objects.filter(name__iexact=raw_course_code).first() or
+                                 Course.objects.filter(code__icontains=raw_course_code).first())
+            if not target_course and raw_course_name:
+                target_course = (Course.objects.filter(name__iexact=raw_course_name).first() or
+                                 Course.objects.filter(name__icontains=raw_course_name).first())
+
+            # Auto-create Course if course code provided but does not exist
+            if not target_course and raw_course_code:
+                target_course = Course.objects.create(
+                    code=raw_course_code.upper().strip(),
+                    name=raw_course_name or raw_course_code.upper().strip(),
+                    faculty=target_faculty
+                )
+                courses_created += 1
+
+            if not target_course and default_course:
+                target_course = default_course
+
+            # Link Course to Faculty if Course exists without faculty
+            if target_course and target_faculty and not target_course.faculty:
+                target_course.faculty = target_faculty
+                target_course.save()
+
+            # If still no course, infer from unit code prefix or faculty
+            if not target_course:
+                match = re.match(r'^([A-Za-z]+)', raw_code.strip())
+                if match:
+                    prefix = match.group(1).upper()
+                    target_course = Course.objects.filter(code__istartswith=prefix).first()
+
+                if not target_course:
+                    if target_faculty:
+                        target_course = Course.objects.filter(faculty=target_faculty).first()
+                        if not target_course:
+                            target_course = Course.objects.create(
+                                code=f"{target_faculty.code}2026",
+                                name=f"{target_faculty.name} General Program",
+                                faculty=target_faculty
+                            )
+                            courses_created += 1
+                    else:
+                        target_course = Course.objects.first()
+
+            if not target_course:
                 continue
 
-            # Batch deduplication key
-            batch_key = (code.upper().strip(), course_code.upper().strip(), lecturer_ref.lower().strip())
+            # Deduplication in current batch
+            batch_key = (raw_code.upper().strip(), target_course.id)
             if batch_key in seen_signatures:
                 duplicate_count += 1
                 continue
             seen_signatures.add(batch_key)
 
-            try:
-                cu_val = int(float(credit_units))
-            except (ValueError, TypeError):
-                cu_val = 3
-
-            try:
-                cleaned_yr = re.sub(r'[^\d]', '', str(year_of_study))
-                yr_val = int(cleaned_yr) if cleaned_yr and int(cleaned_yr) in [1, 2, 3, 4] else 1
-            except (ValueError, TypeError):
-                yr_val = 1
-
-            course = None
-            if course_code:
-                try:
-                    course = Course.objects.get(code__iexact=course_code)
-                except Course.DoesNotExist:
-                    course = Course.objects.filter(code__icontains=course_code).first()
-
-            if not course:
-                course = Course.objects.first()
-
-            if not course:
-                continue
-
-            # Locate Lecturer if provided
+            # Resolve Lecturer if provided
             lecturer_obj = None
-            if lecturer_ref:
-                lecturer_obj = (User.objects.filter(role='lecturer', email__iexact=lecturer_ref).first() or
-                                User.objects.filter(role='lecturer', username__iexact=lecturer_ref).first() or
-                                User.objects.filter(email__iexact=lecturer_ref).first())
+            if raw_lecturer:
+                lecturer_obj = (User.objects.filter(role='lecturer', email__iexact=raw_lecturer).first() or
+                                User.objects.filter(role='lecturer', username__iexact=raw_lecturer).first() or
+                                User.objects.filter(email__iexact=raw_lecturer).first() or
+                                User.objects.filter(username__iexact=raw_lecturer).first())
 
-            existing_unit = CourseUnit.objects.filter(code__iexact=code, course=course).first()
+            existing_unit = CourseUnit.objects.filter(code__iexact=raw_code, course=target_course).first()
             if existing_unit:
-                # Check if identical (duplicate ignore)
-                is_identical = (
-                    existing_unit.name.strip().lower() == name.strip().lower() and
-                    existing_unit.credit_units == cu_val and
-                    existing_unit.year_of_study == yr_val
-                )
-                if lecturer_obj and not existing_unit.lecturers.filter(id=lecturer_obj.id).exists():
-                    is_identical = False
-
-                if is_identical:
-                    duplicate_count += 1
-                    continue
-
-                existing_unit.name = name
+                existing_unit.name = raw_name
                 existing_unit.credit_units = cu_val
                 existing_unit.year_of_study = yr_val
                 existing_unit.save()
                 if lecturer_obj:
                     existing_unit.lecturers.add(lecturer_obj)
                 updated_count += 1
+                created_units_summary.append({
+                    'code': existing_unit.code,
+                    'name': existing_unit.name,
+                    'course': target_course.code,
+                    'faculty': target_course.faculty.code if target_course.faculty else None,
+                    'action': 'updated'
+                })
             else:
                 new_unit = CourseUnit.objects.create(
-                    code=code,
-                    name=name,
-                    course=course,
+                    code=raw_code.upper().strip(),
+                    name=raw_name,
+                    course=target_course,
                     credit_units=cu_val,
                     year_of_study=yr_val
                 )
                 if lecturer_obj:
                     new_unit.lecturers.add(lecturer_obj)
                 created_count += 1
+                created_units_summary.append({
+                    'code': new_unit.code,
+                    'name': new_unit.name,
+                    'course': target_course.code,
+                    'faculty': target_course.faculty.code if target_course.faculty else None,
+                    'action': 'created'
+                })
 
-        msg = f"Course unit allocation completed: {created_count} created, {updated_count} updated, {duplicate_count} duplicate row(s) ignored."
-        log_system_event(request.user, "CSV_COURSE_UNITS_UPLOADED", level='INFO', details=msg)
+        msg = f"Course unit bulk import: {created_count} created, {updated_count} updated, {duplicate_count} duplicate rows ignored ({courses_created} courses auto-linked)."
+        log_system_event(request.user, "COURSE_UNITS_BULK_UPLOAD_SUCCESS", level='INFO', details=msg)
         return Response({
             'detail': msg,
             'created_count': created_count,
             'updated_count': updated_count,
             'duplicate_count': duplicate_count,
+            'courses_created': courses_created,
             'count': created_count + updated_count,
-            'total_rows': total_rows
+            'total_rows': total_rows,
+            'units': created_units_summary[:50]
         })
+
+    @action(detail=False, methods=['post'], url_path='upload_csv', permission_classes=[permissions.IsAuthenticated, IsAdmin | IsPlatformCoordinator | IsFacultyAdmin | IsDean | IsRegistrar])
+    def upload_csv(self, request):
+        return self.bulk_upload(request)
+
+    @action(detail=False, methods=['get'])
+    def sample_file(self, request):
+        fmt = request.query_params.get('format', 'csv').lower().strip()
+        headers = ['Unit Code', 'Unit Name', 'Course Code', 'Course Name', 'Faculty Code', 'Year of Study', 'Credit Units', 'Lecturer Email']
+        sample_rows = [
+            ['BIT2104', 'Cloud Infrastructure Systems', 'BIT2026', 'BSc. Computer Information Technology', 'FST', 2, 4, 'jizudi@ciu.ac.ug'],
+            ['BIT2105', 'Cybersecurity & Cryptography Principles', 'BIT2026', 'BSc. Computer Information Technology', 'FST', 2, 3, 'jtumwebaze@ciu.ac.ug'],
+            ['BSE2201', 'Software Architecture & Design', 'BSE2026', 'BSc. Software Engineering', 'FST', 2, 4, 'bkibwika@ciu.ac.ug'],
+            ['BSN1101', 'Foundations of Nursing Care', 'BSN2026', 'BSc. Nursing Sciences', 'FHS', 1, 3, 'dmugele@ciu.ac.ug'],
+            ['BML1101', 'Laboratory Instrumentation & Quality', 'BML2026', 'BSc. Medical Laboratory Science', 'IAH', 1, 4, 'skirya@ciu.ac.ug'],
+            ['BPH1101', 'Principles of Epidemiology & Biostatistics', 'BPH2026', 'BSc. Public Health', 'SOPH', 1, 3, 'pkihembo@ciu.ac.ug'],
+        ]
+        if fmt in ['xlsx', 'excel', 'xls']:
+            return generate_excel_response('sample_course_units.xlsx', headers, sample_rows, sheet_title="Course Units Allocation")
+        return generate_csv_response('sample_course_units.csv', headers, sample_rows)
 
     @action(detail=False, methods=['get'])
     def sample_csv(self, request):
-        response = HttpResponse(content_type='text/csv')
-        response['Content-Disposition'] = 'attachment; filename="sample_course_units_allocation.csv"'
-        writer = csv.writer(response)
-        writer.writerow(['unit_code', 'unit_name', 'course_code', 'year_of_study', 'credit_units', 'lecturer_email'])
-        writer.writerow(['BIT2104', 'Cloud Infrastructure Systems', 'BIT2026', '2', '4', 'lecturer@ciu.ac.ug'])
-        writer.writerow(['BIT2105', 'Cybersecurity & Cryptography Principles', 'BIT2026', '2', '3', 'lecturer@ciu.ac.ug'])
-        writer.writerow(['BCS1101', 'Structured Programming in C', 'BCS2026', '1', '4', 'lecturer@ciu.ac.ug'])
-        writer.writerow(['BSN2102', 'Human Anatomy & Clinical Physiology', 'BSN2026', '2', '4', 'lecturer@ciu.ac.ug'])
-        return response
+        return self.sample_file(request)
+
+    @action(detail=False, methods=['get'])
+    def sample_excel(self, request):
+        headers = ['Unit Code', 'Unit Name', 'Course Code', 'Course Name', 'Faculty Code', 'Year of Study', 'Credit Units', 'Lecturer Email']
+        sample_rows = [
+            ['BIT2104', 'Cloud Infrastructure Systems', 'BIT2026', 'BSc. Computer Information Technology', 'FST', 2, 4, 'jizudi@ciu.ac.ug'],
+            ['BIT2105', 'Cybersecurity & Cryptography Principles', 'BIT2026', 'BSc. Computer Information Technology', 'FST', 2, 3, 'jtumwebaze@ciu.ac.ug'],
+            ['BSE2201', 'Software Architecture & Design', 'BSE2026', 'BSc. Software Engineering', 'FST', 2, 4, 'bkibwika@ciu.ac.ug'],
+            ['BSN1101', 'Foundations of Nursing Care', 'BSN2026', 'BSc. Nursing Sciences', 'FHS', 1, 3, 'dmugele@ciu.ac.ug'],
+            ['BML1101', 'Laboratory Instrumentation & Quality', 'BML2026', 'BSc. Medical Laboratory Science', 'IAH', 1, 4, 'skirya@ciu.ac.ug'],
+            ['BPH1101', 'Principles of Epidemiology & Biostatistics', 'BPH2026', 'BSc. Public Health', 'SOPH', 1, 3, 'pkihembo@ciu.ac.ug'],
+        ]
+        return generate_excel_response('sample_course_units.xlsx', headers, sample_rows, sheet_title="Course Units Allocation")
 
 # 6. Applications ViewSet
 class ApplicationViewSet(viewsets.ModelViewSet):
