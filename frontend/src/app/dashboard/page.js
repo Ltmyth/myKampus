@@ -354,6 +354,26 @@ export default function DashboardPage() {
                 <span>Registered Email:</span>
                 <span className="font-bold text-slate-800">{user.email || 'N/A'}</span>
               </div>
+              {user.gender && (
+                <div className="flex justify-between">
+                  <span>Gender:</span>
+                  <span className="font-bold text-slate-800 capitalize">{user.gender_display || user.gender}</span>
+                </div>
+              )}
+              {user.role === 'student' && (
+                <>
+                  <div className="flex justify-between">
+                    <span>Study Level:</span>
+                    <span className="font-bold text-slate-800">Year {user.year_of_study || 1} · Sem {user.semester || 1}</span>
+                  </div>
+                  {user.intake && (
+                    <div className="flex justify-between">
+                      <span>Intake:</span>
+                      <span className="font-bold text-slate-800">{user.intake}</span>
+                    </div>
+                  )}
+                </>
+              )}
               <div className="flex justify-between">
                 <span>Account Status:</span>
                 <span className="font-bold text-brand-emerald bg-brand-emerald/10 px-2 py-0.5 rounded">Active</span>

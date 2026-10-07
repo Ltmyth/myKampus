@@ -34,7 +34,10 @@ export default function AdminPage() {
   const [singleRegNumber, setSingleRegNumber] = useState('');
   const [singleFullName, setSingleFullName] = useState('');
   const [singleEmail, setSingleEmail] = useState('');
+  const [singleGender, setSingleGender] = useState('other');
   const [singleFaculty, setSingleFaculty] = useState('');
+  const [singleYearOfStudy, setSingleYearOfStudy] = useState(1);
+  const [singleSemester, setSingleSemester] = useState(1);
   const [singleInitialPassword, setSingleInitialPassword] = useState('');
   const [excelFile, setExcelFile] = useState(null);
   const [customDefaultPass, setCustomDefaultPass] = useState('');
@@ -54,6 +57,10 @@ export default function AdminPage() {
   const [userGroupFilter, setUserGroupFilter] = useState('all'); // 'all', 'students', 'staff'
   const [userSearchTerm, setUserSearchTerm] = useState('');
   const [userRoleFilter, setUserRoleFilter] = useState('ALL');
+  const [userGenderFilter, setUserGenderFilter] = useState('ALL');
+  const [userYearFilter, setUserYearFilter] = useState('ALL');
+  const [userSemesterFilter, setUserSemesterFilter] = useState('ALL');
+  const [userIntakeFilter, setUserIntakeFilter] = useState('ALL');
   const [userClearanceFilter, setUserClearanceFilter] = useState('ALL'); // 'ALL', 'cleared', 'barred'
   const [userFacultyFilter, setUserFacultyFilter] = useState('ALL');
   const [userCourseFilter, setUserCourseFilter] = useState('ALL');
@@ -84,6 +91,7 @@ export default function AdminPage() {
   const [editEmail, setEditEmail] = useState('');
   const [editFirstName, setEditFirstName] = useState('');
   const [editLastName, setEditLastName] = useState('');
+  const [editGender, setEditGender] = useState('other');
   const [editPhone, setEditPhone] = useState('');
   const [editRole, setEditRole] = useState('student');
   const [editPassword, setEditPassword] = useState('');
@@ -99,6 +107,7 @@ export default function AdminPage() {
   // Bulk Student Allocation State
   const [showBulkAssignModal, setShowBulkAssignModal] = useState(false);
   const [bulkYearOfStudy, setBulkYearOfStudy] = useState(1);
+  const [bulkSemester, setBulkSemester] = useState(1);
   const [bulkFacultyId, setBulkFacultyId] = useState('');
   const [bulkCourseIds, setBulkCourseIds] = useState([]);
 
@@ -532,8 +541,8 @@ export default function AdminPage() {
 
     try {
       const formData = new FormData();
-      const csvHeader = "Registration No,Full Name,Email,Faculty,Entry Year,Intake,One Time Password\n";
-      const csvRow = `"${singleRegNumber.trim()}","${singleFullName.trim()}","${singleEmail.trim() || `student_${Date.now()}@ciu.ac.ug`}","${singleFaculty || 'SOBAT'}","${singleEntryYear}","${singleIntake}","${singleInitialPassword.trim()}"\n`;
+      const csvHeader = "Registration No,Full Name,Email,Gender,Faculty,Entry Year,Intake,Year of Study,Semester,One Time Password\n";
+      const csvRow = `"${singleRegNumber.trim()}","${singleFullName.trim()}","${singleEmail.trim() || `student_${Date.now()}@ciu.ac.ug`}","${singleGender || 'other'}","${singleFaculty || 'SOBAT'}","${singleEntryYear}","${singleIntake}","${singleYearOfStudy || 1}","${singleSemester || 1}","${singleInitialPassword.trim()}"\n`;
       const blob = new Blob([csvHeader + csvRow], { type: 'text/csv' });
       formData.append('file', blob, 'single_student.csv');
       formData.append('entry_year', singleEntryYear);
@@ -566,6 +575,9 @@ export default function AdminPage() {
         setSingleRegNumber('');
         setSingleFullName('');
         setSingleEmail('');
+        setSingleGender('other');
+        setSingleYearOfStudy(1);
+        setSingleSemester(1);
         setSingleInitialPassword('');
         loadAdminData();
       } else {
@@ -698,6 +710,7 @@ export default function AdminPage() {
     setEditEmail(u.email);
     setEditFirstName(u.first_name || '');
     setEditLastName(u.last_name || '');
+    setEditGender(u.gender || 'other');
     setEditPhone(u.phone || '');
     setEditRole(u.role);
     setEditPassword('');
@@ -737,6 +750,7 @@ export default function AdminPage() {
         email: editEmail.trim(),
         first_name: editFirstName.trim(),
         last_name: editLastName.trim(),
+        gender: editGender,
         phone: editPhone ? editPhone.trim().slice(0, 20) : '',
         role: editRole,
         tuition_paid_percentage: parseFloat(editTuitionPaid ?? 100.0),
@@ -779,6 +793,7 @@ export default function AdminPage() {
       const res = await api.post('/admin/users/bulk_assign_year_and_courses/', {
         user_ids: selectedUserIds,
         year_of_study: parseInt(bulkYearOfStudy || 1),
+        semester: parseInt(bulkSemester || 1),
         faculty_id: bulkFacultyId ? parseInt(bulkFacultyId) : null,
         course_ids: bulkCourseIds ? bulkCourseIds.map(id => parseInt(id)) : []
       });
@@ -1073,6 +1088,30 @@ export default function AdminPage() {
       if (!matchesCode && !matchesId) return false;
     }
 
+    // 7. Gender filter
+    if (userGenderFilter !== 'ALL') {
+      const g = (u.gender || '').toLowerCase();
+      if (g !== userGenderFilter.toLowerCase()) return false;
+    }
+
+    // 8. Year of study filter
+    if (userYearFilter !== 'ALL') {
+      const yr = String(u.year_of_study || 1);
+      if (yr !== String(userYearFilter)) return false;
+    }
+
+    // 9. Semester filter
+    if (userSemesterFilter !== 'ALL') {
+      const sem = String(u.semester || 1);
+      if (sem !== String(userSemesterFilter)) return false;
+    }
+
+    // 10. Intake filter
+    if (userIntakeFilter !== 'ALL') {
+      const intk = (u.intake || '').toLowerCase();
+      if (!intk.includes(userIntakeFilter.toLowerCase())) return false;
+    }
+
     return true;
   });
 
@@ -1347,6 +1386,74 @@ export default function AdminPage() {
                   </select>
                 </div>
               </div>
+
+              {/* Advanced Demographic & Academic Cohort Filters */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs pt-2 border-t border-slate-100">
+                <div>
+                  <label className="block text-slate-600 font-bold uppercase mb-1 text-[10px]">Filter Gender</label>
+                  <select
+                    value={userGenderFilter}
+                    onChange={(e) => { setUserGenderFilter(e.target.value); setCurrentPage(1); }}
+                    className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:bg-white"
+                  >
+                    <option value="ALL">All Genders</option>
+                    <option value="male">♂ Male</option>
+                    <option value="female">♀ Female</option>
+                    <option value="other">⚥ Other</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-slate-600 font-bold uppercase mb-1 text-[10px]">Year of Study</label>
+                  <select
+                    value={userYearFilter}
+                    onChange={(e) => { setUserYearFilter(e.target.value); setCurrentPage(1); }}
+                    className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:bg-white"
+                  >
+                    <option value="ALL">All Years</option>
+                    <option value="1">Year 1</option>
+                    <option value="2">Year 2</option>
+                    <option value="3">Year 3</option>
+                    <option value="4">Year 4</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-slate-600 font-bold uppercase mb-1 text-[10px]">Semester</label>
+                  <select
+                    value={userSemesterFilter}
+                    onChange={(e) => { setUserSemesterFilter(e.target.value); setCurrentPage(1); }}
+                    className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:bg-white"
+                  >
+                    <option value="ALL">All Semesters</option>
+                    <option value="1">Semester 1</option>
+                    <option value="2">Semester 2</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-slate-600 font-bold uppercase mb-1 text-[10px]">Cohort Intake</label>
+                  <select
+                    value={userIntakeFilter}
+                    onChange={(e) => { setUserIntakeFilter(e.target.value); setCurrentPage(1); }}
+                    className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:bg-white"
+                  >
+                    <option value="ALL">All 12 Intakes</option>
+                    <option value="January Intake">January Intake</option>
+                    <option value="February Intake">February Intake</option>
+                    <option value="March Intake">March Intake</option>
+                    <option value="April Intake">April Intake</option>
+                    <option value="May Intake">May Intake</option>
+                    <option value="June Intake">June Intake</option>
+                    <option value="July Intake">July Intake</option>
+                    <option value="August Intake">August Intake</option>
+                    <option value="September Intake">September Intake</option>
+                    <option value="October Intake">October Intake</option>
+                    <option value="November Intake">November Intake</option>
+                    <option value="December Intake">December Intake</option>
+                  </select>
+                </div>
+              </div>
             </div>
 
             {/* User Directory Main Table Card */}
@@ -1450,7 +1557,14 @@ export default function AdminPage() {
                             />
                           </td>
                           <td className="px-4 py-3 font-semibold text-slate-850">
-                            <div className="font-bold text-slate-900">{u.first_name ? `${u.first_name} ${u.last_name || ''}` : u.username}</div>
+                            <div className="font-bold text-slate-900 flex items-center flex-wrap gap-1">
+                              <span>{u.first_name ? `${u.first_name} ${u.last_name || ''}` : u.username}</span>
+                              {u.gender && (
+                                <span className={`px-1.5 py-0.2 rounded text-[9px] font-extrabold ${u.gender === 'female' ? 'bg-pink-50 text-pink-700 border border-pink-200' : u.gender === 'male' ? 'bg-blue-50 text-blue-700 border border-blue-200' : 'bg-slate-100 text-slate-700 border border-slate-200'}`}>
+                                  {u.gender === 'female' ? '♀ Female' : u.gender === 'male' ? '♂ Male' : '⚥ ' + (u.gender_display || u.gender)}
+                                </span>
+                              )}
+                            </div>
                             <div className="text-[11px] text-brand-dark font-mono font-bold">Username: @{u.username}</div>
                             <div className="text-[11px] text-slate-500 font-medium">{u.email}</div>
                             {u.role === 'student' && (
@@ -1461,8 +1575,13 @@ export default function AdminPage() {
                                   </span>
                                 )}
                                 <span className="text-[10px] text-teal-800 font-extrabold bg-teal-50 px-1.5 py-0.5 rounded border border-teal-200">
-                                  Year {u.year_of_study || 1}
+                                  Year {u.year_of_study || 1} · Sem {u.semester || 1}
                                 </span>
+                                {u.intake && (
+                                  <span className="text-[10px] text-purple-800 font-extrabold bg-purple-50 px-1.5 py-0.5 rounded border border-purple-200">
+                                    📅 {u.intake}
+                                  </span>
+                                )}
                                 {u.faculty_code && (
                                   <span className="text-[10px] text-blue-800 font-extrabold bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200">
                                     {u.faculty_code}
@@ -1941,6 +2060,19 @@ export default function AdminPage() {
                   </div>
 
                   <div>
+                    <label className="block text-slate-700 font-bold uppercase mb-1">Gender</label>
+                    <select
+                      value={singleGender}
+                      onChange={(e) => setSingleGender(e.target.value)}
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800"
+                    >
+                      <option value="male">♂ Male</option>
+                      <option value="female">♀ Female</option>
+                      <option value="other">⚥ Other</option>
+                    </select>
+                  </div>
+
+                  <div>
                     <label className="block text-slate-700 font-bold uppercase mb-1">Assigned Faculty</label>
                     <select
                       value={singleFaculty}
@@ -1951,6 +2083,32 @@ export default function AdminPage() {
                       {faculties.map(f => (
                         <option key={f.id} value={f.code}>[{f.code}] {f.name}</option>
                       ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-700 font-bold uppercase mb-1">Year of Study</label>
+                    <select
+                      value={singleYearOfStudy}
+                      onChange={(e) => setSingleYearOfStudy(e.target.value)}
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800"
+                    >
+                      <option value={1}>Year 1</option>
+                      <option value={2}>Year 2</option>
+                      <option value={3}>Year 3</option>
+                      <option value={4}>Year 4</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-700 font-bold uppercase mb-1">Semester</label>
+                    <select
+                      value={singleSemester}
+                      onChange={(e) => setSingleSemester(e.target.value)}
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800"
+                    >
+                      <option value={1}>Semester 1</option>
+                      <option value={2}>Semester 2</option>
                     </select>
                   </div>
 
@@ -1974,9 +2132,18 @@ export default function AdminPage() {
                       className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800"
                       required
                     >
-                      <option value="August Intake">August Intake</option>
                       <option value="January Intake">January Intake</option>
+                      <option value="February Intake">February Intake</option>
+                      <option value="March Intake">March Intake</option>
+                      <option value="April Intake">April Intake</option>
                       <option value="May Intake">May Intake</option>
+                      <option value="June Intake">June Intake</option>
+                      <option value="July Intake">July Intake</option>
+                      <option value="August Intake">August Intake</option>
+                      <option value="September Intake">September Intake</option>
+                      <option value="October Intake">October Intake</option>
+                      <option value="November Intake">November Intake</option>
+                      <option value="December Intake">December Intake</option>
                     </select>
                   </div>
                 </div>
@@ -2050,7 +2217,7 @@ export default function AdminPage() {
                   <label htmlFor="excel_upload_input" className="cursor-pointer font-bold text-brand-dark hover:underline text-xs block">
                     {excelFile ? `Selected: ${excelFile.name} (${(excelFile.size / 1024).toFixed(1)} KB)` : 'Click to choose Excel (.xlsx / .xls) or CSV file'}
                   </label>
-                  <p className="text-[10px] text-slate-400 mt-1 font-medium">Compatible columns: Registration Number, Full Name, Email, Faculty, Entry Year, Intake</p>
+                  <p className="text-[10px] text-slate-400 mt-1 font-medium">Compatible columns: Registration Number, Full Name, Email, Gender, Faculty, Entry Year, Intake</p>
                 </div>
 
                 {/* Batch Cohort Settings Grid */}
@@ -2075,9 +2242,18 @@ export default function AdminPage() {
                       className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl font-bold text-slate-800 text-xs"
                       required
                     >
-                      <option value="August Intake">August Intake</option>
                       <option value="January Intake">January Intake</option>
+                      <option value="February Intake">February Intake</option>
+                      <option value="March Intake">March Intake</option>
+                      <option value="April Intake">April Intake</option>
                       <option value="May Intake">May Intake</option>
+                      <option value="June Intake">June Intake</option>
+                      <option value="July Intake">July Intake</option>
+                      <option value="August Intake">August Intake</option>
+                      <option value="September Intake">September Intake</option>
+                      <option value="October Intake">October Intake</option>
+                      <option value="November Intake">November Intake</option>
+                      <option value="December Intake">December Intake</option>
                     </select>
                   </div>
 
@@ -2573,7 +2749,7 @@ export default function AdminPage() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
                   <label className="block text-slate-700 font-bold uppercase mb-1 text-[10px]">Role</label>
                   <select
@@ -2592,6 +2768,18 @@ export default function AdminPage() {
                     {user?.role === 'admin' && (
                       <option value="admin">System Admin</option>
                     )}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-slate-700 font-bold uppercase mb-1 text-[10px]">Gender</label>
+                  <select
+                    value={editGender}
+                    onChange={(e) => setEditGender(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold capitalize"
+                  >
+                    <option value="male">Male</option>
+                    <option value="female">Female</option>
+                    <option value="other">Other / Unspecified</option>
                   </select>
                 </div>
                 <div>
@@ -2683,9 +2871,13 @@ export default function AdminPage() {
                         onChange={(e) => setEditIntake(e.target.value)}
                         className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800"
                       >
-                        <option value="August Intake">August Intake</option>
-                        <option value="January Intake">January Intake</option>
-                        <option value="May Intake">May Intake</option>
+                        {[
+                          'January Intake', 'February Intake', 'March Intake', 'April Intake',
+                          'May Intake', 'June Intake', 'July Intake', 'August Intake',
+                          'September Intake', 'October Intake', 'November Intake', 'December Intake'
+                        ].map(m => (
+                          <option key={m} value={m}>{m}</option>
+                        ))}
                       </select>
                     </div>
                   </div>
@@ -2905,9 +3097,9 @@ export default function AdminPage() {
             </div>
 
             <form onSubmit={handleBulkAssignYearAndCourses} className="space-y-4 text-xs">
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
-                  <label className="block text-slate-700 font-bold uppercase mb-1 text-[10px]">Target Academic Year of Study</label>
+                  <label className="block text-slate-700 font-bold uppercase mb-1 text-[10px]">Target Academic Year</label>
                   <select
                     value={bulkYearOfStudy}
                     onChange={(e) => setBulkYearOfStudy(e.target.value)}
@@ -2918,6 +3110,19 @@ export default function AdminPage() {
                     <option value={2}>Year 2</option>
                     <option value={3}>Year 3</option>
                     <option value={4}>Year 4</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-slate-700 font-bold uppercase mb-1 text-[10px]">Target Semester</label>
+                  <select
+                    value={bulkSemester}
+                    onChange={(e) => setBulkSemester(Number(e.target.value))}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800"
+                    required
+                  >
+                    <option value={1}>Semester 1</option>
+                    <option value={2}>Semester 2</option>
                   </select>
                 </div>
 

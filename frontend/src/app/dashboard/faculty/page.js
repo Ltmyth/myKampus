@@ -30,11 +30,13 @@ export default function FacultyManagementPage() {
   const [targetFacultyId, setTargetFacultyId] = useState('');
   const [targetCourseIds, setTargetCourseIds] = useState([]);
   const [targetYearOfStudy, setTargetYearOfStudy] = useState(1);
+  const [targetSemester, setTargetSemester] = useState(1);
   const [selectedStudentAllocIds, setSelectedStudentAllocIds] = useState([]);
   const [showSingleAllocModal, setShowSingleAllocModal] = useState(false);
   const [showBulkAllocModal, setShowBulkAllocModal] = useState(false);
   const [bulkAllocFacultyId, setBulkAllocFacultyId] = useState('');
   const [bulkAllocYearOfStudy, setBulkAllocYearOfStudy] = useState(1);
+  const [bulkAllocSemester, setBulkAllocSemester] = useState(1);
   const [bulkAllocCourseIds, setBulkAllocCourseIds] = useState([]);
 
   // Class Promotion State
@@ -54,6 +56,8 @@ export default function FacultyManagementPage() {
   const [studentSearch, setStudentSearch] = useState('');
   const [studentFacultyFilter, setStudentFacultyFilter] = useState('All');
   const [studentYearFilter, setStudentYearFilter] = useState('All');
+  const [studentSemesterFilter, setStudentSemesterFilter] = useState('All');
+  const [studentGenderFilter, setStudentGenderFilter] = useState('All');
   const [studentEntryYearFilter, setStudentEntryYearFilter] = useState('All');
   const [studentIntakeFilter, setStudentIntakeFilter] = useState('All');
   const [studentPage, setStudentPage] = useState(1);
@@ -95,9 +99,11 @@ export default function FacultyManagementPage() {
     code: '',
     credit_units: 3,
     year_of_study: 1,
+    semester: 1,
     lecturers: []
   });
   const [selectedUnitYearFilter, setSelectedUnitYearFilter] = useState('All');
+  const [selectedUnitSemesterFilter, setSelectedUnitSemesterFilter] = useState('All');
   const [selectedUnitFacultyFilter, setSelectedUnitFacultyFilter] = useState('All');
   const [studentCourseFilter, setStudentCourseFilter] = useState('All');
 
@@ -114,7 +120,8 @@ export default function FacultyManagementPage() {
     code: '',
     name: '',
     credit_units: 3,
-    year_of_study: 1
+    year_of_study: 1,
+    semester: 1
   });
 
   // Course Units Import State (Excel & CSV)
@@ -257,13 +264,15 @@ export default function FacultyManagementPage() {
       const res = await api.post(`/faculties/${targetFacultyId}/assign_student/`, {
         student_id: parseInt(selectedStudentId),
         course_ids: targetCourseIds.map(id => parseInt(id)),
-        year_of_study: parseInt(targetYearOfStudy || 1)
+        year_of_study: parseInt(targetYearOfStudy || 1),
+        semester: parseInt(targetSemester || 1)
       });
-      setSuccessMsg(res.detail || 'Student assigned to faculty, year of study, and courses successfully!');
+      setSuccessMsg(res.detail || 'Student assigned to faculty, year of study, semester, and courses successfully!');
       setShowSingleAllocModal(false);
       setSelectedStudentId('');
       setTargetCourseIds([]);
       setTargetYearOfStudy(1);
+      setTargetSemester(1);
       loadFacultyData();
     } catch (err) {
       setErrorMsg(err.message || 'Failed to assign student to faculty.');
@@ -286,6 +295,7 @@ export default function FacultyManagementPage() {
       const res = await api.post('/admin/users/bulk_assign_year_and_courses/', {
         user_ids: selectedStudentAllocIds,
         year_of_study: parseInt(bulkAllocYearOfStudy || 1),
+        semester: parseInt(bulkAllocSemester || 1),
         faculty_id: bulkAllocFacultyId ? parseInt(bulkAllocFacultyId) : null,
         course_ids: bulkAllocCourseIds ? bulkAllocCourseIds.map(id => parseInt(id)) : []
       });
@@ -843,10 +853,11 @@ export default function FacultyManagementPage() {
         code: newUnitInlineData.code,
         name: newUnitInlineData.name,
         credit_units: newUnitInlineData.credit_units,
-        year_of_study: newUnitInlineData.year_of_study
+        year_of_study: newUnitInlineData.year_of_study,
+        semester: newUnitInlineData.semester || 1
       });
       setSuccessMsg(res?.detail || 'New unit created and attached.');
-      setNewUnitInlineData({ code: '', name: '', credit_units: 3, year_of_study: 1 });
+      setNewUnitInlineData({ code: '', name: '', credit_units: 3, year_of_study: 1, semester: 1 });
       setShowInlineAddUnit(false);
       const updatedUnits = await api.get(`/courses/${selectedReviewCourse.id}/units/`).catch(() => null);
       if (updatedUnits) setReviewUnitsList(updatedUnits);
@@ -902,6 +913,7 @@ export default function FacultyManagementPage() {
         code: unit.code,
         credit_units: unit.credit_units || 3,
         year_of_study: unit.year_of_study || 1,
+        semester: unit.semester || 1,
         lecturers: unit.lecturers || (unit.lecturer_details ? unit.lecturer_details.map(l => l.id) : [])
       });
     } else {
@@ -912,6 +924,7 @@ export default function FacultyManagementPage() {
         code: '',
         credit_units: 3,
         year_of_study: 1,
+        semester: 1,
         lecturers: []
       });
     }
@@ -935,6 +948,7 @@ export default function FacultyManagementPage() {
         code: unitFormData.code,
         credit_units: parseInt(unitFormData.credit_units || 3),
         year_of_study: parseInt(unitFormData.year_of_study || 1),
+        semester: parseInt(unitFormData.semester || 1),
         lecturers: unitFormData.lecturers ? unitFormData.lecturers.map(id => parseInt(id)) : []
       };
 
@@ -1162,6 +1176,7 @@ export default function FacultyManagementPage() {
       String(u.faculty_id) === String(selectedUnitFacultyFilter) ||
       courses.some(c => (c.id === u.course || c.code === u.course_code) && (String(c.faculty) === String(selectedUnitFacultyFilter) || c.faculty_code === selectedUnitFacultyFilter));
     const matchesYear = selectedUnitYearFilter === 'All' || (u.year_of_study || 1) === parseInt(selectedUnitYearFilter);
+    const matchesSemester = selectedUnitSemesterFilter === 'All' || (u.semester || 1) === parseInt(selectedUnitSemesterFilter);
     const matchesCourse = selectedUnitCourseFilter === 'All' || u.course_code === selectedUnitCourseFilter;
     const s = unitSearchText.toLowerCase().trim();
     const matchesSearch = !s ||
@@ -1173,7 +1188,7 @@ export default function FacultyManagementPage() {
         (l.last_name && l.last_name.toLowerCase().includes(s)) ||
         (l.username && l.username.toLowerCase().includes(s))
       ));
-    return matchesFaculty && matchesYear && matchesCourse && matchesSearch;
+    return matchesFaculty && matchesYear && matchesSemester && matchesCourse && matchesSearch;
   });
 
   const filteredReviewUnits = (reviewUnitsList || []).filter(u => {
@@ -1932,7 +1947,7 @@ export default function FacultyManagementPage() {
             )}
 
             {/* Search and Filters Toolbar */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 bg-slate-50 p-3 rounded-xl border border-slate-200 text-xs">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 bg-slate-50 p-3 rounded-xl border border-slate-200 text-xs">
               <div>
                 <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Search Course Units</label>
                 <input
@@ -1988,6 +2003,19 @@ export default function FacultyManagementPage() {
                   <option value="4">Year 4</option>
                 </select>
               </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Semester</label>
+                <select
+                  value={selectedUnitSemesterFilter}
+                  onChange={(e) => setSelectedUnitSemesterFilter(e.target.value)}
+                  className="w-full bg-white border border-slate-200 text-slate-800 font-bold rounded-lg px-2.5 py-1.5 focus:ring-1 focus:ring-brand-light"
+                >
+                  <option value="All">All Semesters</option>
+                  <option value="1">Semester 1</option>
+                  <option value="2">Semester 2</option>
+                </select>
+              </div>
             </div>
 
             {filteredCourseUnits.length === 0 ? (
@@ -2013,7 +2041,7 @@ export default function FacultyManagementPage() {
                       <th className="px-3 py-3">Code</th>
                       <th className="px-3 py-3">Unit Name</th>
                       <th className="px-3 py-3">Course Program</th>
-                      <th className="px-3 py-3 text-center">Year</th>
+                      <th className="px-3 py-3 text-center">Year & Sem</th>
                       <th className="px-3 py-3 text-center">Credits</th>
                       <th className="px-3 py-3">Assigned Lecturers</th>
                       {canAssignLecturer && <th className="px-3 py-3 text-center">Actions</th>}
@@ -2045,7 +2073,7 @@ export default function FacultyManagementPage() {
                           <td className="px-3 py-3">{unit.course_code}</td>
                           <td className="px-3 py-3 text-center font-bold">
                             <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-teal-50 text-teal-800 border border-teal-200">
-                              Year {unit.year_of_study || 1}
+                              Year {unit.year_of_study || 1} · Sem {unit.semester || 1}
                             </span>
                           </td>
                           <td className="px-3 py-3 text-center font-bold">{unit.credit_units} CU</td>
@@ -2190,9 +2218,11 @@ export default function FacultyManagementPage() {
                   (st.assigned_courses || []).map(String).includes(studentCourseFilter) ||
                   (st.assigned_course_codes || []).map(c => c.toUpperCase()).includes(studentCourseFilter.toUpperCase());
                 const matchesYear = studentYearFilter === 'All' || String(st.year_of_study || 1) === String(studentYearFilter);
+                const matchesSemester = studentSemesterFilter === 'All' || String(st.semester || 1) === String(studentSemesterFilter);
+                const matchesGender = studentGenderFilter === 'All' || (st.gender || '').toLowerCase() === studentGenderFilter.toLowerCase();
                 const matchesEntryYear = studentEntryYearFilter === 'All' || String(st.entry_year || 2026) === String(studentEntryYearFilter);
-                const matchesIntake = studentIntakeFilter === 'All' || (st.intake || 'August Intake').toLowerCase().includes(studentIntakeFilter.toLowerCase());
-                return matchesSearch && matchesFaculty && matchesCourse && matchesYear && matchesEntryYear && matchesIntake;
+                const matchesIntake = studentIntakeFilter === 'All' || (st.intake || '').toLowerCase().includes(studentIntakeFilter.toLowerCase());
+                return matchesSearch && matchesFaculty && matchesCourse && matchesYear && matchesSemester && matchesGender && matchesEntryYear && matchesIntake;
               });
 
               const totalStudentPages = Math.max(1, Math.ceil(filteredStudents.length / studentPageSize));
@@ -2216,6 +2246,7 @@ export default function FacultyManagementPage() {
                             setTargetFacultyId(firstSt.faculty || (faculties[0]?.id || ''));
                             setTargetCourseIds(firstSt.assigned_courses || []);
                             setTargetYearOfStudy(firstSt.year_of_study || 1);
+                            setTargetSemester(firstSt.semester || 1);
                           }
                           setShowSingleAllocModal(true);
                         }}
@@ -2257,26 +2288,26 @@ export default function FacultyManagementPage() {
                   </div>
 
                   {/* Search and Filters Toolbar */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 text-xs bg-slate-50 p-3 rounded-xl border border-slate-200">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2.5 text-xs bg-slate-50 p-3 rounded-xl border border-slate-200">
                     <div>
-                      <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Search Students</label>
+                      <label className="block text-[10px] font-bold text-slate-600 uppercase mb-1">Search</label>
                       <input
                         type="text"
-                        placeholder="Search name, reg no, email..."
+                        placeholder="Search student..."
                         value={studentSearch}
                         onChange={(e) => { setStudentSearch(e.target.value); setStudentPage(1); }}
-                        className="w-full bg-white border border-slate-200 text-slate-800 font-medium rounded-lg px-3 py-1.5 focus:ring-1 focus:ring-brand-light"
+                        className="w-full bg-white border border-slate-200 text-slate-800 font-medium rounded-lg px-2.5 py-1.5 focus:ring-1 focus:ring-brand-light"
                       />
                     </div>
 
                     <div>
-                      <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Filter Faculty</label>
+                      <label className="block text-[10px] font-bold text-slate-600 uppercase mb-1">Faculty</label>
                       <select
                         value={studentFacultyFilter}
                         onChange={(e) => { setStudentFacultyFilter(e.target.value); setStudentPage(1); }}
-                        className="w-full bg-white border border-slate-200 text-slate-800 font-bold rounded-lg px-2.5 py-1.5 focus:ring-1 focus:ring-brand-light"
+                        className="w-full bg-white border border-slate-200 text-slate-800 font-bold rounded-lg px-2 py-1.5 focus:ring-1 focus:ring-brand-light"
                       >
-                        <option value="All">All Faculties ({faculties.length})</option>
+                        <option value="All">All Faculties</option>
                         {faculties.map(f => (
                           <option key={f.id} value={f.code}>[{f.code}] {f.name}</option>
                         ))}
@@ -2284,13 +2315,13 @@ export default function FacultyManagementPage() {
                     </div>
 
                     <div>
-                      <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Filter Course</label>
+                      <label className="block text-[10px] font-bold text-slate-600 uppercase mb-1">Course</label>
                       <select
                         value={studentCourseFilter}
                         onChange={(e) => { setStudentCourseFilter(e.target.value); setStudentPage(1); }}
-                        className="w-full bg-white border border-slate-200 text-slate-800 font-bold rounded-lg px-2.5 py-1.5 focus:ring-1 focus:ring-brand-light"
+                        className="w-full bg-white border border-slate-200 text-slate-800 font-bold rounded-lg px-2 py-1.5 focus:ring-1 focus:ring-brand-light"
                       >
-                        <option value="All">All Courses ({courses.length})</option>
+                        <option value="All">All Courses</option>
                         {courses
                           .filter(c => studentFacultyFilter === 'All' || c.faculty_code === studentFacultyFilter || String(c.faculty) === String(studentFacultyFilter))
                           .map(c => (
@@ -2300,13 +2331,13 @@ export default function FacultyManagementPage() {
                     </div>
 
                     <div>
-                      <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Year of Study</label>
+                      <label className="block text-[10px] font-bold text-slate-600 uppercase mb-1">Year</label>
                       <select
                         value={studentYearFilter}
                         onChange={(e) => { setStudentYearFilter(e.target.value); setStudentPage(1); }}
-                        className="w-full bg-white border border-slate-200 text-slate-800 font-bold rounded-lg px-2.5 py-1.5 focus:ring-1 focus:ring-brand-light"
+                        className="w-full bg-white border border-slate-200 text-slate-800 font-bold rounded-lg px-2 py-1.5 focus:ring-1 focus:ring-brand-light"
                       >
-                        <option value="All">All Academic Years</option>
+                        <option value="All">All Years</option>
                         <option value="1">Year 1</option>
                         <option value="2">Year 2</option>
                         <option value="3">Year 3</option>
@@ -2315,32 +2346,68 @@ export default function FacultyManagementPage() {
                     </div>
 
                     <div>
-                      <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Entry Year</label>
+                      <label className="block text-[10px] font-bold text-slate-600 uppercase mb-1">Semester</label>
                       <select
-                        value={studentEntryYearFilter}
-                        onChange={(e) => { setStudentEntryYearFilter(e.target.value); setStudentPage(1); }}
-                        className="w-full bg-white border border-slate-200 text-slate-800 font-bold rounded-lg px-2.5 py-1.5 focus:ring-1 focus:ring-brand-light"
+                        value={studentSemesterFilter}
+                        onChange={(e) => { setStudentSemesterFilter(e.target.value); setStudentPage(1); }}
+                        className="w-full bg-white border border-slate-200 text-slate-800 font-bold rounded-lg px-2 py-1.5 focus:ring-1 focus:ring-brand-light"
                       >
-                        <option value="All">All Entry Years</option>
-                        <option value="2026">2026 Entry</option>
-                        <option value="2025">2025 Entry</option>
-                        <option value="2024">2024 Entry</option>
-                        <option value="2023">2023 Entry</option>
-                        <option value="2022">2022 Entry</option>
+                        <option value="All">All Semesters</option>
+                        <option value="1">Sem 1</option>
+                        <option value="2">Sem 2</option>
                       </select>
                     </div>
 
                     <div>
-                      <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Intake</label>
+                      <label className="block text-[10px] font-bold text-slate-600 uppercase mb-1">Gender</label>
+                      <select
+                        value={studentGenderFilter}
+                        onChange={(e) => { setStudentGenderFilter(e.target.value); setStudentPage(1); }}
+                        className="w-full bg-white border border-slate-200 text-slate-800 font-bold rounded-lg px-2 py-1.5 focus:ring-1 focus:ring-brand-light"
+                      >
+                        <option value="All">All Genders</option>
+                        <option value="male">Male</option>
+                        <option value="female">Female</option>
+                        <option value="other">Other</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-600 uppercase mb-1">Entry Year</label>
+                      <select
+                        value={studentEntryYearFilter}
+                        onChange={(e) => { setStudentEntryYearFilter(e.target.value); setStudentPage(1); }}
+                        className="w-full bg-white border border-slate-200 text-slate-800 font-bold rounded-lg px-2 py-1.5 focus:ring-1 focus:ring-brand-light"
+                      >
+                        <option value="All">All Entries</option>
+                        <option value="2026">2026</option>
+                        <option value="2025">2025</option>
+                        <option value="2024">2024</option>
+                        <option value="2023">2023</option>
+                        <option value="2022">2022</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-600 uppercase mb-1">Intake</label>
                       <select
                         value={studentIntakeFilter}
                         onChange={(e) => { setStudentIntakeFilter(e.target.value); setStudentPage(1); }}
-                        className="w-full bg-white border border-slate-200 text-slate-800 font-bold rounded-lg px-2.5 py-1.5 focus:ring-1 focus:ring-brand-light"
+                        className="w-full bg-white border border-slate-200 text-slate-800 font-bold rounded-lg px-2 py-1.5 focus:ring-1 focus:ring-brand-light"
                       >
-                        <option value="All">All Intakes</option>
-                        <option value="August Intake">August Intake</option>
+                        <option value="All">All 12 Intakes</option>
                         <option value="January Intake">January Intake</option>
+                        <option value="February Intake">February Intake</option>
+                        <option value="March Intake">March Intake</option>
+                        <option value="April Intake">April Intake</option>
                         <option value="May Intake">May Intake</option>
+                        <option value="June Intake">June Intake</option>
+                        <option value="July Intake">July Intake</option>
+                        <option value="August Intake">August Intake</option>
+                        <option value="September Intake">September Intake</option>
+                        <option value="October Intake">October Intake</option>
+                        <option value="November Intake">November Intake</option>
+                        <option value="December Intake">December Intake</option>
                       </select>
                     </div>
                   </div>
@@ -2370,7 +2437,7 @@ export default function FacultyManagementPage() {
                                 />
                               </th>
                               <th className="px-4 py-3">Student Name & Reg No</th>
-                              <th className="px-4 py-3 text-center">Year of Study</th>
+                              <th className="px-4 py-3 text-center">Year & Semester</th>
                               <th className="px-4 py-3">Assigned Faculty</th>
                               <th className="px-4 py-3">Enrolled Course Programs</th>
                               <th className="px-4 py-3 text-center">Actions</th>
@@ -2394,7 +2461,14 @@ export default function FacultyManagementPage() {
                                   />
                                 </td>
                                 <td className="px-4 py-3 font-bold text-slate-850">
-                                  {st.first_name || st.username} {st.last_name}
+                                  <div className="flex items-center flex-wrap gap-1">
+                                    <span>{st.first_name || st.username} {st.last_name}</span>
+                                    {st.gender && (
+                                      <span className={`px-1.5 py-0.2 rounded text-[9px] font-extrabold ${st.gender === 'female' ? 'bg-pink-50 text-pink-700 border border-pink-200' : st.gender === 'male' ? 'bg-blue-50 text-blue-700 border border-blue-200' : 'bg-slate-100 text-slate-700 border border-slate-200'}`}>
+                                        {st.gender === 'female' ? '♀ Female' : st.gender === 'male' ? '♂ Male' : '⚥ ' + (st.gender_display || st.gender)}
+                                      </span>
+                                    )}
+                                  </div>
                                   <span className="block text-[10px] text-slate-400 font-normal">{st.email}</span>
                                   <span className="inline-block mt-0.5 px-2 py-0.5 rounded text-[9px] font-extrabold bg-indigo-50 text-indigo-700 border border-indigo-200">
                                     📅 {st.entry_year || 2026} · {st.intake || 'August Intake'}
@@ -2402,7 +2476,7 @@ export default function FacultyManagementPage() {
                                 </td>
                                 <td className="px-4 py-3 text-center">
                                   <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-purple-50 text-purple-700 border border-purple-200">
-                                    Year {st.year_of_study || 1}
+                                    Year {st.year_of_study || 1} · Sem {st.semester || 1}
                                   </span>
                                 </td>
                                 <td className="px-4 py-3">
@@ -2434,6 +2508,7 @@ export default function FacultyManagementPage() {
                                       setTargetFacultyId(st.faculty || (faculties[0]?.id || ''));
                                       setTargetCourseIds(st.assigned_courses || []);
                                       setTargetYearOfStudy(st.year_of_study || 1);
+                                      setTargetSemester(st.semester || 1);
                                       setShowSingleAllocModal(true);
                                     }}
                                     className="px-2.5 py-1 bg-brand-light text-white text-[10px] font-bold rounded hover:bg-brand-medium shadow-xs transition-all"
@@ -2539,6 +2614,7 @@ export default function FacultyManagementPage() {
                       setTargetFacultyId(st.faculty || (faculties[0]?.id || ''));
                       setTargetCourseIds(st.assigned_courses || []);
                       setTargetYearOfStudy(st.year_of_study || 1);
+                      setTargetSemester(st.semester || 1);
                     }
                   }}
                   className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-850"
@@ -2553,7 +2629,7 @@ export default function FacultyManagementPage() {
                 </select>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
                   <label className="block text-slate-700 font-bold uppercase mb-1">Year of Study</label>
                   <select
@@ -2565,6 +2641,18 @@ export default function FacultyManagementPage() {
                     <option value={2}>Year 2</option>
                     <option value={3}>Year 3</option>
                     <option value={4}>Year 4</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-slate-700 font-bold uppercase mb-1">Semester</label>
+                  <select
+                    value={targetSemester}
+                    onChange={(e) => setTargetSemester(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-850"
+                  >
+                    <option value={1}>Semester 1</option>
+                    <option value={2}>Semester 2</option>
                   </select>
                 </div>
 
@@ -2638,16 +2726,16 @@ export default function FacultyManagementPage() {
           <div className="bg-white rounded-3xl max-w-lg w-full p-6 space-y-4 shadow-2xl border border-slate-100 animate-scale-up">
             <div className="flex justify-between items-center border-b border-slate-100 pb-3">
               <div>
-                <h3 className="text-base font-bold text-slate-850">🎓 Bulk Assign Year & Courses ({selectedStudentAllocIds.length} Students)</h3>
-                <p className="text-slate-500 text-xs">Assign selected student accounts to Faculty, Year of Study, and Course Programs at once.</p>
+                <h3 className="text-base font-bold text-slate-850">🎓 Bulk Assign Year, Semester & Courses ({selectedStudentAllocIds.length} Students)</h3>
+                <p className="text-slate-500 text-xs">Assign selected student accounts to Faculty, Year of Study, Semester, and Course Programs at once.</p>
               </div>
               <button onClick={() => setShowBulkAllocModal(false)} className="text-slate-400 hover:text-slate-600 font-bold text-lg">✕</button>
             </div>
 
             <form onSubmit={handleBulkStudentAllocSubmit} className="space-y-4 text-xs">
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
-                  <label className="block text-slate-700 font-bold uppercase mb-1">Academic Year of Study</label>
+                  <label className="block text-slate-700 font-bold uppercase mb-1">Academic Year</label>
                   <select
                     value={bulkAllocYearOfStudy}
                     onChange={(e) => setBulkAllocYearOfStudy(e.target.value)}
@@ -2661,13 +2749,25 @@ export default function FacultyManagementPage() {
                 </div>
 
                 <div>
+                  <label className="block text-slate-700 font-bold uppercase mb-1">Semester</label>
+                  <select
+                    value={bulkAllocSemester}
+                    onChange={(e) => setBulkAllocSemester(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 text-xs"
+                  >
+                    <option value={1}>Semester 1</option>
+                    <option value={2}>Semester 2</option>
+                  </select>
+                </div>
+
+                <div>
                   <label className="block text-slate-700 font-bold uppercase mb-1">Target Faculty</label>
                   <select
                     value={bulkAllocFacultyId}
                     onChange={(e) => setBulkAllocFacultyId(e.target.value)}
                     className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 text-xs"
                   >
-                    <option value="">-- Keep Current Faculty --</option>
+                    <option value="">-- Keep Current --</option>
                     {faculties.map(f => (
                       <option key={f.id} value={f.id}>[{f.code}] {f.name}</option>
                     ))}
@@ -3294,7 +3394,7 @@ export default function FacultyManagementPage() {
                 </select>
               </div>
 
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 <div>
                   <label className="block text-slate-700 font-bold uppercase mb-1">Unit Code</label>
                   <input
@@ -3332,6 +3432,19 @@ export default function FacultyManagementPage() {
                     <option value={2}>Year 2</option>
                     <option value={3}>Year 3</option>
                     <option value={4}>Year 4</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-slate-700 font-bold uppercase mb-1">Semester</label>
+                  <select
+                    value={unitFormData.semester || 1}
+                    onChange={(e) => setUnitFormData({ ...unitFormData, semester: e.target.value })}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800"
+                    required
+                  >
+                    <option value={1}>Semester 1</option>
+                    <option value={2}>Semester 2</option>
                   </select>
                 </div>
               </div>
@@ -3544,10 +3657,19 @@ export default function FacultyManagementPage() {
                       onChange={(e) => setPromotionIntake(e.target.value)}
                       className="w-full bg-white border border-slate-200 font-bold text-slate-800 rounded-lg px-2 py-1.5 text-xs"
                     >
-                      <option value="All">All Intakes</option>
-                      <option value="August Intake">August Intake</option>
+                      <option value="All">All 12 Intakes</option>
                       <option value="January Intake">January Intake</option>
+                      <option value="February Intake">February Intake</option>
+                      <option value="March Intake">March Intake</option>
+                      <option value="April Intake">April Intake</option>
                       <option value="May Intake">May Intake</option>
+                      <option value="June Intake">June Intake</option>
+                      <option value="July Intake">July Intake</option>
+                      <option value="August Intake">August Intake</option>
+                      <option value="September Intake">September Intake</option>
+                      <option value="October Intake">October Intake</option>
+                      <option value="November Intake">November Intake</option>
+                      <option value="December Intake">December Intake</option>
                     </select>
                   </div>
                 </div>

@@ -16,6 +16,12 @@ class User(AbstractUser):
         ('admin', 'System Admin'),
     )
     role = models.CharField(max_length=35, choices=ROLE_CHOICES, default='student', db_index=True)
+    GENDER_CHOICES = (
+        ('male', 'Male'),
+        ('female', 'Female'),
+        ('other', 'Other'),
+    )
+    gender = models.CharField(max_length=20, choices=GENDER_CHOICES, default='other', blank=True, null=True, db_index=True, help_text="User gender (male, female, other)")
     phone = models.CharField(max_length=20, blank=True, null=True)
     tuition_paid_percentage = models.FloatField(default=0.0, help_text="Tuition clearance percentage (0.0 to 100.0)")
     faculty = models.ForeignKey('Faculty', on_delete=models.SET_NULL, null=True, blank=True, related_name='students')
@@ -34,7 +40,21 @@ class User(AbstractUser):
     )
     semester = models.IntegerField(choices=SEMESTER_CHOICES, default=1, help_text="Current Semester of Study for students (1 or 2)")
     entry_year = models.IntegerField(default=2026, blank=True, null=True, help_text="Admission / Entry Year (e.g. 2026)")
-    intake = models.CharField(max_length=50, default='August Intake', blank=True, null=True, help_text="Admission Intake (e.g. August Intake, January Intake, May Intake)")
+    INTAKE_CHOICES = (
+        ('January Intake', 'January Intake'),
+        ('February Intake', 'February Intake'),
+        ('March Intake', 'March Intake'),
+        ('April Intake', 'April Intake'),
+        ('May Intake', 'May Intake'),
+        ('June Intake', 'June Intake'),
+        ('July Intake', 'July Intake'),
+        ('August Intake', 'August Intake'),
+        ('September Intake', 'September Intake'),
+        ('October Intake', 'October Intake'),
+        ('November Intake', 'November Intake'),
+        ('December Intake', 'December Intake'),
+    )
+    intake = models.CharField(max_length=50, choices=INTAKE_CHOICES, default='August Intake', blank=True, null=True, db_index=True, help_text="Admission Intake (all year round intakes from January to December)")
     must_change_password = models.BooleanField(default=False, help_text="Flag indicating student must change one-time password on login")
 
     @property
@@ -100,11 +120,16 @@ class CourseUnit(models.Model):
         (3, 'Year 3'),
         (4, 'Year 4'),
     )
-    year_of_study = models.IntegerField(choices=YEAR_OF_STUDY_CHOICES, default=1, help_text="Academic Year of Study for this course unit (1-4)")
+    year_of_study = models.IntegerField(choices=YEAR_OF_STUDY_CHOICES, default=1, db_index=True, help_text="Academic Year of Study for this course unit (1-4)")
+    SEMESTER_CHOICES = (
+        (1, 'Semester 1'),
+        (2, 'Semester 2'),
+    )
+    semester = models.IntegerField(choices=SEMESTER_CHOICES, default=1, db_index=True, help_text="Semester of Study for this course unit (1 or 2)")
     lecturers = models.ManyToManyField(User, limit_choices_to={'role': 'lecturer'}, related_name='assigned_course_units', blank=True)
 
     def __str__(self):
-        return f"{self.code} - {self.name} (Year {self.year_of_study}, {self.course.code})"
+        return f"{self.code} - {self.name} (Year {self.year_of_study}, Sem {self.semester}, {self.course.code})"
 
 class Application(models.Model):
     STATUS_CHOICES = (

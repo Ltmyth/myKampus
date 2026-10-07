@@ -78,10 +78,16 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
             'username': self.user.username,
             'email': self.user.email,
             'role': self.user.role,
+            'gender': self.user.gender,
+            'gender_display': self.user.get_gender_display(),
             'first_name': self.user.first_name,
             'last_name': self.user.last_name,
             'reg_number': self.user.reg_number or self.user.registration_number,
             'registration_number': self.user.registration_number,
+            'year_of_study': self.user.year_of_study,
+            'semester': self.user.semester,
+            'entry_year': self.user.entry_year,
+            'intake': self.user.intake,
             'tuition_paid_percentage': clearance_info['tuition_paid_percentage'],
             'is_exam_cleared': clearance_info['is_exam_cleared'],
             'is_test_cleared': clearance_info['is_test_cleared'],
@@ -355,6 +361,33 @@ def parse_tabular_file(uploaded_file=None, raw_content=None):
 
     return rows
 
+VALID_MONTH_INTAKES = [
+    'January Intake', 'February Intake', 'March Intake', 'April Intake',
+    'May Intake', 'June Intake', 'July Intake', 'August Intake',
+    'September Intake', 'October Intake', 'November Intake', 'December Intake'
+]
+
+def normalize_intake(intake_str):
+    if not intake_str:
+        return 'August Intake'
+    raw = str(intake_str).strip()
+    raw_lower = raw.lower()
+    for month_intake in VALID_MONTH_INTAKES:
+        month_name = month_intake.split()[0].lower()
+        if month_name in raw_lower or month_intake.lower() == raw_lower:
+            return month_intake
+    return raw
+
+def normalize_gender(gender_str):
+    if not gender_str:
+        return 'other'
+    g = str(gender_str).strip().lower()
+    if g in ['m', 'male', 'man', 'boy']:
+        return 'male'
+    if g in ['f', 'female', 'woman', 'girl']:
+        return 'female'
+    return 'other'
+
 # 4. System Admin User Management ViewSet
 class AdminUserViewSet(viewsets.ModelViewSet):
     serializer_class = AdminUserSerializer
@@ -380,10 +413,28 @@ class AdminUserViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        qs = User.objects.all().order_by('-date_joined')
+        qs = User.objects.all().select_related('faculty').prefetch_related('assigned_courses', 'assigned_course_units__course').order_by('-date_joined')
         role_param = self.request.query_params.get('role')
         if role_param:
             qs = qs.filter(role=role_param)
+
+        gender_param = self.request.query_params.get('gender')
+        if gender_param and gender_param not in ['All', 'ALL']:
+            qs = qs.filter(gender__iexact=gender_param.strip())
+
+        year_param = self.request.query_params.get('year_of_study') or self.request.query_params.get('year')
+        if year_param and year_param not in ['All', 'ALL']:
+            try:
+                qs = qs.filter(year_of_study=int(year_param))
+            except (ValueError, TypeError):
+                pass
+
+        semester_param = self.request.query_params.get('semester') or self.request.query_params.get('sem')
+        if semester_param and semester_param not in ['All', 'ALL']:
+            try:
+                qs = qs.filter(semester=int(semester_param))
+            except (ValueError, TypeError):
+                pass
 
         entry_year_param = self.request.query_params.get('entry_year')
         if entry_year_param and entry_year_param != 'All':
@@ -393,8 +444,9 @@ class AdminUserViewSet(viewsets.ModelViewSet):
                 pass
 
         intake_param = self.request.query_params.get('intake')
-        if intake_param and intake_param != 'All':
-            qs = qs.filter(intake__iexact=intake_param.strip())
+        if intake_param and intake_param not in ['All', 'ALL']:
+            norm_intake = normalize_intake(intake_param)
+            qs = qs.filter(models.Q(intake__iexact=intake_param.strip()) | models.Q(intake__iexact=norm_intake))
 
         faculty_param = self.request.query_params.get('faculty')
         if faculty_param and faculty_param != 'All':
@@ -640,6 +692,7 @@ class AdminUserViewSet(viewsets.ModelViewSet):
     def bulk_assign_year_and_courses(self, request):
         user_ids = request.data.get('user_ids', [])
         year_of_study = request.data.get('year_of_study')
+        semester = request.data.get('semester')
         faculty_id = request.data.get('faculty_id')
         course_ids = request.data.get('course_ids', [])
 
@@ -663,6 +716,8 @@ class AdminUserViewSet(viewsets.ModelViewSet):
         for student in students:
             if year_of_study is not None and str(year_of_study).isdigit():
                 student.year_of_study = int(year_of_study)
+            if semester is not None and str(semester).isdigit():
+                student.semester = int(semester)
             if target_faculty:
                 student.faculty = target_faculty
             student.save()
@@ -814,13 +869,14 @@ class AdminUserViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'])
     def sample_student_file(self, request):
         fmt = request.query_params.get('format', 'csv').lower().strip()
-        headers = ['Registration Number', 'Full Name', 'Email', 'Faculty Code', 'Entry Year', 'Intake', 'Year of Study', 'Semester', 'Phone Contact']
+        headers = ['Registration Number', 'Full Name', 'Gender', 'Email', 'Faculty Code', 'Entry Year', 'Intake', 'Year of Study', 'Semester', 'Phone Contact']
         sample_rows = [
-            ['2026SOBAT-B001', 'KIGOZI IVAN', 'ikigozi@ciu.ac.ug', 'SOBAT', 2026, 'August Intake', 1, 1, '0772123456'],
-            ['2026FST-B002', 'NAMUGANGA SARAH', 'snamuganga@ciu.ac.ug', 'FST', 2026, 'August Intake', 1, 1, '0701987654'],
-            ['2026SONM-B003', 'ATUHAIRE PATIENCE', 'patuhaire@ciu.ac.ug', 'SONM', 2026, 'August Intake', 1, 1, '0783456789'],
-            ['2026SOPH-B004', 'MUGISHA BRIAN', 'bmugisha@ciu.ac.ug', 'SOPH', 2026, 'January Intake', 1, 1, '0754112233'],
-            ['2026IAH-B005', 'NAJJEMBA GLORIA', 'gnajjemba@ciu.ac.ug', 'IAH', 2026, 'August Intake', 1, 1, '0778990011']
+            ['2026SOBAT-B001', 'KIGOZI IVAN', 'Male', 'ikigozi@ciu.ac.ug', 'SOBAT', 2026, 'January Intake', 1, 1, '0772123456'],
+            ['2026FST-B002', 'NAMUGANGA SARAH', 'Female', 'snamuganga@ciu.ac.ug', 'FST', 2026, 'March Intake', 1, 1, '0701987654'],
+            ['2026SONM-B003', 'ATUHAIRE PATIENCE', 'Female', 'patuhaire@ciu.ac.ug', 'SONM', 2026, 'May Intake', 1, 2, '0783456789'],
+            ['2026SOPH-B004', 'MUGISHA BRIAN', 'Male', 'bmugisha@ciu.ac.ug', 'SOPH', 2026, 'August Intake', 2, 1, '0754112233'],
+            ['2026IAH-B005', 'NAJJEMBA GLORIA', 'Female', 'gnajjemba@ciu.ac.ug', 'IAH', 2026, 'October Intake', 1, 1, '0778990011'],
+            ['2026SOBAT-B006', 'TUMWESIGYE DAVID', 'Male', 'dtumwesigye@ciu.ac.ug', 'SOBAT', 2026, 'December Intake', 3, 2, '0789001122']
         ]
         if fmt in ['xlsx', 'excel', 'xls']:
             return generate_excel_response('sample_student_onboarding.xlsx', headers, sample_rows, sheet_title="Students Onboarding")
@@ -832,27 +888,19 @@ class AdminUserViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'])
     def sample_student_excel(self, request):
-        headers = ['Registration Number', 'Full Name', 'Email', 'Faculty Code', 'Entry Year', 'Intake', 'Year of Study', 'Semester', 'Phone Contact']
-        sample_rows = [
-            ['2026SOBAT-B001', 'KIGOZI IVAN', 'ikigozi@ciu.ac.ug', 'SOBAT', 2026, 'August Intake', 1, 1, '0772123456'],
-            ['2026FST-B002', 'NAMUGANGA SARAH', 'snamuganga@ciu.ac.ug', 'FST', 2026, 'August Intake', 1, 1, '0701987654'],
-            ['2026SONM-B003', 'ATUHAIRE PATIENCE', 'patuhaire@ciu.ac.ug', 'SONM', 2026, 'August Intake', 1, 1, '0783456789'],
-            ['2026SOPH-B004', 'MUGISHA BRIAN', 'bmugisha@ciu.ac.ug', 'SOPH', 2026, 'January Intake', 1, 1, '0754112233'],
-            ['2026IAH-B005', 'NAJJEMBA GLORIA', 'gnajjemba@ciu.ac.ug', 'IAH', 2026, 'August Intake', 1, 1, '0778990011']
-        ]
-        return generate_excel_response('sample_student_onboarding.xlsx', headers, sample_rows, sheet_title="Students Onboarding")
+        return self.sample_student_file(request)
 
     @action(detail=False, methods=['get'])
     def sample_staff_file(self, request):
         fmt = request.query_params.get('format', 'csv').lower().strip()
-        headers = ['Employee Name', 'Phone Contact', 'Email', 'User Name', 'Role', 'Faculty Code']
+        headers = ['Employee Name', 'Gender', 'Phone Contact', 'Email', 'User Name', 'Role', 'Faculty Code']
         sample_rows = [
-            ['JOHN CHARLES OKIRIA', '0772409126', 'jokiria@ciu.ac.ug', 'CIU01', 'lecturer', 'SOBAT'],
-            ['DR. SENGOOBA ASUMAN', '0702487553', 'asengooba@ciu.ac.ug', 'CIU02', 'lecturer', 'FST'],
-            ['LONY TITUS OKELLO', '0772557156', 'tlony@ciu.ac.ug', 'CIU03', 'lecturer', 'FAS'],
-            ['TUSUUBIRA SHARIFU', '0770000000', 'stusuubira@ciu.ac.ug', 'CIU04', 'lecturer', 'SOBAT'],
-            ['DR. NAKITTO MARIA', '0782334455', 'mnakitto@ciu.ac.ug', 'CIU05', 'faculty_admin', 'SOBAT'],
-            ['PROF. SSEMAKULA PETER', '0752112233', 'pssemakula@ciu.ac.ug', 'CIU06', 'dean', 'FST']
+            ['JOHN CHARLES OKIRIA', 'Male', '0772409126', 'jokiria@ciu.ac.ug', 'CIU01', 'lecturer', 'SOBAT'],
+            ['DR. SENGOOBA ASUMAN', 'Male', '0702487553', 'asengooba@ciu.ac.ug', 'CIU02', 'lecturer', 'FST'],
+            ['LONY TITUS OKELLO', 'Male', '0772557156', 'tlony@ciu.ac.ug', 'CIU03', 'lecturer', 'FAS'],
+            ['TUSUUBIRA SHARIFU', 'Female', '0770000000', 'stusuubira@ciu.ac.ug', 'CIU04', 'lecturer', 'SOBAT'],
+            ['DR. NAKITTO MARIA', 'Female', '0782334455', 'mnakitto@ciu.ac.ug', 'CIU05', 'faculty_admin', 'SOBAT'],
+            ['PROF. SSEMAKULA PETER', 'Male', '0752112233', 'pssemakula@ciu.ac.ug', 'CIU06', 'dean', 'FST']
         ]
         if fmt in ['xlsx', 'excel', 'xls']:
             return generate_excel_response('sample_staff_list.xlsx', headers, sample_rows, sheet_title="Staff Onboarding")
@@ -907,6 +955,7 @@ class AdminUserViewSet(viewsets.ModelViewSet):
 
         for row in rows:
             raw_name = ''
+            raw_gender = ''
             raw_phone = ''
             raw_email = ''
             raw_username = ''
@@ -919,6 +968,8 @@ class AdminUserViewSet(viewsets.ModelViewSet):
 
                 if any(x in k_clean for x in ['employee name', 'staff name', 'full name', 'name']) and not any(x in k_clean for x in ['user', 'login']):
                     raw_name = raw_name or val_str
+                elif any(x in k_clean for x in ['gender', 'sex']):
+                    raw_gender = raw_gender or val_str
                 elif any(x in k_clean for x in ['phone', 'contact', 'telephone', 'mobile', 'cell']):
                     raw_phone = raw_phone or val_str
                 elif any(x in k_clean for x in ['email', 'mail']):
@@ -932,6 +983,8 @@ class AdminUserViewSet(viewsets.ModelViewSet):
 
             if not raw_name and not raw_username and not raw_email:
                 continue
+
+            gender_val = normalize_gender(raw_gender)
 
             # Parse name
             name_parts = raw_name.split()
@@ -977,6 +1030,9 @@ class AdminUserViewSet(viewsets.ModelViewSet):
                 if raw_phone and not existing_user.phone:
                     existing_user.phone = raw_phone[:20]
                     did_update = True
+                if raw_gender and (not existing_user.gender or existing_user.gender == 'other'):
+                    existing_user.gender = gender_val
+                    did_update = True
                 if did_update:
                     existing_user.save()
                     updated_count += 1
@@ -984,6 +1040,7 @@ class AdminUserViewSet(viewsets.ModelViewSet):
                         'username': username,
                         'name': f"{existing_user.first_name} {existing_user.last_name}".strip(),
                         'role': existing_user.role,
+                        'gender': existing_user.gender,
                         'faculty': existing_user.faculty.code if existing_user.faculty else None
                     })
                 else:
@@ -1003,6 +1060,7 @@ class AdminUserViewSet(viewsets.ModelViewSet):
                     first_name=first_name,
                     last_name=last_name,
                     phone=raw_phone[:20] if raw_phone else '',
+                    gender=gender_val,
                     role=target_role,
                     faculty=target_faculty,
                     password=hashed_default_pwd,
@@ -1363,6 +1421,14 @@ class AdminUserViewSet(viewsets.ModelViewSet):
                     if str(v).strip():
                         intake_val = str(v).strip()
                         break
+            intake_val = normalize_intake(intake_val)
+
+            # Gender
+            gender_val = 'other'
+            for k, v in r.items():
+                if any(x in k for x in ['gender', 'sex']):
+                    gender_val = normalize_gender(v)
+                    break
 
             # Year of study
             year_of_study = 1
@@ -1425,6 +1491,7 @@ class AdminUserViewSet(viewsets.ModelViewSet):
                     last_name=last_name,
                     phone=phone,
                     role='student',
+                    gender=gender_val,
                     reg_number=reg,
                     faculty=faculty_obj,
                     entry_year=entry_year_val,
@@ -1444,6 +1511,8 @@ class AdminUserViewSet(viewsets.ModelViewSet):
                     'reg_number': reg,
                     'full_name': name,
                     'email': email,
+                    'gender': gender_val,
+                    'gender_display': user_obj.get_gender_display(),
                     'faculty': faculty_obj.code if faculty_obj else 'SOBAT',
                     'entry_year': entry_year_val,
                     'intake': intake_val,
@@ -1706,6 +1775,7 @@ class FacultyViewSet(viewsets.ModelViewSet):
         student_id = request.data.get('student_id')
         course_ids = request.data.get('course_ids', [])
         year_of_study = request.data.get('year_of_study')
+        semester = request.data.get('semester')
         if not student_id:
             return Response({'detail': 'student_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
         try:
@@ -1713,12 +1783,14 @@ class FacultyViewSet(viewsets.ModelViewSet):
             student.faculty = faculty
             if year_of_study is not None and str(year_of_study).isdigit():
                 student.year_of_study = int(year_of_study)
+            if semester is not None and str(semester).isdigit():
+                student.semester = int(semester)
             if course_ids:
                 courses = Course.objects.filter(id__in=course_ids)
                 student.assigned_courses.set(courses)
             student.save()
-            log_system_event(user, f"Assigned Student {student.username} (Year {student.year_of_study}) to Faculty {faculty.code}", level='INFO')
-            return Response({'detail': f'Assigned student {student.get_full_name() or student.username} (Year {student.year_of_study}) to {faculty.name}.', 'student': UserSerializer(student).data})
+            log_system_event(user, f"Assigned Student {student.username} (Year {student.year_of_study}, Sem {student.semester}) to Faculty {faculty.code}", level='INFO')
+            return Response({'detail': f'Assigned student {student.get_full_name() or student.username} (Year {student.year_of_study}, Sem {student.semester}) to {faculty.name}.', 'student': UserSerializer(student).data})
         except User.DoesNotExist:
             return Response({'detail': 'Student user not found.'}, status=status.HTTP_404_NOT_FOUND)
 
@@ -1766,7 +1838,7 @@ class CourseViewSet(viewsets.ModelViewSet):
             else:
                 qs = qs.filter(faculty__code__iexact=str(faculty_param).strip())
 
-        return qs.order_by('code')
+        return qs.select_related('faculty').prefetch_related('units').order_by('code')
 
     def get_permissions(self):
         if self.action in ['list', 'retrieve', 'units']:
@@ -1827,19 +1899,21 @@ class CourseViewSet(viewsets.ModelViewSet):
             name = request.data.get('name').strip()
             credit_units = int(request.data.get('credit_units', 3))
             year_of_study = int(request.data.get('year_of_study', 1))
+            semester = int(request.data.get('semester', 1))
             new_unit = CourseUnit.objects.create(
                 course=course,
                 code=code,
                 name=name,
                 credit_units=credit_units,
-                year_of_study=year_of_study
+                year_of_study=year_of_study,
+                semester=semester
             )
             msg = f"Created and attached unit {new_unit.code} to course {course.code}."
             log_system_event(user, msg, level='INFO')
             return Response({
                 'detail': msg,
                 'unit': CourseUnitSerializer(new_unit).data,
-                'units': CourseUnitSerializer(course.units.all().order_by('year_of_study', 'code'), many=True).data
+                'units': CourseUnitSerializer(course.units.all().order_by('year_of_study', 'semester', 'code'), many=True).data
             }, status=status.HTTP_201_CREATED)
 
         if not raw_unit_ids or not isinstance(raw_unit_ids, list):
@@ -2009,7 +2083,21 @@ class CourseUnitViewSet(viewsets.ModelViewSet):
             else:
                 qs = qs.filter(course__code__iexact=str(course_param).strip())
 
-        return qs.order_by('code')
+        year_param = self.request.query_params.get('year_of_study') or self.request.query_params.get('year')
+        if year_param and str(year_param).strip() and str(year_param).strip() not in ['All', 'ALL']:
+            try:
+                qs = qs.filter(year_of_study=int(year_param.strip()))
+            except (ValueError, TypeError):
+                pass
+
+        semester_param = self.request.query_params.get('semester') or self.request.query_params.get('sem')
+        if semester_param and str(semester_param).strip() and str(semester_param).strip() not in ['All', 'ALL']:
+            try:
+                qs = qs.filter(semester=int(semester_param.strip()))
+            except (ValueError, TypeError):
+                pass
+
+        return qs.select_related('course', 'course__faculty').prefetch_related('lecturers').order_by('year_of_study', 'semester', 'code')
 
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsAdmin | IsPlatformCoordinator | IsFacultyAdmin | IsDean])
     def assign_lecturer(self, request, pk=None):
@@ -2163,6 +2251,7 @@ class CourseUnitViewSet(viewsets.ModelViewSet):
             raw_faculty_ref = ''
             raw_cu = ''
             raw_yos = ''
+            raw_sem = ''
             raw_lecturer = ''
 
             for k, v in row.items():
@@ -2183,6 +2272,8 @@ class CourseUnitViewSet(viewsets.ModelViewSet):
                     raw_cu = raw_cu or val_str
                 elif any(x in k_clean for x in ['year of study', 'year', 'yos', 'level']):
                     raw_yos = raw_yos or val_str
+                elif any(x in k_clean for x in ['semester', 'sem', 'term']):
+                    raw_sem = raw_sem or val_str
                 elif any(x in k_clean for x in ['lecturer', 'instructor', 'teacher', 'staff']):
                     raw_lecturer = raw_lecturer or val_str
 
@@ -2217,6 +2308,13 @@ class CourseUnitViewSet(viewsets.ModelViewSet):
                 yr_val = int(cleaned_yr) if cleaned_yr and int(cleaned_yr) in [1, 2, 3, 4] else 1
             except (ValueError, TypeError):
                 yr_val = 1
+
+            # Semester parsing
+            try:
+                cleaned_sem = re.sub(r'[^\d]', '', str(raw_sem))
+                sem_val = int(cleaned_sem) if cleaned_sem and int(cleaned_sem) in [1, 2] else 1
+            except (ValueError, TypeError):
+                sem_val = 1
 
             # 1. Resolve Faculty
             target_faculty = None
@@ -2299,6 +2397,7 @@ class CourseUnitViewSet(viewsets.ModelViewSet):
                 existing_unit.name = raw_name
                 existing_unit.credit_units = cu_val
                 existing_unit.year_of_study = yr_val
+                existing_unit.semester = sem_val
                 existing_unit.save()
                 if lecturer_obj:
                     existing_unit.lecturers.add(lecturer_obj)
@@ -2307,6 +2406,8 @@ class CourseUnitViewSet(viewsets.ModelViewSet):
                     'code': existing_unit.code,
                     'name': existing_unit.name,
                     'course': target_course.code,
+                    'year_of_study': yr_val,
+                    'semester': sem_val,
                     'faculty': target_course.faculty.code if target_course.faculty else None,
                     'action': 'updated'
                 })
@@ -2316,7 +2417,8 @@ class CourseUnitViewSet(viewsets.ModelViewSet):
                     name=raw_name,
                     course=target_course,
                     credit_units=cu_val,
-                    year_of_study=yr_val
+                    year_of_study=yr_val,
+                    semester=sem_val
                 )
                 if lecturer_obj:
                     new_unit.lecturers.add(lecturer_obj)
@@ -2325,6 +2427,8 @@ class CourseUnitViewSet(viewsets.ModelViewSet):
                     'code': new_unit.code,
                     'name': new_unit.name,
                     'course': target_course.code,
+                    'year_of_study': yr_val,
+                    'semester': sem_val,
                     'faculty': target_course.faculty.code if target_course.faculty else None,
                     'action': 'created'
                 })
@@ -2349,14 +2453,14 @@ class CourseUnitViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'])
     def sample_file(self, request):
         fmt = request.query_params.get('format', 'csv').lower().strip()
-        headers = ['Unit Code', 'Unit Name', 'Course Code', 'Course Name', 'Faculty Code', 'Year of Study', 'Credit Units', 'Lecturer Email']
+        headers = ['Unit Code', 'Unit Name', 'Course Code', 'Course Name', 'Faculty Code', 'Year of Study', 'Semester', 'Credit Units', 'Lecturer Email']
         sample_rows = [
-            ['BIT2104', 'Cloud Infrastructure Systems', 'BIT2026', 'BSc. Computer Information Technology', 'FST', 2, 4, 'jizudi@ciu.ac.ug'],
-            ['BIT2105', 'Cybersecurity & Cryptography Principles', 'BIT2026', 'BSc. Computer Information Technology', 'FST', 2, 3, 'jtumwebaze@ciu.ac.ug'],
-            ['BSE2201', 'Software Architecture & Design', 'BSE2026', 'BSc. Software Engineering', 'FST', 2, 4, 'bkibwika@ciu.ac.ug'],
-            ['BSN1101', 'Foundations of Nursing Care', 'BSN2026', 'BSc. Nursing Sciences', 'FHS', 1, 3, 'dmugele@ciu.ac.ug'],
-            ['BML1101', 'Laboratory Instrumentation & Quality', 'BML2026', 'BSc. Medical Laboratory Science', 'IAH', 1, 4, 'skirya@ciu.ac.ug'],
-            ['BPH1101', 'Principles of Epidemiology & Biostatistics', 'BPH2026', 'BSc. Public Health', 'SOPH', 1, 3, 'pkihembo@ciu.ac.ug'],
+            ['BIT2104', 'Cloud Infrastructure Systems', 'BIT2026', 'BSc. Computer Information Technology', 'FST', 2, 1, 4, 'jizudi@ciu.ac.ug'],
+            ['BIT2105', 'Cybersecurity & Cryptography Principles', 'BIT2026', 'BSc. Computer Information Technology', 'FST', 2, 2, 3, 'jtumwebaze@ciu.ac.ug'],
+            ['BSE2201', 'Software Architecture & Design', 'BSE2026', 'BSc. Software Engineering', 'FST', 2, 1, 4, 'bkibwika@ciu.ac.ug'],
+            ['BSN1101', 'Foundations of Nursing Care', 'BSN2026', 'BSc. Nursing Sciences', 'FHS', 1, 1, 3, 'dmugele@ciu.ac.ug'],
+            ['BML1101', 'Laboratory Instrumentation & Quality', 'BML2026', 'BSc. Medical Laboratory Science', 'IAH', 1, 2, 4, 'skirya@ciu.ac.ug'],
+            ['BPH1101', 'Principles of Epidemiology & Biostatistics', 'BPH2026', 'BSc. Public Health', 'SOPH', 1, 1, 3, 'pkihembo@ciu.ac.ug'],
         ]
         if fmt in ['xlsx', 'excel', 'xls']:
             return generate_excel_response('sample_course_units.xlsx', headers, sample_rows, sheet_title="Course Units Allocation")
@@ -2368,16 +2472,17 @@ class CourseUnitViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'])
     def sample_excel(self, request):
-        headers = ['Unit Code', 'Unit Name', 'Course Code', 'Course Name', 'Faculty Code', 'Year of Study', 'Credit Units', 'Lecturer Email']
+        headers = ['Unit Code', 'Unit Name', 'Course Code', 'Course Name', 'Faculty Code', 'Year of Study', 'Semester', 'Credit Units', 'Lecturer Email']
         sample_rows = [
-            ['BIT2104', 'Cloud Infrastructure Systems', 'BIT2026', 'BSc. Computer Information Technology', 'FST', 2, 4, 'jizudi@ciu.ac.ug'],
-            ['BIT2105', 'Cybersecurity & Cryptography Principles', 'BIT2026', 'BSc. Computer Information Technology', 'FST', 2, 3, 'jtumwebaze@ciu.ac.ug'],
-            ['BSE2201', 'Software Architecture & Design', 'BSE2026', 'BSc. Software Engineering', 'FST', 2, 4, 'bkibwika@ciu.ac.ug'],
-            ['BSN1101', 'Foundations of Nursing Care', 'BSN2026', 'BSc. Nursing Sciences', 'FHS', 1, 3, 'dmugele@ciu.ac.ug'],
-            ['BML1101', 'Laboratory Instrumentation & Quality', 'BML2026', 'BSc. Medical Laboratory Science', 'IAH', 1, 4, 'skirya@ciu.ac.ug'],
-            ['BPH1101', 'Principles of Epidemiology & Biostatistics', 'BPH2026', 'BSc. Public Health', 'SOPH', 1, 3, 'pkihembo@ciu.ac.ug'],
+            ['BIT2104', 'Cloud Infrastructure Systems', 'BIT2026', 'BSc. Computer Information Technology', 'FST', 2, 1, 4, 'jizudi@ciu.ac.ug'],
+            ['BIT2105', 'Cybersecurity & Cryptography Principles', 'BIT2026', 'BSc. Computer Information Technology', 'FST', 2, 2, 3, 'jtumwebaze@ciu.ac.ug'],
+            ['BSE2201', 'Software Architecture & Design', 'BSE2026', 'BSc. Software Engineering', 'FST', 2, 1, 4, 'bkibwika@ciu.ac.ug'],
+            ['BSN1101', 'Foundations of Nursing Care', 'BSN2026', 'BSc. Nursing Sciences', 'FHS', 1, 1, 3, 'dmugele@ciu.ac.ug'],
+            ['BML1101', 'Laboratory Instrumentation & Quality', 'BML2026', 'BSc. Medical Laboratory Science', 'IAH', 1, 2, 4, 'skirya@ciu.ac.ug'],
+            ['BPH1101', 'Principles of Epidemiology & Biostatistics', 'BPH2026', 'BSc. Public Health', 'SOPH', 1, 1, 3, 'pkihembo@ciu.ac.ug'],
         ]
         return generate_excel_response('sample_course_units.xlsx', headers, sample_rows, sheet_title="Course Units Allocation")
+
 
 # 6. Applications ViewSet
 class ApplicationViewSet(viewsets.ModelViewSet):

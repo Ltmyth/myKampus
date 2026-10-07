@@ -12,14 +12,25 @@ class UserSerializer(serializers.ModelSerializer):
     faculty_code = serializers.CharField(source='faculty.code', read_only=True, allow_null=True)
     registration_number = serializers.ReadOnlyField()
     assigned_course_codes = serializers.SerializerMethodField()
+    gender_display = serializers.CharField(source='get_gender_display', read_only=True)
     is_test_cleared = serializers.SerializerMethodField()
     is_exam_cleared = serializers.SerializerMethodField()
     clearance_source = serializers.SerializerMethodField()
 
     class Meta:
         model = User
-        fields = ('id', 'username', 'email', 'first_name', 'last_name', 'role', 'phone', 'tuition_paid_percentage', 'faculty', 'faculty_name', 'faculty_code', 'assigned_courses', 'assigned_course_codes', 'reg_number', 'registration_number', 'year_of_study', 'semester', 'entry_year', 'intake', 'must_change_password', 'is_test_cleared', 'is_exam_cleared', 'clearance_source')
+        fields = ('id', 'username', 'email', 'first_name', 'last_name', 'role', 'phone', 'gender', 'gender_display', 'tuition_paid_percentage', 'faculty', 'faculty_name', 'faculty_code', 'assigned_courses', 'assigned_course_codes', 'reg_number', 'registration_number', 'year_of_study', 'semester', 'entry_year', 'intake', 'must_change_password', 'is_test_cleared', 'is_exam_cleared', 'clearance_source')
         read_only_fields = ('role', 'registration_number')
+
+    def validate_gender(self, value):
+        if not value:
+            return 'other'
+        val = str(value).strip().lower()
+        if val in ['m', 'male', 'man', 'boy']:
+            return 'male'
+        elif val in ['f', 'female', 'woman', 'girl']:
+            return 'female'
+        return 'other'
 
     def get_assigned_course_codes(self, obj):
         codes = set(c.code for c in obj.assigned_courses.all())
@@ -37,25 +48,33 @@ class UserSerializer(serializers.ModelSerializer):
             data['assigned_courses'] = sorted(list(existing.union(unit_course_ids)))
         return data
 
+    def _get_clearance(self, obj):
+        if not hasattr(obj, '_cached_clearance'):
+            if obj.role != 'student':
+                obj._cached_clearance = {
+                    'is_exam_cleared': True,
+                    'is_test_cleared': True,
+                    'source': 'Staff'
+                }
+            else:
+                from .clearance import check_student_clearance
+                obj._cached_clearance = check_student_clearance(obj)
+        return obj._cached_clearance
+
     def get_is_test_cleared(self, obj):
-        if obj.role != 'student': return True
-        from .clearance import check_student_clearance
-        return check_student_clearance(obj)['is_test_cleared']
+        return self._get_clearance(obj).get('is_test_cleared', True)
 
     def get_is_exam_cleared(self, obj):
-        if obj.role != 'student': return True
-        from .clearance import check_student_clearance
-        return check_student_clearance(obj)['is_exam_cleared']
+        return self._get_clearance(obj).get('is_exam_cleared', True)
 
     def get_clearance_source(self, obj):
-        if obj.role != 'student': return 'Staff'
-        from .clearance import check_student_clearance
-        return check_student_clearance(obj)['source']
+        return self._get_clearance(obj).get('source', 'Staff')
 
 class AdminUserSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, required=False, allow_blank=True, allow_null=True)
     faculty_name = serializers.CharField(source='faculty.name', read_only=True, allow_null=True)
     faculty_code = serializers.CharField(source='faculty.code', read_only=True, allow_null=True)
+    gender_display = serializers.CharField(source='get_gender_display', read_only=True)
     registration_number = serializers.ReadOnlyField()
     assigned_course_codes = serializers.SerializerMethodField()
     is_test_cleared = serializers.SerializerMethodField()
@@ -64,12 +83,22 @@ class AdminUserSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ('id', 'username', 'email', 'password', 'first_name', 'last_name', 'role', 'phone', 'tuition_paid_percentage', 'faculty', 'faculty_name', 'faculty_code', 'assigned_courses', 'assigned_course_codes', 'reg_number', 'registration_number', 'year_of_study', 'semester', 'entry_year', 'intake', 'must_change_password', 'is_test_cleared', 'is_exam_cleared', 'clearance_source')
+        fields = ('id', 'username', 'email', 'password', 'first_name', 'last_name', 'role', 'phone', 'gender', 'gender_display', 'tuition_paid_percentage', 'faculty', 'faculty_name', 'faculty_code', 'assigned_courses', 'assigned_course_codes', 'reg_number', 'registration_number', 'year_of_study', 'semester', 'entry_year', 'intake', 'must_change_password', 'is_test_cleared', 'is_exam_cleared', 'clearance_source')
 
     def validate_phone(self, value):
         if value:
             return str(value).strip()[:20]
         return value
+
+    def validate_gender(self, value):
+        if not value:
+            return 'other'
+        val = str(value).strip().lower()
+        if val in ['m', 'male', 'man', 'boy']:
+            return 'male'
+        elif val in ['f', 'female', 'woman', 'girl']:
+            return 'female'
+        return 'other'
 
     def create(self, validated_data):
         password = validated_data.pop('password', None)
@@ -107,20 +136,27 @@ class AdminUserSerializer(serializers.ModelSerializer):
             data['assigned_courses'] = sorted(list(existing.union(unit_course_ids)))
         return data
 
+    def _get_clearance(self, obj):
+        if not hasattr(obj, '_cached_clearance'):
+            if obj.role != 'student':
+                obj._cached_clearance = {
+                    'is_exam_cleared': True,
+                    'is_test_cleared': True,
+                    'source': 'Staff'
+                }
+            else:
+                from .clearance import check_student_clearance
+                obj._cached_clearance = check_student_clearance(obj)
+        return obj._cached_clearance
+
     def get_is_test_cleared(self, obj):
-        if obj.role != 'student': return True
-        from .clearance import check_student_clearance
-        return check_student_clearance(obj)['is_test_cleared']
+        return self._get_clearance(obj).get('is_test_cleared', True)
 
     def get_is_exam_cleared(self, obj):
-        if obj.role != 'student': return True
-        from .clearance import check_student_clearance
-        return check_student_clearance(obj)['is_exam_cleared']
+        return self._get_clearance(obj).get('is_exam_cleared', True)
 
     def get_clearance_source(self, obj):
-        if obj.role != 'student': return 'Staff'
-        from .clearance import check_student_clearance
-        return check_student_clearance(obj)['source']
+        return self._get_clearance(obj).get('source', 'Staff')
 
 
 class UserCreateSerializer(serializers.ModelSerializer):
@@ -129,7 +165,17 @@ class UserCreateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ('username', 'email', 'password', 'first_name', 'last_name', 'role', 'phone', 'faculty', 'assigned_courses', 'invitation_code', 'reg_number', 'year_of_study')
+        fields = ('username', 'email', 'password', 'first_name', 'last_name', 'role', 'phone', 'gender', 'faculty', 'assigned_courses', 'invitation_code', 'reg_number', 'year_of_study', 'semester', 'intake')
+
+    def validate_gender(self, value):
+        if not value:
+            return 'other'
+        val = str(value).strip().lower()
+        if val in ['m', 'male', 'man', 'boy']:
+            return 'male'
+        elif val in ['f', 'female', 'woman', 'girl']:
+            return 'female'
+        return 'other'
 
     def validate(self, attrs):
         invitation_code = attrs.get('invitation_code')
@@ -193,6 +239,8 @@ class CourseUnitSerializer(serializers.ModelSerializer):
     faculty_id = serializers.IntegerField(source='course.faculty.id', read_only=True, allow_null=True)
     faculty_code = serializers.CharField(source='course.faculty.code', read_only=True, allow_null=True)
     faculty_name = serializers.CharField(source='course.faculty.name', read_only=True, allow_null=True)
+    semester_display = serializers.CharField(source='get_semester_display', read_only=True)
+    year_of_study_display = serializers.CharField(source='get_year_of_study_display', read_only=True)
     lecturer_details = UserSerializer(source='lecturers', many=True, read_only=True)
 
     class Meta:
