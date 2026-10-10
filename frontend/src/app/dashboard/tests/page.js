@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Fragment } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { api, formatUgandanTime, getUgandanISOString, toUgandanDatetimeLocal, getUgandanNowDatetimeLocal } from '@/lib/api';
 import { useRouter } from 'next/navigation';
@@ -60,8 +60,75 @@ export default function TestPortalPage() {
   const [activeTab, setActiveTab] = useState('catalog'); // 'catalog', 'builder', 'analytics', 'history'
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCourseFilter, setSelectedCourseFilter] = useState('');
-  const [selectedFacultyFilter, setSelectedFacultyFilter] = useState('All');
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState('');
+  const [selectedFacultyFilter, setSelectedFacultyFilter] = useState('All');
+  // Bulk Actions & Expansion State for Tests
+  const [selectedTestIds, setSelectedTestIds] = useState([]);
+  const [expandedTestIds, setExpandedTestIds] = useState([]);
+
+  const toggleExpandTest = (testId) => {
+    setExpandedTestIds(prev =>
+      prev.includes(testId) ? prev.filter(id => id !== testId) : [...prev, testId]
+    );
+  };
+
+  const handleToggleSelectTest = (testId) => {
+    setSelectedTestIds(prev =>
+      prev.includes(testId) ? prev.filter(id => id !== testId) : [...prev, testId]
+    );
+  };
+
+  const handleToggleSelectAllTests = () => {
+    if (selectedTestIds.length >= filteredTests.length && filteredTests.length > 0) {
+      setSelectedTestIds([]);
+    } else {
+      setSelectedTestIds(filteredTests.map(t => t.id));
+    }
+  };
+
+  const handleBulkDeleteTests = () => {
+    if (selectedTestIds.length === 0) return;
+    const count = selectedTestIds.length;
+    showConfirm({
+      title: 'Bulk Delete Tests',
+      description: `Are you sure you want to permanently delete ${count} selected test(s)? All student attempts, scores, and questions will be permanently removed.`,
+      confirmText: `Delete ${count} Tests`,
+      variant: 'danger',
+      icon: '🗑️',
+      onConfirm: async () => {
+        setConfirmModal(prev => ({ ...prev, loading: true }));
+        setErrorMsg('');
+        setSuccessMsg('');
+        try {
+          const res = await api.post('/tests/bulk_delete/', { test_ids: selectedTestIds });
+          setSuccessMsg(res?.detail || `Deleted ${count} tests successfully.`);
+          setSelectedTestIds([]);
+          closeConfirm();
+          loadPortalData();
+        } catch (err) {
+          setErrorMsg(err.response?.data?.detail || err.message || 'Failed to delete selected tests.');
+          setConfirmModal(prev => ({ ...prev, loading: false }));
+        }
+      }
+    });
+  };
+
+  const handleBulkPublishTests = async (publishStatus) => {
+    if (selectedTestIds.length === 0) return;
+    setErrorMsg('');
+    setSuccessMsg('');
+    try {
+      const res = await api.post('/tests/bulk_publish/', {
+        test_ids: selectedTestIds,
+        is_published: publishStatus
+      });
+      setSuccessMsg(res?.detail || `Successfully ${publishStatus ? 'published' : 'unpublished'} selected tests.`);
+      setSelectedTestIds([]);
+      loadPortalData();
+    } catch (err) {
+      setErrorMsg(err.response?.data?.detail || err.message || 'Failed to update publication status.');
+    }
+  };
 
   // Submissions Tab Filter & Pagination States
   const [selectedTestFilter, setSelectedTestFilter] = useState('All');
@@ -609,9 +676,9 @@ ANSWER: C`;
   const startTestAttempt = async (testId) => {
     setErrorMsg('');
     
-    // Tuition Fee Gate Check: Must have at least 50% tuition clearance or CIU API clearance!
-    const tuitionPaid = user?.tuition_paid_percentage ?? 100.0;
-    const isTestCleared = user?.is_test_cleared ?? (tuitionPaid >= 50.0);
+    // Tuition Fee Gate Check: Must have at least 50% tuition clearance (TESTS API, EXAMS API, manual >= 50%, or temporary override)!
+    const tuitionPaid = Number(user?.tuition_paid_percentage ?? user?.effective_tuition_percentage ?? 0);
+    const isTestCleared = Boolean(user?.is_test_cleared) || (tuitionPaid >= 50.0) || Boolean(user?.is_temp_cleared);
 
     if (user?.role === 'student' && !isTestCleared) {
       setFeeGateMessage(`Test Access Barred: Continuous assessment quizzes require at least 50% tuition fee clearance or CIU Cleared Students API verification. Your current clearance is ${tuitionPaid}%. Please visit the Bursar / Finance Office to clear your fees.`);
@@ -681,6 +748,9 @@ ANSWER: C`;
     const fCode = t.faculty_code || (courses.find(c => c.id === t.course)?.faculty_code);
     return !activeFacultiesList.some(f => f.code === fCode);
   });
+
+  const studentTuitionPaid = Number(user?.tuition_paid_percentage ?? user?.effective_tuition_percentage ?? 0);
+  const isStudentTestCleared = Boolean(user?.is_test_cleared) || (studentTuitionPaid >= 50.0) || Boolean(user?.is_temp_cleared);
 
   if (loading) {
     return (
@@ -848,244 +918,653 @@ ANSWER: C`;
       {/* TAB 1: CATALOG (Organized by Faculty for Staff) */}
       {activeTab === 'catalog' && (
         user.role === 'student' ? (
-          /* Student Card Grid */
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {filteredTests.length === 0 ? (
-              <div className="col-span-full py-16 green-card rounded-2xl text-center">
-                <p className="text-slate-400 text-xs font-semibold">No tests match your active search or filter rules.</p>
+          /* Student Well-Presented High-Density Tests List View */
+          <div className="space-y-4">
+            
+            {/* Student Clearance Status Banner */}
+            {isStudentTestCleared ? (
+              <div className="bg-gradient-to-r from-emerald-50 via-teal-50 to-emerald-100/50 p-4 rounded-2xl border border-emerald-200/80 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                <div className="flex items-center space-x-3">
+                  <span className="w-10 h-10 rounded-2xl bg-emerald-600 text-white flex items-center justify-center text-lg font-bold shadow-sm">
+                    ✓
+                  </span>
+                  <div>
+                    <h4 className="font-extrabold text-slate-850 text-xs uppercase tracking-wider flex items-center space-x-2">
+                      <span>Tuition Clearance Gate (50%+ Cleared)</span>
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-300">
+                        Active & Eligible
+                      </span>
+                    </h4>
+                    <p className="text-[11px] text-slate-600 font-medium">
+                      {user?.clearance_source || (user?.is_temp_cleared ? 'Active Accounts Temporary Clearance' : (studentTuitionPaid >= 50.0 ? `Cleared via ${studentTuitionPaid}% Tuition Record` : 'Verified via CIU Cleared Students API (50% Tuition Gate)'))}. You are cleared to take all Continuous Assessment Tests.
+                    </p>
+                  </div>
+                </div>
+                <div className="text-right shrink-0">
+                  <span className="text-[10px] uppercase font-bold text-slate-400 block">Assessment Gate</span>
+                  <span className="font-extrabold text-xs text-emerald-800 bg-white px-2.5 py-1 rounded-xl border border-emerald-200 shadow-2xs inline-block">
+                    50% Clearance Required
+                  </span>
+                </div>
               </div>
             ) : (
-              filteredTests.map((testItem) => {
-                const myAttempt = attempts.find(a => a.test === testItem.id);
-                return (
-                  <div key={testItem.id} className="green-card rounded-2xl p-5 flex flex-col justify-between space-y-4">
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider bg-emerald-50 text-emerald-700 border border-emerald-100">
-                          {testItem.category.replace('_', ' ')}
-                        </span>
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${testItem.is_results_released ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-slate-200 text-slate-600 border-slate-300'}`}>
-                          {testItem.is_results_released ? 'RESULTS RELEASED' : 'WITHHELD'}
-                        </span>
-                      </div>
-
-                      <h3 className="font-bold text-slate-850 text-base leading-tight">{testItem.title}</h3>
-                      <p className="text-xs text-slate-500 font-medium">Course: <span className="font-semibold text-slate-800">[{testItem.course_code}] {testItem.course_name}</span></p>
-                      
-                      <div className="pt-2 text-[11px] text-slate-600 space-y-1 bg-slate-50 p-2.5 rounded-xl border border-slate-100 font-medium">
-                        <p>⏱️ Duration: <span className="font-bold text-slate-800">{testItem.duration_minutes} mins</span> | 🎯 Pass Mark: <span className="font-bold text-slate-800">{testItem.pass_percentage}%</span></p>
-                        <p>📅 Scheduled Start (EAT): <span className="font-bold text-slate-800">{formatUgandanTime(testItem.scheduled_start)}</span></p>
-                        {testItem.due_date && (
-                          <p>⏳ Due Date (EAT): <span className="font-bold text-amber-700">{formatUgandanTime(testItem.due_date)}</span></p>
-                        )}
-                        <p>❓ Questions: <span className="font-bold text-slate-800">{testItem.questions_count}</span> | 💰 Fee Gate: <span className="font-bold text-emerald-700">50%+ Paid</span></p>
-                      </div>
-                    </div>
-
-                    <div className="pt-2 border-t border-slate-100">
-                      {myAttempt ? (
-                        myAttempt.completed_at ? (
-                          <div className="w-full flex items-center justify-between">
-                            {testItem.is_results_released ? (
-                              <>
-                                <span className={`px-2.5 py-1 rounded text-xs font-bold border ${myAttempt.passed ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-red-50 text-red-700 border-red-200'}`}>
-                                  Score: {myAttempt.score}% ({myAttempt.passed ? 'PASSED' : 'FAILED'})
-                                </span>
-                                <button
-                                  onClick={() => router.push(`/dashboard/tests/${testItem.id}/results?attemptId=${myAttempt.id}`)}
-                                  className="px-3 py-1.5 bg-brand-light text-white text-xs font-bold rounded-lg hover:bg-brand-medium transition-all"
-                                >
-                                  View Scorecard
-                                </button>
-                              </>
-                            ) : (
-                              <span className="w-full text-center px-2.5 py-1.5 rounded text-xs font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
-                                🔒 Results Pending Release by Lecturer
-                              </span>
-                            )}
-                          </div>
-                        ) : (
-                          <button
-                            onClick={() => router.push(`/dashboard/tests/${testItem.id}`)}
-                            className="w-full py-2 bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold rounded-lg transition-all"
-                          >
-                            Resume Active Test
-                          </button>
-                        )
-                      ) : (
-                        <button
-                          onClick={() => startTestAttempt(testItem.id)}
-                          disabled={testItem.questions_count === 0}
-                          className="w-full py-2 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-lg shadow-sm transition-all disabled:opacity-50"
-                        >
-                          Launch Test
-                        </button>
-                      )}
-                    </div>
+              <div className="bg-gradient-to-r from-amber-50 via-rose-50 to-amber-100/40 p-4 rounded-2xl border border-amber-200 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                <div className="flex items-center space-x-3">
+                  <span className="w-10 h-10 rounded-2xl bg-amber-500 text-white flex items-center justify-center text-lg font-bold shadow-sm">
+                    ⚠️
+                  </span>
+                  <div>
+                    <h4 className="font-extrabold text-slate-850 text-xs uppercase tracking-wider flex items-center space-x-2">
+                      <span>50% Tuition Fee Clearance Required for Tests</span>
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-100 text-amber-900 border border-amber-300">
+                        Action Required
+                      </span>
+                    </h4>
+                    <p className="text-[11px] text-slate-600 font-medium">
+                      To launch continuous assessment tests, you must have cleared at least 50% tuition via the CIU TESTS API or obtain an Accounts Temporary Clearance override.
+                    </p>
                   </div>
-                );
-              })
+                </div>
+                <div className="text-right shrink-0">
+                  <span className="text-[10px] uppercase font-bold text-slate-400 block">Tuition Gate</span>
+                  <span className="font-extrabold text-xs text-amber-800 bg-white px-2.5 py-1 rounded-xl border border-amber-200 shadow-2xs inline-block">
+                    50% Required
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* List Header Summary */}
+            <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
+              <div className="flex items-center space-x-2">
+                <span className="font-extrabold text-slate-800 uppercase tracking-wider">
+                  Continuous Assessment Tests
+                </span>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                  {filteredTests.length} Tests
+                </span>
+              </div>
+              <span className="text-slate-500 text-[11px]">
+                Showing scheduled quizzes, midterms, and tests for your assigned course units.
+              </span>
+            </div>
+
+            {/* High-Density Student Tests Table */}
+            {filteredTests.length === 0 ? (
+              <div className="bg-white rounded-2xl p-8 border border-slate-200 text-center space-y-2">
+                <span className="text-3xl block">📝</span>
+                <p className="text-slate-700 font-bold text-sm">No tests match your active filter criteria</p>
+                <p className="text-slate-500 text-xs">There are currently no active tests scheduled for your units.</p>
+              </div>
+            ) : (
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                <div className="overflow-x-auto custom-scrollbar">
+                  <table className="w-full text-left text-xs border-collapse">
+                    <thead>
+                      <tr className="bg-slate-50/80 border-b border-slate-200 text-slate-500 uppercase font-semibold">
+                        <th className="px-4 py-3">Test Title & Category</th>
+                        <th className="px-3 py-3">Course & Unit</th>
+                        <th className="px-3 py-3">Schedule (EAT)</th>
+                        <th className="px-3 py-3 text-center">Duration & Pass</th>
+                        <th className="px-3 py-3 text-center">Questions</th>
+                        <th className="px-3 py-3 text-center">Status & Score</th>
+                        <th className="px-4 py-3 text-center">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 text-slate-700">
+                      {filteredTests.map((testItem) => {
+                        const myAttempt = attempts.find(a => a.test === testItem.id);
+                        const isExpanded = expandedTestIds.includes(testItem.id);
+
+                        return (
+                          <Fragment key={testItem.id}>
+                            <tr
+                              className={`transition-all ${
+                                isExpanded
+                                  ? 'bg-emerald-50/30 border-l-4 border-l-brand-light'
+                                  : 'hover:bg-slate-50'
+                              }`}
+                            >
+                              <td className="px-4 py-3">
+                                <div className="space-y-0.5">
+                                  <div className="flex items-center space-x-1.5">
+                                    <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                      {testItem.category.replace('_', ' ')}
+                                    </span>
+                                    <span className="font-extrabold text-slate-900 leading-tight block">
+                                      {testItem.title}
+                                    </span>
+                                  </div>
+                                  <span className="text-[11px] text-slate-500 block">
+                                    Lecturer: <strong className="text-slate-700">{testItem.lecturer_name || 'Assigned Lecturer'}</strong>
+                                  </span>
+                                </div>
+                              </td>
+                              <td className="px-3 py-3">
+                                <span className="font-mono font-bold text-brand-dark block">
+                                  [{testItem.course_code}]
+                                </span>
+                                <span className="text-[11px] text-slate-600 truncate max-w-[160px] block">
+                                  {testItem.course_name}
+                                </span>
+                              </td>
+                              <td className="px-3 py-3 text-[11px]">
+                                <div className="space-y-0.5">
+                                  <span className="block font-medium text-slate-800">
+                                    📅 {formatUgandanTime(testItem.scheduled_start)}
+                                  </span>
+                                  {testItem.due_date && (
+                                    <span className="block text-amber-700 font-medium text-[10px]">
+                                      ⏳ Due: {formatUgandanTime(testItem.due_date)}
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
+                              <td className="px-3 py-3 text-center">
+                                <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-800 border border-slate-200 block">
+                                  ⏱️ {testItem.duration_minutes}m
+                                </span>
+                                <span className="text-[10px] text-slate-500 font-semibold block mt-0.5">
+                                  🎯 {testItem.pass_percentage}% Pass
+                                </span>
+                              </td>
+                              <td className="px-3 py-3 text-center">
+                                <span className="font-bold text-slate-800 text-xs">
+                                  ❓ {testItem.questions_count} Qs
+                                </span>
+                              </td>
+                              <td className="px-3 py-3 text-center">
+                                {myAttempt ? (
+                                  myAttempt.completed_at ? (
+                                    testItem.is_results_released ? (
+                                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold border block ${myAttempt.passed ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-red-50 text-red-700 border-red-200'}`}>
+                                        {myAttempt.score}% ({myAttempt.passed ? 'PASSED' : 'FAILED'})
+                                      </span>
+                                    ) : (
+                                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200 block">
+                                        🔒 Results Withheld
+                                      </span>
+                                    )
+                                  ) : (
+                                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-50 text-blue-800 border border-blue-200 block">
+                                      🔄 In Progress
+                                    </span>
+                                  )
+                                ) : (
+                                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-600 border border-slate-200 block">
+                                    Not Attempted
+                                  </span>
+                                )}
+                              </td>
+                              <td className="px-4 py-3 text-center">
+                                <div className="flex items-center justify-center space-x-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => toggleExpandTest(testItem.id)}
+                                    className={`px-2 py-1 text-[10px] font-bold rounded-lg border transition-all cursor-pointer ${
+                                      isExpanded
+                                        ? 'bg-brand-dark text-white border-brand-dark shadow-xs'
+                                        : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-200'
+                                    }`}
+                                    title="Expand details preview"
+                                  >
+                                    <span>{isExpanded ? '▲ Hide' : '🔍 Preview'}</span>
+                                  </button>
+
+                                  {myAttempt ? (
+                                    myAttempt.completed_at ? (
+                                      testItem.is_results_released ? (
+                                        <button
+                                          onClick={() => router.push(`/dashboard/tests/${testItem.id}/results?attemptId=${myAttempt.id}`)}
+                                          className="px-2.5 py-1 bg-brand-light text-white text-[10px] font-bold rounded-lg hover:bg-brand-medium transition-all shadow-xs cursor-pointer"
+                                        >
+                                          Scorecard
+                                        </button>
+                                      ) : (
+                                        <span className="text-[10px] text-slate-400 font-medium italic">Pending</span>
+                                      )
+                                    ) : (
+                                      <button
+                                        onClick={() => router.push(`/dashboard/tests/${testItem.id}`)}
+                                        className="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-white text-[10px] font-bold rounded-lg transition-all shadow-xs cursor-pointer"
+                                      >
+                                        Resume
+                                      </button>
+                                    )
+                                  ) : (
+                                    <button
+                                      onClick={() => startTestAttempt(testItem.id)}
+                                      disabled={testItem.questions_count === 0}
+                                      className="px-2.5 py-1 bg-brand-light hover:bg-brand-medium text-white text-[10px] font-bold rounded-lg shadow-xs transition-all disabled:opacity-50 cursor-pointer"
+                                    >
+                                      Launch
+                                    </button>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+
+                            {/* Expand / Preview Drawer */}
+                            {isExpanded && (
+                              <tr className="bg-slate-50/70 border-b border-emerald-100 animate-fade-in">
+                                <td colSpan={7} className="px-6 py-4">
+                                  <div className="bg-white rounded-2xl p-4 border border-emerald-200/80 shadow-xs space-y-3 text-xs">
+                                    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-slate-100 pb-2">
+                                      <div>
+                                        <h5 className="font-extrabold text-slate-900 text-sm">
+                                          {testItem.title}
+                                        </h5>
+                                        <p className="text-slate-500 text-[11px]">
+                                          Course: [{testItem.course_code}] {testItem.course_name}
+                                        </p>
+                                      </div>
+                                      <span className="px-2.5 py-1 rounded-xl text-xs font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                                        Fee Gate: 50% Tuition Clearance (CIU TESTS API Gate)
+                                      </span>
+                                    </div>
+                                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 p-3 rounded-xl border border-slate-100 text-xs">
+                                      <div>
+                                        <span className="text-[10px] uppercase font-bold text-slate-400 block">Duration</span>
+                                        <span className="font-bold text-slate-800">{testItem.duration_minutes} Minutes</span>
+                                      </div>
+                                      <div>
+                                        <span className="text-[10px] uppercase font-bold text-slate-400 block">Pass Score</span>
+                                        <span className="font-bold text-slate-800">{testItem.pass_percentage}%</span>
+                                      </div>
+                                      <div>
+                                        <span className="text-[10px] uppercase font-bold text-slate-400 block">Allowed Attempts</span>
+                                        <span className="font-bold text-slate-800">{testItem.allowed_attempts || 1} Attempt(s)</span>
+                                      </div>
+                                      <div>
+                                        <span className="text-[10px] uppercase font-bold text-slate-400 block">Total Questions</span>
+                                        <span className="font-bold text-slate-800">{testItem.questions_count}</span>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </td>
+                              </tr>
+                            )}
+                          </Fragment>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             )}
           </div>
         ) : (
-          /* STAFF FACULTY ORGANIZED TESTS VIEW */
-          <div className="space-y-8">
-            {testFacultyGroups.map(({ faculty, tests: facTests }) => {
-              if (selectedFacultyFilter !== 'All' && faculty.code !== selectedFacultyFilter) return null;
-              return (
-                <div key={faculty.id} className="green-card rounded-2xl p-6 space-y-4">
-                  
-                  {/* Faculty Header */}
-                  <div className="flex items-center justify-between border-b border-emerald-100 pb-3">
-                    <div className="flex items-center space-x-2">
-                      <span className="px-2.5 py-1 bg-brand-light/10 text-brand-dark font-black text-xs rounded-lg border border-brand-light/20 uppercase">
-                        {faculty.code}
-                      </span>
-                      <h3 className="text-base font-bold text-slate-850">{faculty.name}</h3>
-                    </div>
-                    <span className="text-xs font-extrabold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-xl border border-emerald-200">
-                      {facTests.length} Tests Published
-                    </span>
+          /* STAFF HIGH-DENSITY TESTS LIST FORMAT WITH BULK ACTIONS, EDIT, DELETE, AND EXPAND/PREVIEW */
+          <div className="space-y-4">
+            
+            {/* Sticky Bulk Action Bar for Tests */}
+            {selectedTestIds.length > 0 && !isExecutiveReadOnly && (
+              <div className="sticky top-2 z-20 bg-gradient-to-r from-red-600 via-rose-600 to-red-700 text-white p-3.5 rounded-2xl shadow-xl border border-red-500/50 flex flex-wrap items-center justify-between gap-3 animate-fade-in">
+                <div className="flex items-center space-x-3">
+                  <span className="w-8 h-8 rounded-xl bg-white/20 flex items-center justify-center text-sm font-bold shadow-inner">
+                    📝
+                  </span>
+                  <div>
+                    <p className="text-xs font-black tracking-wide uppercase">
+                      {selectedTestIds.length} Test{selectedTestIds.length > 1 ? 's' : ''} Selected
+                    </p>
+                    <p className="text-[11px] text-red-100 font-medium">
+                      Manage selected Continuous Assessment Tests in bulk.
+                    </p>
                   </div>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedTestIds([])}
+                    className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-bold transition-all border border-white/20 cursor-pointer"
+                  >
+                    Deselect All
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleBulkPublishTests(true)}
+                    className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl text-xs font-black shadow-sm transition-all flex items-center space-x-1 cursor-pointer"
+                  >
+                    <span>🚀 Bulk Publish</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleBulkPublishTests(false)}
+                    className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-black shadow-sm transition-all flex items-center space-x-1 cursor-pointer"
+                  >
+                    <span>📁 Bulk Unpublish</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleBulkDeleteTests}
+                    className="px-4 py-1.5 bg-white text-red-700 hover:bg-red-50 rounded-xl text-xs font-black shadow-md hover:shadow transition-all flex items-center space-x-1.5 cursor-pointer"
+                  >
+                    <span>🗑️ Delete Selected ({selectedTestIds.length})</span>
+                  </button>
+                </div>
+              </div>
+            )}
 
-                  {facTests.length === 0 ? (
-                    <p className="text-slate-400 text-xs py-4 text-center italic">No tests created for {faculty.name} yet.</p>
-                  ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                      {facTests.map((testItem) => {
+            {/* List Controls Summary */}
+            <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
+              <div className="flex items-center space-x-2">
+                <span className="font-extrabold text-slate-800 uppercase tracking-wider">
+                  Continuous Assessment Tests Directory
+                </span>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                  {filteredTests.length} Tests
+                </span>
+              </div>
+              <div className="flex items-center space-x-2">
+                {!isExecutiveReadOnly && filteredTests.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleToggleSelectAllTests}
+                    className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-all border border-slate-200 cursor-pointer"
+                  >
+                    {selectedTestIds.length >= filteredTests.length && filteredTests.length > 0
+                      ? '✕ Deselect All'
+                      : `☑️ Select All (${filteredTests.length})`}
+                  </button>
+                )}
+                {canBuildTest && (
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('builder')}
+                    className="px-3.5 py-1.5 bg-brand-light hover:bg-brand-medium text-white rounded-xl text-xs font-bold shadow-xs transition-all cursor-pointer"
+                  >
+                    ➕ Create New Test
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* High-Density Tests List Table */}
+            {filteredTests.length === 0 ? (
+              <div className="bg-white rounded-2xl p-8 border border-slate-200 text-center space-y-2">
+                <span className="text-3xl block">📝</span>
+                <p className="text-slate-700 font-bold text-sm">No tests match your active filter criteria</p>
+                <p className="text-slate-500 text-xs">Try selecting a different faculty or clearing your search term.</p>
+              </div>
+            ) : (
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                <div className="overflow-x-auto custom-scrollbar">
+                  <table className="w-full text-left text-xs border-collapse">
+                    <thead>
+                      <tr className="bg-slate-50/80 border-b border-slate-200 text-slate-500 uppercase font-semibold">
+                        {!isExecutiveReadOnly && (
+                          <th className="px-3 py-3 w-10 text-center">
+                            <input
+                              type="checkbox"
+                              checked={filteredTests.length > 0 && filteredTests.every(t => selectedTestIds.includes(t.id))}
+                              onChange={handleToggleSelectAllTests}
+                              className="w-4 h-4 text-red-600 rounded border-slate-300 focus:ring-red-400 cursor-pointer"
+                              title="Select / deselect all filtered tests"
+                            />
+                          </th>
+                        )}
+                        <th className="px-4 py-3">Test Title & Category</th>
+                        <th className="px-3 py-3">Course & Unit</th>
+                        <th className="px-3 py-3">Schedule (EAT)</th>
+                        <th className="px-3 py-3 text-center">Duration & Pass</th>
+                        <th className="px-3 py-3 text-center">Questions</th>
+                        <th className="px-3 py-3 text-center">Status</th>
+                        <th className="px-4 py-3 text-center">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 text-slate-700">
+                      {filteredTests.map((testItem) => {
+                        const isSelected = selectedTestIds.includes(testItem.id);
+                        const isExpanded = expandedTestIds.includes(testItem.id);
                         const canManageThisTest = isAdmin || (isLecturer && (testItem.lecturer === user.id || testItem.lecturer_name === user.username));
+                        const testAttemptsCount = attempts.filter(a => a.test === testItem.id).length;
+
                         return (
-                          <div key={testItem.id} className="bg-gradient-to-br from-white to-emerald-50/30 rounded-2xl border border-emerald-200/80 p-5 shadow-sm hover:border-emerald-300 transition-all flex flex-col justify-between space-y-3">
-                            <div className="space-y-2">
-                              <div className="flex items-center justify-between">
-                                <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-emerald-100 text-emerald-800 border border-emerald-200">
-                                  {testItem.category.replace('_', ' ')}
+                          <Fragment key={testItem.id}>
+                            <tr
+                              className={`transition-all ${
+                                isSelected
+                                  ? 'bg-red-50/50 hover:bg-red-50/70 border-l-4 border-l-red-500'
+                                  : isExpanded
+                                  ? 'bg-emerald-50/30 border-l-4 border-l-brand-light'
+                                  : 'hover:bg-slate-50'
+                              }`}
+                            >
+                              {!isExecutiveReadOnly && (
+                                <td className="px-3 py-3 text-center" onClick={(e) => e.stopPropagation()}>
+                                  <input
+                                    type="checkbox"
+                                    checked={isSelected}
+                                    onChange={() => handleToggleSelectTest(testItem.id)}
+                                    className="w-4 h-4 text-red-600 rounded border-slate-300 focus:ring-red-400 cursor-pointer"
+                                    title={`Select ${testItem.title}`}
+                                  />
+                                </td>
+                              )}
+                              <td className="px-4 py-3">
+                                <div className="space-y-0.5">
+                                  <div className="flex items-center space-x-1.5">
+                                    <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                      {testItem.category.replace('_', ' ')}
+                                    </span>
+                                    <span className="font-extrabold text-slate-900 leading-tight block">
+                                      {testItem.title}
+                                    </span>
+                                  </div>
+                                  <span className="text-[11px] text-slate-500 block">
+                                    Lecturer: <strong className="text-slate-700">{testItem.lecturer_name || 'Unassigned'}</strong>
+                                  </span>
+                                </div>
+                              </td>
+                              <td className="px-3 py-3">
+                                <span className="font-mono font-bold text-brand-dark block">
+                                  [{testItem.course_code}]
                                 </span>
-                                <div className="flex items-center space-x-1">
-                                  <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${testItem.is_published ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}>
+                                <span className="text-[11px] text-slate-600 truncate max-w-[160px] block">
+                                  {testItem.course_name}
+                                </span>
+                              </td>
+                              <td className="px-3 py-3 text-[11px]">
+                                <div className="space-y-0.5">
+                                  <span className="block font-medium text-slate-800">
+                                    📅 {formatUgandanTime(testItem.scheduled_start)}
+                                  </span>
+                                  {testItem.due_date && (
+                                    <span className="block text-amber-700 font-medium text-[10px]">
+                                      ⏳ Due: {formatUgandanTime(testItem.due_date)}
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
+                              <td className="px-3 py-3 text-center">
+                                <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-800 border border-slate-200 block">
+                                  ⏱️ {testItem.duration_minutes}m
+                                </span>
+                                <span className="text-[10px] text-slate-500 font-semibold block mt-0.5">
+                                  🎯 {testItem.pass_percentage}% Pass
+                                </span>
+                              </td>
+                              <td className="px-3 py-3 text-center">
+                                <button
+                                  type="button"
+                                  onClick={() => handleSelectTestForQuestions(testItem)}
+                                  className="px-2 py-1 bg-white hover:bg-emerald-50 text-slate-800 border border-emerald-200 font-bold rounded-lg text-[10px] transition-all inline-flex items-center space-x-1 cursor-pointer"
+                                  title="Manage test questions"
+                                >
+                                  <span>❓ {testItem.questions_count} Qs</span>
+                                </button>
+                              </td>
+                              <td className="px-3 py-3 text-center">
+                                <div className="space-y-1">
+                                  <span className={`px-2 py-0.5 rounded text-[10px] font-black border block ${testItem.is_published ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}>
                                     {testItem.is_published ? 'PUBLISHED' : 'DRAFT'}
                                   </span>
-                                  <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${testItem.is_results_released ? 'bg-emerald-50 text-emerald-800 border-emerald-200' : 'bg-slate-200 text-slate-600 border-slate-300'}`}>
+                                  <span className={`px-2 py-0.5 rounded text-[10px] font-bold border block ${testItem.is_results_released ? 'bg-emerald-50 text-emerald-800 border-emerald-200' : 'bg-slate-100 text-slate-600 border-slate-200'}`}>
                                     {testItem.is_results_released ? 'RELEASED' : 'WITHHELD'}
                                   </span>
                                 </div>
-                              </div>
-
-                              <h4 className="font-bold text-slate-850 text-base leading-tight">{testItem.title}</h4>
-                              <p className="text-xs text-slate-500 font-medium">Course: <span className="font-semibold text-slate-800">[{testItem.course_code}] {testItem.course_name}</span></p>
-                              <p className="text-xs text-slate-500">Lecturer: <span className="font-semibold text-slate-800">{testItem.lecturer_name}</span></p>
-                              
-                              <div className="pt-2 text-[11px] text-slate-600 space-y-1 bg-white p-2.5 rounded-xl border border-slate-200 font-medium">
-                                <p>⏱️ Duration: <span className="font-bold text-slate-800">{testItem.duration_minutes} mins</span> | 🎯 Pass Mark: <span className="font-bold text-slate-800">{testItem.pass_percentage}%</span></p>
-                                <p>📅 Scheduled Start (EAT): <span className="font-bold text-slate-800">{formatUgandanTime(testItem.scheduled_start)}</span></p>
-                                {testItem.due_date && (
-                                  <p>⏳ Due Date (EAT): <span className="font-bold text-amber-700">{formatUgandanTime(testItem.due_date)}</span></p>
-                                )}
-                                <p>❓ Questions: <span className="font-bold text-slate-800">{testItem.questions_count}</span></p>
-                              </div>
-                            </div>
-
-                            {/* Actions */}
-                            <div className="pt-2 border-t border-slate-200 flex flex-wrap items-center justify-between gap-1">
-                              <button
-                                onClick={() => handleSelectTestForQuestions(testItem)}
-                                className="px-2 py-1 bg-white border border-emerald-200 hover:bg-emerald-50 text-slate-800 text-xs font-bold rounded-lg transition-all"
-                              >
-                                Questions ({testItem.questions_count})
-                              </button>
-
-                              <button
-                                onClick={() => {
-                                  setSelectedTestFilter(String(testItem.id));
-                                  setActiveTab('analytics');
-                                }}
-                                className="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-bold rounded-lg transition-all"
-                                title="Filter student submissions and view scorecards for this test"
-                              >
-                                📊 Submissions ({attempts.filter(a => a.test === testItem.id).length})
-                              </button>
-
-                              <button
-                                onClick={() => handlePreviewScorecard(testItem)}
-                                className="px-2 py-1 bg-purple-50 hover:bg-purple-100 text-purple-800 border border-purple-200 text-xs font-bold rounded-lg transition-all"
-                                title="Preview and edit questions/answers for this set test using the score card layout"
-                              >
-                                👁️ Preview
-                              </button>
-                              
-                              {!isExecutiveReadOnly && (
-                                <>
-                                  {canManageThisTest && (
+                              </td>
+                              <td className="px-4 py-3 text-center">
+                                <div className="flex items-center justify-center space-x-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => toggleExpandTest(testItem.id)}
+                                    className={`px-2 py-1 text-[10px] font-bold rounded-lg border transition-all cursor-pointer ${
+                                      isExpanded
+                                        ? 'bg-brand-dark text-white border-brand-dark shadow-xs'
+                                        : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-200'
+                                    }`}
+                                    title="Expand details and management preview"
+                                  >
+                                    <span>{isExpanded ? '▲ Hide' : '🔍 Preview'}</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handlePreviewScorecard(testItem)}
+                                    className="px-2 py-1 bg-purple-50 hover:bg-purple-100 text-purple-800 border border-purple-200 text-[10px] font-bold rounded-lg transition-all cursor-pointer"
+                                    title="Preview scorecard layout"
+                                  >
+                                    👁️
+                                  </button>
+                                  {!isExecutiveReadOnly && canManageThisTest && (
                                     <>
                                       <button
-                                        onClick={() => handleTogglePublish(testItem)}
-                                        className={`px-2 py-1 text-xs font-bold rounded-lg transition-all ${testItem.is_published ? 'bg-amber-50 text-amber-700 border border-amber-200' : 'bg-brand-light text-white'}`}
-                                      >
-                                        {testItem.is_published ? 'Unpublish' : 'Publish'}
-                                      </button>
-
-                                      <button
-                                        onClick={() => handleToggleResultsRelease(testItem)}
-                                        className={`px-2 py-1 text-xs font-bold rounded-lg transition-all ${testItem.is_results_released ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' : 'bg-emerald-600 text-white'}`}
-                                        title="Toggle student score release"
-                                      >
-                                        {testItem.is_results_released ? '🔒 Withhold' : '📢 Release'}
-                                      </button>
-
-                                      <button
+                                        type="button"
                                         onClick={() => handleOpenEditTestModal(testItem)}
-                                        className="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-bold rounded-lg transition-all border border-emerald-200"
-                                        title="Edit test paper details"
+                                        className="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-[10px] font-bold rounded-lg transition-all border border-emerald-200 cursor-pointer"
+                                        title="Edit test paper"
                                       >
-                                        ✏️ Edit
+                                        ✏️
                                       </button>
-
                                       <button
+                                        type="button"
                                         onClick={() => handleDeleteTest(testItem)}
-                                        className="px-2 py-1 bg-red-50 hover:bg-red-100 text-red-700 text-xs font-bold rounded-lg transition-all border border-red-200"
+                                        className="px-2 py-1 bg-red-50 hover:bg-red-100 text-red-700 text-[10px] font-bold rounded-lg transition-all border border-red-200 cursor-pointer"
                                         title="Delete test paper"
                                       >
-                                        🗑️ Delete
+                                        🗑️
                                       </button>
                                     </>
                                   )}
-                                </>
-                              )}
+                                </div>
+                              </td>
+                            </tr>
 
-                              <button
-                                onClick={() => downloadResultsCSV(testItem.id)}
-                                className="p-1 bg-white hover:bg-slate-100 border border-slate-200 text-slate-600 rounded-lg text-xs font-bold"
-                                title="Export Test Results CSV"
-                              >
-                                📊 CSV
-                              </button>
-                            </div>
-                          </div>
+                            {/* Expand / Preview Drawer */}
+                            {isExpanded && (
+                              <tr className="bg-slate-50/70 border-b border-emerald-100 animate-fade-in">
+                                <td colSpan={!isExecutiveReadOnly ? 8 : 7} className="px-6 py-4">
+                                  <div className="bg-white rounded-2xl p-4 border border-emerald-200/80 shadow-xs space-y-3 text-xs">
+                                    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-slate-100 pb-2.5">
+                                      <div className="space-y-0.5">
+                                        <h5 className="font-extrabold text-slate-900 text-sm flex items-center space-x-2">
+                                          <span>{testItem.title}</span>
+                                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-800 border border-blue-200">
+                                            {testItem.questions_count} Questions · {testAttemptsCount} Submissions
+                                          </span>
+                                        </h5>
+                                        <p className="text-slate-500 text-[11px]">
+                                          Course: [{testItem.course_code}] {testItem.course_name} · Faculty: {testItem.faculty_code || 'N/A'}
+                                        </p>
+                                      </div>
+                                      <div className="flex items-center space-x-1.5 shrink-0">
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setSelectedTestFilter(String(testItem.id));
+                                            setActiveTab('analytics');
+                                          }}
+                                          className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 font-bold rounded-xl text-xs transition-all cursor-pointer"
+                                        >
+                                          📊 View Submissions ({testAttemptsCount})
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => downloadResultsCSV(testItem.id)}
+                                          className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 font-bold rounded-xl text-xs transition-all cursor-pointer"
+                                        >
+                                          📥 Export CSV
+                                        </button>
+                                      </div>
+                                    </div>
+
+                                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 p-3 rounded-xl border border-slate-100 text-xs">
+                                      <div>
+                                        <span className="text-[10px] uppercase font-bold text-slate-400 block">Pass Requirement</span>
+                                        <span className="font-bold text-slate-800">{testItem.pass_percentage}% Score</span>
+                                      </div>
+                                      <div>
+                                        <span className="text-[10px] uppercase font-bold text-slate-400 block">Allowed Attempts</span>
+                                        <span className="font-bold text-slate-800">{testItem.allowed_attempts || 1} Attempt(s)</span>
+                                      </div>
+                                      <div>
+                                        <span className="text-[10px] uppercase font-bold text-slate-400 block">Tuition Fee Gate</span>
+                                        <span className="font-bold text-emerald-700">50%+ Cleared (CIU TESTS API)</span>
+                                      </div>
+                                      <div>
+                                        <span className="text-[10px] uppercase font-bold text-slate-400 block">Duration</span>
+                                        <span className="font-bold text-slate-800">{testItem.duration_minutes} Minutes</span>
+                                      </div>
+                                    </div>
+
+                                    {/* Action Shortcuts */}
+                                    {!isExecutiveReadOnly && canManageThisTest && (
+                                      <div className="flex flex-wrap items-center justify-end gap-2 pt-1">
+                                        <button
+                                          type="button"
+                                          onClick={() => handleTogglePublish(testItem)}
+                                          className={`px-3 py-1.5 text-xs font-bold rounded-xl transition-all cursor-pointer ${
+                                            testItem.is_published
+                                              ? 'bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100'
+                                              : 'bg-brand-light text-white hover:bg-brand-medium'
+                                          }`}
+                                        >
+                                          {testItem.is_published ? '📁 Unpublish Test' : '🚀 Publish Test'}
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => handleToggleResultsRelease(testItem)}
+                                          className={`px-3 py-1.5 text-xs font-bold rounded-xl transition-all cursor-pointer ${
+                                            testItem.is_results_released
+                                              ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                                              : 'bg-emerald-600 text-white hover:bg-emerald-700'
+                                          }`}
+                                        >
+                                          {testItem.is_results_released ? '🔒 Withhold Results' : '📢 Release Results to Students'}
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => handlePreviewScorecard(testItem)}
+                                          className="px-3 py-1.5 bg-purple-50 hover:bg-purple-100 text-purple-800 border border-purple-200 text-xs font-bold rounded-xl transition-all cursor-pointer"
+                                        >
+                                          👁️ Scorecard Preview
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => handleOpenEditTestModal(testItem)}
+                                          className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-bold rounded-xl transition-all border border-emerald-200 cursor-pointer"
+                                        >
+                                          ✏️ Edit Test Details
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => handleDeleteTest(testItem)}
+                                          className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-700 text-xs font-bold rounded-xl transition-all border border-red-200 cursor-pointer"
+                                        >
+                                          🗑️ Delete Test
+                                        </button>
+                                      </div>
+                                    )}
+                                  </div>
+                                </td>
+                              </tr>
+                            )}
+                          </Fragment>
                         );
                       })}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-
-            {/* Unassigned Tests */}
-            {unassignedTests.length > 0 && (
-              <div className="green-card rounded-2xl p-6 space-y-4">
-                <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">General / Unassigned Faculty Tests</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {unassignedTests.map((testItem) => (
-                    <div key={testItem.id} className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
-                      <h4 className="font-bold text-slate-850 text-sm">{testItem.title}</h4>
-                      <p className="text-xs text-slate-500">Course: {testItem.course_code} · Lecturer: {testItem.lecturer_name}</p>
-                      <button
-                        onClick={() => handleSelectTestForQuestions(testItem)}
-                        className="px-3 py-1 bg-white border border-slate-200 text-slate-800 text-xs font-bold rounded-lg"
-                      >
-                        Questions ({testItem.questions_count})
-                      </button>
-                    </div>
-                  ))}
+                    </tbody>
+                  </table>
                 </div>
               </div>
             )}
@@ -1400,7 +1879,7 @@ ANSWER: C`;
                 <div className="space-y-3 max-h-96 overflow-y-auto custom-scrollbar pr-1">
                   {questions.length === 0 ? (
                     <div className="py-8 text-center text-slate-400 text-xs font-medium bg-slate-50 rounded-xl border border-dashed border-slate-200">
-                      No questions added to this test yet. Click "Seed Sample Package" or fill the form below.
+                      No questions added to this test yet. Click &quot;Seed Sample Package&quot; or fill the form below.
                     </div>
                   ) : (
                     questions.map((q, idx) => (
@@ -2042,7 +2521,7 @@ ANSWER: C`;
               
               {(!scorecardPreviewData.questions || scorecardPreviewData.questions.length === 0) ? (
                 <div className="p-8 text-center bg-slate-50 border border-dashed border-slate-300 rounded-2xl text-slate-500 text-xs italic">
-                  No questions added to this test yet. Click "Add Question to Score Card" above to set questions.
+                  No questions added to this test yet. Click &quot;Add Question to Score Card&quot; above to set questions.
                 </div>
               ) : (
                 <div className="space-y-4">

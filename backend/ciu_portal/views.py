@@ -26,7 +26,11 @@ from .serializers import (
     TemporaryClearanceSerializer, QuestionBankSerializer, QuestionBankItemSerializer, ProctorSnapshotSerializer
 )
 
-from .permissions import IsAdmin, IsPlatformCoordinator, IsDVC, IsDean, IsFacultyAdmin, IsRegistrar, IsLecturer, IsStudent, IsStaffUser, IsExecutiveReadOnly
+from .permissions import (
+    IsAdmin, IsPlatformCoordinator, IsDVC, IsDean, IsFacultyAdmin, IsRegistrar,
+    IsLecturer, IsStudent, IsStaffUser, IsExecutiveReadOnly,
+    IsAccountsPersonnel, CanIssueTemporaryClearance, IsStrictSystemAdmin
+)
 from .clearance import fetch_external_cleared_students, check_student_clearance
 
 def authenticate_token_param(request):
@@ -62,6 +66,10 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
                     break
 
         if user_obj:
+            if not user_obj.is_active:
+                raise serializers.ValidationError({
+                    "detail": f"Account Suspended: This account ({user_obj.username}) has been suspended by the System Administrator. Access is temporarily revoked."
+                })
             if user_obj.role == 'student':
                 student_reg = (user_obj.reg_number or user_obj.registration_number or '').upper()
                 if username_input.upper() != student_reg:
@@ -92,7 +100,8 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
             'is_exam_cleared': clearance_info['is_exam_cleared'],
             'is_test_cleared': clearance_info['is_test_cleared'],
             'clearance_source': clearance_info['source'],
-            'must_change_password': self.user.must_change_password
+            'must_change_password': self.user.must_change_password,
+            'is_active': self.user.is_active
         }
         log_system_event(self.user, f"User Login Success ({self.user.role})", level="INFO")
         return data
@@ -401,7 +410,9 @@ class AdminUserViewSet(viewsets.ModelViewSet):
             return [permissions.AllowAny()]
         if self.action in ['upload_students', 'bulk_allocate_csv']:
             return [permissions.IsAuthenticated(), (IsAdmin | IsPlatformCoordinator | IsFacultyAdmin | IsRegistrar)()]
-        if self.action in ['bulk_onboard_staff']:
+        if self.action in ['toggle_suspend', 'bulk_suspend']:
+            return [permissions.IsAuthenticated(), IsStrictSystemAdmin()]
+        if self.action in ['bulk_onboard_staff', 'onboard_single_staff']:
             return [permissions.IsAuthenticated(), (IsAdmin | IsPlatformCoordinator)()]
         return [permissions.IsAuthenticated(), (IsAdmin | IsPlatformCoordinator)()]
 
@@ -506,41 +517,55 @@ class AdminUserViewSet(viewsets.ModelViewSet):
             user_obj.set_password(str(raw_pass).strip())
             user_obj.save()
 
-    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsAdmin])
+    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsAdmin | IsAccountsPersonnel])
     def sync_clearance(self, request):
-        cleared_list = fetch_external_cleared_students(force_refresh=True)
-        if cleared_list is None:
+        acad = request.data.get('acad') or request.query_params.get('acad') or '2026/2027'
+        sem = request.data.get('sem') or request.query_params.get('sem') or '1'
+
+        exams_list = fetch_external_cleared_students(examtype="EXAMS", acad=acad, sem=sem, force_refresh=True)
+        tests_list = fetch_external_cleared_students(examtype="TESTS", acad=acad, sem=sem, force_refresh=True)
+        if exams_list is None and tests_list is None:
             return Response({'detail': 'Failed to connect to CIU Cleared Students API endpoint.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
-        updated_api_count = 0
+        preloaded = {
+            'exams': exams_list or [],
+            'tests': tests_list or []
+        }
+
+        updated_exams_count = 0
+        updated_tests_count = 0
         active_temp_count = 0
         barred_count = 0
 
+        manual_cleared_count = 0
         students = User.objects.filter(role='student')
         for student in students:
-            clearance = check_student_clearance(student, preloaded_api_data=cleared_list)
+            clearance = check_student_clearance(student, preloaded_api_data=preloaded, acad=acad, sem=sem)
             if clearance['is_temp_cleared']:
-                student.tuition_paid_percentage = 100.0
-                student.save()
                 active_temp_count += 1
-            elif clearance['is_api_cleared']:
+            elif clearance.get('is_api_exam_cleared'):
                 student.tuition_paid_percentage = 100.0
                 student.save()
-                updated_api_count += 1
+                updated_exams_count += 1
+            elif clearance.get('is_api_test_cleared'):
+                student.tuition_paid_percentage = max(50.0, float(student.tuition_paid_percentage or 0.0))
+                student.save()
+                updated_tests_count += 1
+            elif float(student.tuition_paid_percentage or 0.0) >= 50.0:
+                manual_cleared_count += 1
             else:
-                # Keep custom admin overrides if set > 0, otherwise default to 0.0
-                if student.tuition_paid_percentage >= 100.0:
-                    student.tuition_paid_percentage = 0.0
-                    student.save()
                 barred_count += 1
 
-        msg = f"Successfully synced live clearance API & temporary clearance overrides across {students.count()} students! {updated_api_count} cleared via live API, {active_temp_count} active temporary overrides."
+        msg = f"Successfully synced live CIU EXAMS & TESTS APIs! {updated_exams_count} cleared for 100% (Exams & Tests), {updated_tests_count} cleared for 50% (Tests only), {active_temp_count} temporary overrides, {manual_cleared_count} manual clearances preserved."
         log_system_event(request.user, "STUDENT_CLEARANCE_SYNC_SUCCESS", level="AUDIT", details=msg)
         return Response({
             'detail': msg,
             'total_students': students.count(),
-            'api_cleared': updated_api_count,
+            'api_exams_cleared': updated_exams_count,
+            'api_tests_cleared': updated_tests_count,
+            'api_cleared': updated_exams_count + updated_tests_count,
             'temp_cleared': active_temp_count,
+            'manual_cleared': manual_cleared_count,
             'barred_count': barred_count
         })
 
@@ -659,6 +684,149 @@ class AdminUserViewSet(viewsets.ModelViewSet):
             'detail': f'Successfully deleted {deleted_count} selected user accounts.',
             'count': deleted_count
         })
+
+    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsStrictSystemAdmin])
+    def toggle_suspend(self, request, pk=None):
+        user_obj = self.get_object()
+        if request.user.id == user_obj.id:
+            return Response({'detail': 'You cannot suspend your own active administrator account.'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        action_type = request.data.get('action') # 'suspend', 'unsuspend', or None (toggle)
+        if action_type == 'suspend':
+            user_obj.is_active = False
+        elif action_type == 'unsuspend':
+            user_obj.is_active = True
+        else:
+            user_obj.is_active = not user_obj.is_active
+        user_obj.save()
+        
+        status_label = "suspended" if not user_obj.is_active else "reactivated"
+        msg = f"Account {user_obj.username} has been {status_label}."
+        log_system_event(request.user, "USER_SUSPENSION_TOGGLED", level="AUDIT", details=f"Admin {request.user.username} {status_label} account {user_obj.username} ({user_obj.role}).")
+        return Response({
+            'detail': msg,
+            'is_active': user_obj.is_active,
+            'user': AdminUserSerializer(user_obj).data
+        })
+
+    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsStrictSystemAdmin])
+    def bulk_suspend(self, request):
+        user_ids = request.data.get('user_ids', [])
+        action_type = request.data.get('action', 'suspend')
+        if not user_ids or not isinstance(user_ids, list):
+            return Response({'detail': 'Please provide a non-empty list of user_ids.'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        new_active = (action_type == 'unsuspend')
+        target_qs = User.objects.filter(id__in=user_ids).exclude(id=request.user.id)
+        count = target_qs.update(is_active=new_active)
+        status_label = "reactivated" if new_active else "suspended"
+        msg = f"Successfully {status_label} {count} user account(s)."
+        log_system_event(request.user, "BULK_USER_SUSPEND_SUCCESS", level="AUDIT", details=msg)
+        return Response({'detail': msg, 'count': count, 'is_active': new_active})
+
+    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, (IsAdmin | IsPlatformCoordinator)])
+    def onboard_single_staff(self, request):
+        is_coordinator = request.user.role == 'platform_coordinator'
+        role = (request.data.get('role') or 'lecturer').strip().lower()
+
+        # Platform Coordinator cannot create System Admin accounts
+        if is_coordinator and role == 'admin':
+            return Response(
+                {'detail': 'Permission Denied: Platform Coordinators cannot onboard System Administrator accounts.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        allowed_roles = ['lecturer', 'dean', 'faculty_admin', 'registrar', 'accounts', 'dvc', 'vc', 'platform_coordinator']
+        if not is_coordinator:
+            allowed_roles.append('admin')
+
+        if role not in allowed_roles:
+            return Response(
+                {'detail': f"Invalid staff role '{role}'. Allowed roles: {', '.join(allowed_roles)}"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        full_name = (request.data.get('full_name') or request.data.get('name') or '').strip()
+        first_name = (request.data.get('first_name') or '').strip()
+        last_name = (request.data.get('last_name') or '').strip()
+        if full_name and not (first_name or last_name):
+            parts = full_name.split(' ', 1)
+            first_name = parts[0]
+            last_name = parts[1] if len(parts) > 1 else ''
+        elif not full_name and (first_name or last_name):
+            full_name = f"{first_name} {last_name}".strip()
+
+        email = (request.data.get('email') or '').strip().lower()
+        username = (request.data.get('username') or '').strip()
+        phone = (request.data.get('phone') or '').strip()
+        gender = normalize_gender(request.data.get('gender'))
+        faculty_id = request.data.get('faculty_id') or request.data.get('faculty')
+        raw_password = (request.data.get('password') or request.data.get('default_password') or 'Kampus@2026').strip()
+
+        if not email and not username:
+            return Response({'detail': 'Email address is required to onboard staff.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        import re
+        if not username:
+            if email:
+                username = email.split('@')[0].lower()
+            else:
+                username = full_name.lower().replace(' ', '.')
+        username = re.sub(r'[^a-zA-Z0-9._-]', '', username)
+
+        base_username = username
+        counter = 1
+        while User.objects.filter(username__iexact=username).exists():
+            username = f"{base_username}{counter}"
+            counter += 1
+
+        if email and User.objects.filter(email__iexact=email).exists():
+            return Response({'detail': f"A user with email '{email}' already exists in the system."}, status=status.HTTP_400_BAD_REQUEST)
+
+        faculty = None
+        if faculty_id:
+            faculty = Faculty.objects.filter(
+                models.Q(id=int(faculty_id) if str(faculty_id).isdigit() else 0) |
+                models.Q(code__iexact=str(faculty_id).strip())
+            ).first()
+
+        new_staff = User(
+            username=username,
+            email=email,
+            first_name=first_name,
+            last_name=last_name,
+            role=role,
+            phone=phone,
+            gender=gender,
+            faculty=faculty,
+            must_change_password=True,
+            is_active=True
+        )
+        new_staff.set_password(raw_password)
+        new_staff.save()
+
+        if faculty:
+            if role == 'dean' and not faculty.dean:
+                faculty.dean = new_staff
+                faculty.save()
+            elif role == 'faculty_admin' and not faculty.secretary:
+                faculty.secretary = new_staff
+                faculty.save()
+
+        msg = f"Successfully onboarded staff member {new_staff.get_full_name() or new_staff.username} as {new_staff.get_role_display()}."
+        log_system_event(request.user, "SINGLE_STAFF_ONBOARDED", level="AUDIT", details=msg)
+        return Response({
+            'detail': msg,
+            'staff': AdminUserSerializer(new_staff).data,
+            'credentials': {
+                'username': new_staff.username,
+                'email': new_staff.email,
+                'temporary_password': raw_password,
+                'role': new_staff.role,
+                'role_display': new_staff.get_role_display(),
+                'faculty': faculty.code if faculty else None
+            }
+        }, status=status.HTTP_201_CREATED)
 
     @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, (IsAdmin | IsPlatformCoordinator)])
     def bulk_reset_passwords(self, request):
@@ -1541,9 +1709,21 @@ class AdminUserViewSet(viewsets.ModelViewSet):
         })
 
 
-    @action(detail=False, methods=['get'], permission_classes=[permissions.IsAuthenticated, IsAdmin])
+    @action(detail=False, methods=['get'], permission_classes=[permissions.IsAuthenticated, (IsAdmin | IsAccountsPersonnel)])
     def ciu_cleared_students(self, request):
-        cleared_api_records = fetch_external_cleared_students() or []
+        examtype = request.query_params.get('examtype', 'EXAMS').strip().upper()
+        if examtype not in ['EXAMS', 'TESTS']:
+            examtype = 'EXAMS'
+        acad = request.query_params.get('acad', '2026/2027').strip()
+        sem = request.query_params.get('sem', '1').strip()
+
+        cleared_api_records = fetch_external_cleared_students(examtype=examtype, acad=acad, sem=sem) or []
+        other_type = 'TESTS' if examtype == 'EXAMS' else 'EXAMS'
+        other_api_records = fetch_external_cleared_students(examtype=other_type, acad=acad, sem=sem) or []
+
+        exams_count = len(cleared_api_records) if examtype == 'EXAMS' else len(other_api_records)
+        tests_count = len(cleared_api_records) if examtype == 'TESTS' else len(other_api_records)
+
         students = User.objects.filter(role='student').select_related('faculty')
         
         students_by_key = {}
@@ -1563,10 +1743,10 @@ class AdminUserViewSet(viewsets.ModelViewSet):
                 if isinstance(item, dict):
                     reg_no = str(item.get('RegNo') or item.get('reg_no') or item.get('RegistrationNo') or item.get('StudentNo') or item.get('username') or '').strip()
                     name = str(item.get('StudentName') or item.get('name') or item.get('Fullname') or item.get('Student_Name') or 'CIU Student').strip()
-                    program = str(item.get('Program') or item.get('Faculty') or item.get('Course') or item.get('Department') or 'SOBAT').strip()
-                    acad = str(item.get('AcademicYear') or item.get('AcadYear') or '2026/2027').strip()
-                    sem = str(item.get('Semester') or item.get('Sem') or '1').strip()
-                    status_txt = str(item.get('Status') or item.get('ClearanceStatus') or 'CLEARED').strip()
+                    program = str(item.get('Program') or item.get('Faculty') or item.get('Course') or item.get('Department') or item.get('StudyProgramme') or 'SOBAT').strip()
+                    acad_year = str(item.get('AcademicYear') or item.get('AcadYear') or acad).strip()
+                    sem_val = str(item.get('Semester') or item.get('Sem') or sem).strip()
+                    status_txt = str(item.get('Status') or item.get('ClearanceStatus') or ('CLEARED (100%)' if examtype == 'EXAMS' else 'CLEARED (50% TESTS)')).strip()
 
                     matched_user = None
                     if reg_no:
@@ -1583,14 +1763,15 @@ class AdminUserViewSet(viewsets.ModelViewSet):
                         'reg_number': reg_no or 'N/A',
                         'student_name': name,
                         'program': program,
-                        'acad_year': acad,
-                        'semester': sem,
+                        'acad_year': acad_year,
+                        'semester': sem_val,
                         'status': status_txt,
+                        'examtype': examtype,
                         'is_db_matched': bool(matched_user),
                     }
 
                     if matched_user:
-                        clearance = check_student_clearance(matched_user)
+                        clearance = check_student_clearance(matched_user, acad=acad, sem=sem)
                         rec_entry['db_student'] = {
                             'id': matched_user.id,
                             'username': matched_user.username,
@@ -1612,9 +1793,10 @@ class AdminUserViewSet(viewsets.ModelViewSet):
                         'reg_number': 'N/A',
                         'student_name': item,
                         'program': 'N/A',
-                        'acad_year': '2026/2027',
-                        'semester': '1',
+                        'acad_year': acad,
+                        'semester': sem,
                         'status': 'CLEARED',
+                        'examtype': examtype,
                         'is_db_matched': False
                     })
 
@@ -1625,7 +1807,7 @@ class AdminUserViewSet(viewsets.ModelViewSet):
             if f_name not in faculties_map:
                 faculties_map[f_name] = {'code': f_code, 'students': []}
             
-            clearance = check_student_clearance(student)
+            clearance = check_student_clearance(student, acad=acad, sem=sem)
             faculties_map[f_name]['students'].append({
                 'id': student.id,
                 'username': student.username,
@@ -1643,7 +1825,12 @@ class AdminUserViewSet(viewsets.ModelViewSet):
             'faculties': faculties_map,
             'external_api_raw_records': cleared_api_records or [],
             'all_payload_records': all_payload_records,
-            'external_api_count': len(cleared_api_records) if isinstance(cleared_api_records, list) else 0
+            'external_api_count': len(cleared_api_records) if isinstance(cleared_api_records, list) else 0,
+            'current_examtype': examtype,
+            'exams_total_count': exams_count,
+            'tests_total_count': tests_count,
+            'acad_year': acad,
+            'semester': sem
         })
 
 # 4b. Invitation Management ViewSet
@@ -1836,7 +2023,18 @@ class CourseViewSet(viewsets.ModelViewSet):
             if str(faculty_param).strip().isdigit():
                 qs = qs.filter(faculty_id=int(faculty_param.strip()))
             else:
-                qs = qs.filter(faculty__code__iexact=str(faculty_param).strip())
+                qs = qs.filter(
+                    models.Q(faculty__code__iexact=str(faculty_param).strip()) |
+                    models.Q(faculty__name__icontains=str(faculty_param).strip())
+                )
+
+        search_param = self.request.query_params.get('search') or self.request.query_params.get('name') or self.request.query_params.get('course_name')
+        if search_param and str(search_param).strip():
+            clean_search = str(search_param).strip()
+            qs = qs.filter(
+                models.Q(name__icontains=clean_search) |
+                models.Q(code__icontains=clean_search)
+            )
 
         return qs.select_related('faculty').prefetch_related('units').order_by('code')
 
@@ -2036,10 +2234,10 @@ class CourseUnitViewSet(viewsets.ModelViewSet):
             return [permissions.IsAuthenticated()]
         if self.action in ['sample_csv', 'sample_excel', 'sample_file']:
             return [permissions.AllowAny()]
+        if self.action in ['update', 'partial_update', 'destroy', 'bulk_delete']:
+            return [permissions.IsAuthenticated(), IsStrictSystemAdmin()]
         if self.action in ['upload_csv', 'bulk_upload', 'assign_lecturer']:
             return [permissions.IsAuthenticated(), (IsAdmin | IsPlatformCoordinator | IsFacultyAdmin | IsDean | IsRegistrar)()]
-        if self.action == 'bulk_delete':
-            return [permissions.IsAuthenticated(), (IsAdmin | IsPlatformCoordinator | IsFacultyAdmin)()]
         return [permissions.IsAuthenticated(), (IsAdmin | IsPlatformCoordinator | IsFacultyAdmin)()]
 
     def perform_content_negotiation(self, request, force=False):
@@ -2133,19 +2331,28 @@ class CourseUnitViewSet(viewsets.ModelViewSet):
         except (ValueError, TypeError):
             return Response({'detail': 'Invalid lecturer_id format.'}, status=status.HTTP_400_BAD_REQUEST)
 
+    def perform_update(self, serializer):
+        user = self.request.user
+        if user.role != 'admin' and not user.is_superuser:
+            raise serializers.ValidationError({"detail": "Permission Denied: All course unit deletion or edits can only be done by the system admin."})
+        unit = serializer.save()
+        log_system_event(user, f"Course Unit Updated: {unit.code} - {unit.name}", level='INFO')
+
     def perform_destroy(self, instance):
+        user = self.request.user
+        if user.role != 'admin' and not user.is_superuser:
+            raise serializers.ValidationError({"detail": "Permission Denied: All course unit deletion or edits can only be done by the system admin."})
         code = instance.code
         name = instance.name
-        user = self.request.user
         super().perform_destroy(instance)
         log_system_event(user, f"Course Unit Deleted: {code} - {name}", level='INFO')
 
-    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, (IsAdmin | IsPlatformCoordinator | IsFacultyAdmin)])
+    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsStrictSystemAdmin])
     def bulk_delete(self, request):
         user = request.user
-        if user.role not in ['admin', 'platform_coordinator', 'faculty_admin', 'faculty_secretary'] and not user.is_superuser:
+        if user.role != 'admin' and not user.is_superuser:
             return Response(
-                {'detail': 'Permission Denied: Only authorized administrators and faculty secretaries can delete course units in bulk.'},
+                {'detail': 'Permission Denied: All course unit deletion or edits can only be done by the system admin.'},
                 status=status.HTTP_403_FORBIDDEN
             )
         raw_ids = request.data.get('unit_ids') or request.data.get('course_unit_ids') or request.data.get('ids', [])
@@ -2956,6 +3163,37 @@ class ExamViewSet(viewsets.ModelViewSet):
 
         return response
 
+    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, (IsAdmin | IsLecturer | IsFacultyAdmin)])
+    def bulk_delete(self, request):
+        user = request.user
+        exam_ids = request.data.get('exam_ids') or request.data.get('ids', [])
+        if not exam_ids:
+            return Response({'detail': 'exam_ids list is required.'}, status=status.HTTP_400_BAD_REQUEST)
+        qs = self.get_queryset().filter(id__in=exam_ids)
+        if user.role == 'lecturer':
+            qs = qs.filter(lecturer=user)
+        count = qs.count()
+        if count == 0:
+            return Response({'detail': 'No matching exams found to delete.'}, status=status.HTTP_404_NOT_FOUND)
+        qs.delete()
+        log_system_event(user, "BULK_EXAM_DELETE_SUCCESS", level="AUDIT", details=f"Deleted {count} exam(s) in bulk.")
+        return Response({'detail': f'Successfully deleted {count} examination(s).', 'count': count})
+
+    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, (IsAdmin | IsLecturer)])
+    def bulk_publish(self, request):
+        user = request.user
+        exam_ids = request.data.get('exam_ids') or request.data.get('ids', [])
+        is_published = request.data.get('is_published', True)
+        if not exam_ids:
+            return Response({'detail': 'exam_ids list is required.'}, status=status.HTTP_400_BAD_REQUEST)
+        qs = self.get_queryset().filter(id__in=exam_ids)
+        if user.role == 'lecturer':
+            qs = qs.filter(lecturer=user)
+        count = qs.update(is_published=is_published, is_active=is_published)
+        status_label = "published" if is_published else "unpublished"
+        log_system_event(user, "BULK_EXAM_PUBLISH_SUCCESS", level="AUDIT", details=f"Bulk {status_label} {count} exam(s).")
+        return Response({'detail': f'Successfully {status_label} {count} examination(s).', 'count': count})
+
 # 8. Exam Attempt ViewSet
 class ExamAttemptViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = ExamAttemptSerializer
@@ -3517,6 +3755,37 @@ class TestViewSet(viewsets.ModelViewSet):
             ])
 
         return response
+
+    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, (IsAdmin | IsLecturer | IsFacultyAdmin)])
+    def bulk_delete(self, request):
+        user = request.user
+        test_ids = request.data.get('test_ids') or request.data.get('ids', [])
+        if not test_ids:
+            return Response({'detail': 'test_ids list is required.'}, status=status.HTTP_400_BAD_REQUEST)
+        qs = self.get_queryset().filter(id__in=test_ids)
+        if user.role == 'lecturer':
+            qs = qs.filter(lecturer=user)
+        count = qs.count()
+        if count == 0:
+            return Response({'detail': 'No matching tests found to delete.'}, status=status.HTTP_404_NOT_FOUND)
+        qs.delete()
+        log_system_event(user, "BULK_TEST_DELETE_SUCCESS", level="AUDIT", details=f"Deleted {count} test(s) in bulk.")
+        return Response({'detail': f'Successfully deleted {count} test(s).', 'count': count})
+
+    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, (IsAdmin | IsLecturer)])
+    def bulk_publish(self, request):
+        user = request.user
+        test_ids = request.data.get('test_ids') or request.data.get('ids', [])
+        is_published = request.data.get('is_published', True)
+        if not test_ids:
+            return Response({'detail': 'test_ids list is required.'}, status=status.HTTP_400_BAD_REQUEST)
+        qs = self.get_queryset().filter(id__in=test_ids)
+        if user.role == 'lecturer':
+            qs = qs.filter(lecturer=user)
+        count = qs.update(is_published=is_published)
+        status_label = "published" if is_published else "unpublished"
+        log_system_event(user, "BULK_TEST_PUBLISH_SUCCESS", level="AUDIT", details=f"Bulk {status_label} {count} test(s).")
+        return Response({'detail': f'Successfully {status_label} {count} test(s).', 'count': count})
 
 # 10. Test Attempt ViewSet
 class TestAttemptViewSet(viewsets.ReadOnlyModelViewSet):
@@ -4121,7 +4390,7 @@ class TemporaryClearanceViewSet(viewsets.ModelViewSet):
     def get_permissions(self):
         if self.action in ['list', 'retrieve']:
             return [permissions.IsAuthenticated()]
-        return [permissions.IsAuthenticated(), (IsAdmin | IsRegistrar | IsFacultyAdmin | IsDean)()]
+        return [permissions.IsAuthenticated(), CanIssueTemporaryClearance()]
 
     def get_queryset(self):
         user = self.request.user
@@ -4135,6 +4404,10 @@ class TemporaryClearanceViewSet(viewsets.ModelViewSet):
         return qs
 
     def perform_create(self, serializer):
+        user = self.request.user
+        if user.role not in ['admin', 'accounts'] and not user.is_superuser:
+            raise serializers.ValidationError({"detail": "Permission Denied: Temporary clearance can only be issued by an Accounts personnel or the System Admin."})
+
         duration_days = int(self.request.data.get('duration_days', 7))
         custom_expiry = self.request.data.get('expires_at')
         if custom_expiry:
@@ -4150,7 +4423,7 @@ class TemporaryClearanceViewSet(viewsets.ModelViewSet):
             details=f"Granted temporary clearance ({clearance.clearance_type}) for student {clearance.student.username} until {clearance.expires_at.strftime('%Y-%m-%d %H:%M')}."
         )
 
-    @action(detail=True, methods=['post'])
+    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, CanIssueTemporaryClearance])
     def revoke(self, request, pk=None):
         clearance = self.get_object()
         clearance.is_active = False
@@ -4158,7 +4431,7 @@ class TemporaryClearanceViewSet(viewsets.ModelViewSet):
         log_system_event(request.user, "TEMPORARY_CLEARANCE_REVOKED", level="AUDIT", details=f"Revoked temporary clearance for {clearance.student.username}")
         return Response({'detail': f'Temporary clearance for {clearance.student.username} revoked.'})
 
-    @action(detail=True, methods=['post'])
+    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, CanIssueTemporaryClearance])
     def extend(self, request, pk=None):
         clearance = self.get_object()
         days = int(request.data.get('days', 7))
@@ -4168,7 +4441,7 @@ class TemporaryClearanceViewSet(viewsets.ModelViewSet):
         log_system_event(request.user, "TEMPORARY_CLEARANCE_EXTENDED", level="AUDIT", details=f"Extended temporary clearance for {clearance.student.username} by {days} days.")
         return Response({'detail': f'Extended clearance by {days} days until {clearance.expires_at.strftime("%Y-%m-%d %H:%M")}.'})
 
-    @action(detail=False, methods=['post'])
+    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, CanIssueTemporaryClearance])
     def bulk_create(self, request):
         student_ids = request.data.get('student_ids', [])
         duration_days = int(request.data.get('duration_days', 7))
@@ -4195,7 +4468,7 @@ class TemporaryClearanceViewSet(viewsets.ModelViewSet):
         log_system_event(request.user, "TEMPORARY_CLEARANCE_BULK_GRANTED", level="AUDIT", details=f"Bulk granted clearance for {created_count} students for {duration_days} days.")
         return Response({'detail': f'Granted temporary clearance for {created_count} students.', 'count': created_count})
 
-    @action(detail=False, methods=['post'])
+    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, CanIssueTemporaryClearance])
     def upload_bulk_clearance(self, request):
         file_obj = request.FILES.get('file') or request.FILES.get('excel_file')
         if not file_obj:

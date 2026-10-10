@@ -14,6 +14,7 @@ class User(AbstractUser):
         ('vc', 'Vice-Chancellor (VC)'),
         ('platform_coordinator', 'Platform Coordinator'),
         ('admin', 'System Admin'),
+        ('accounts', 'Accounts Personnel'),
     )
     role = models.CharField(max_length=35, choices=ROLE_CHOICES, default='student', db_index=True)
     GENDER_CHOICES = (

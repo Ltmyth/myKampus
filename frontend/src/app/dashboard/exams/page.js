@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Fragment } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { api, formatUgandanTime, getUgandanISOString, toUgandanDatetimeLocal, getUgandanNowDatetimeLocal } from '@/lib/api';
 import { useRouter } from 'next/navigation';
@@ -63,6 +63,74 @@ export default function ExamsPage() {
   const [activeTab, setActiveTab] = useState('exams');
   const [selectedFacultyFilter, setSelectedFacultyFilter] = useState('All');
   const [selectedCourseFilter, setSelectedCourseFilter] = useState('All');
+
+  // Bulk Actions & Expansion State for Exams
+  const [selectedExamIds, setSelectedExamIds] = useState([]);
+  const [expandedExamIds, setExpandedExamIds] = useState([]);
+
+  const toggleExpandExam = (examId) => {
+    setExpandedExamIds(prev =>
+      prev.includes(examId) ? prev.filter(id => id !== examId) : [...prev, examId]
+    );
+  };
+
+  const handleToggleSelectExam = (examId) => {
+    setSelectedExamIds(prev =>
+      prev.includes(examId) ? prev.filter(id => id !== examId) : [...prev, examId]
+    );
+  };
+
+  const handleToggleSelectAllExams = () => {
+    if (selectedExamIds.length >= examsFiltered.length && examsFiltered.length > 0) {
+      setSelectedExamIds([]);
+    } else {
+      setSelectedExamIds(examsFiltered.map(e => e.id));
+    }
+  };
+
+  const handleBulkDeleteExams = () => {
+    if (selectedExamIds.length === 0) return;
+    const count = selectedExamIds.length;
+    showConfirm({
+      title: 'Bulk Delete Examination Papers',
+      description: `Are you sure you want to permanently delete ${count} selected exam paper(s)? All student attempts, scores, and questions will be permanently removed.`,
+      confirmText: `Delete ${count} Exams`,
+      variant: 'danger',
+      icon: '🗑️',
+      onConfirm: async () => {
+        setConfirmModal(prev => ({ ...prev, loading: true }));
+        setErrorMsg('');
+        setSuccessMsg('');
+        try {
+          const res = await api.post('/exams/bulk_delete/', { exam_ids: selectedExamIds });
+          setSuccessMsg(res?.detail || `Deleted ${count} examinations successfully.`);
+          setSelectedExamIds([]);
+          closeConfirm();
+          loadExamData();
+        } catch (err) {
+          setErrorMsg(err.response?.data?.detail || err.message || 'Failed to delete selected exams.');
+          setConfirmModal(prev => ({ ...prev, loading: false }));
+        }
+      }
+    });
+  };
+
+  const handleBulkPublishExams = async (publishStatus) => {
+    if (selectedExamIds.length === 0) return;
+    setErrorMsg('');
+    setSuccessMsg('');
+    try {
+      const res = await api.post('/exams/bulk_publish/', {
+        exam_ids: selectedExamIds,
+        is_published: publishStatus
+      });
+      setSuccessMsg(res?.detail || `Successfully ${publishStatus ? 'published' : 'unpublished'} selected exams.`);
+      setSelectedExamIds([]);
+      loadExamData();
+    } catch (err) {
+      setErrorMsg(err.response?.data?.detail || err.message || 'Failed to update publication status.');
+    }
+  };
 
   // Submissions Tab Filter & Pagination States (Exams)
   const [selectedExamFilter, setSelectedExamFilter] = useState('All');
@@ -661,9 +729,9 @@ ANSWER: C`;
   const startExam = async (examId) => {
     setErrorMsg('');
     
-    // Tuition Fee Gate Check: Must have 100% full tuition clearance or CIU API clearance!
-    const tuitionPaid = user?.tuition_paid_percentage ?? 100.0;
-    const isExamCleared = user?.is_exam_cleared ?? (tuitionPaid >= 100.0);
+    // Tuition Fee Gate Check: Must have 100% full tuition clearance (EXAMS API, active Temp Override, or manual >= 100%)!
+    const tuitionPaid = Number(user?.tuition_paid_percentage ?? user?.effective_tuition_percentage ?? 0);
+    const isExamCleared = Boolean(user?.is_exam_cleared) || (tuitionPaid >= 100.0) || Boolean(user?.is_temp_cleared && (user?.temp_clearance_info?.clearance_type === 'both' || user?.temp_clearance_info?.clearance_type === 'exams' || !user?.temp_clearance_info));
     
     if (user?.role === 'student' && !isExamCleared) {
       setFeeGateMessage(`Exam Access Barred: 100% tuition clearance or CIU Cleared Students API verification is required to sit for final examinations. Your current clearance level is ${tuitionPaid}%. Please visit the Bursar / Finance Office to clear your outstanding fees balance.`);
@@ -699,9 +767,14 @@ ANSWER: C`;
   const activeFacultiesList = isLecturer ? scopedFaculties : faculties;
   
   const examsFiltered = exams.filter(e => {
-    if (selectedFacultyFilter === 'All') return true;
-    const fCode = e.faculty_code || (courses.find(c => c.id === e.course)?.faculty_code);
-    return fCode === selectedFacultyFilter;
+    if (selectedFacultyFilter !== 'All') {
+      const fCode = e.faculty_code || (courses.find(c => c.id === e.course)?.faculty_code);
+      if (fCode !== selectedFacultyFilter) return false;
+    }
+    if (selectedCourseFilter !== 'All') {
+      if (e.course_code !== selectedCourseFilter) return false;
+    }
+    return true;
   });
 
   const facultyGroups = activeFacultiesList.map(fac => {
@@ -716,6 +789,9 @@ ANSWER: C`;
     const fCode = e.faculty_code || (courses.find(c => c.id === e.course)?.faculty_code);
     return !activeFacultiesList.some(f => f.code === fCode);
   });
+
+  const studentTuitionPaid = Number(user?.tuition_paid_percentage ?? user?.effective_tuition_percentage ?? 0);
+  const isStudentExamCleared = Boolean(user?.is_exam_cleared) || (studentTuitionPaid >= 100.0) || Boolean(user?.is_temp_cleared && (user?.temp_clearance_info?.clearance_type === 'both' || user?.temp_clearance_info?.clearance_type === 'exams' || !user?.temp_clearance_info));
 
   if (loading) {
     return (
@@ -850,9 +926,62 @@ ANSWER: C`;
           <div className="lg:col-span-2 space-y-6">
             
             {user.role === 'student' ? (
-              <div className="green-card rounded-2xl p-6 space-y-4">
-                <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">Scheduled Exam Papers</h3>
+              /* Student Well-Presented High-Density Exams List View */
+              <div className="space-y-4">
                 
+                {/* Student Clearance Status Banner */}
+                {isStudentExamCleared ? (
+                  <div className="bg-gradient-to-r from-emerald-50 via-teal-50 to-emerald-100/50 p-4 rounded-2xl border border-emerald-200/80 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                    <div className="flex items-center space-x-3">
+                      <span className="w-10 h-10 rounded-2xl bg-emerald-600 text-white flex items-center justify-center text-lg font-bold shadow-sm">
+                        ✓
+                      </span>
+                      <div>
+                        <h4 className="font-extrabold text-slate-850 text-xs uppercase tracking-wider flex items-center space-x-2">
+                          <span>100% Tuition Fee Clearance Gate Satisfied</span>
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-300">
+                            Eligible for Final Exams
+                          </span>
+                        </h4>
+                        <p className="text-[11px] text-slate-600 font-medium">
+                          {user?.clearance_source || (user?.is_temp_cleared ? 'Active Accounts Temporary Clearance' : (studentTuitionPaid >= 100.0 ? `Cleared via ${studentTuitionPaid}% Tuition Record` : 'Verified via CIU Cleared Students API (100% Exams Gate)'))}. You are fully cleared to sit for University Final Examinations.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <span className="text-[10px] uppercase font-bold text-slate-400 block">Exams Clearance Gate</span>
+                      <span className="font-extrabold text-xs text-emerald-800 bg-white px-2.5 py-1 rounded-xl border border-emerald-200 shadow-2xs inline-block">
+                        100% Full Clearance
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="bg-gradient-to-r from-rose-50 via-amber-50 to-rose-100/40 p-4 rounded-2xl border border-rose-200 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                    <div className="flex items-center space-x-3">
+                      <span className="w-10 h-10 rounded-2xl bg-rose-600 text-white flex items-center justify-center text-lg font-bold shadow-sm">
+                        🔒
+                      </span>
+                      <div>
+                        <h4 className="font-extrabold text-slate-850 text-xs uppercase tracking-wider flex items-center space-x-2">
+                          <span>100% Tuition Fee Clearance Required for Final Exams</span>
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-rose-100 text-rose-800 border border-rose-300">
+                            Fee Gate Locked
+                          </span>
+                        </h4>
+                        <p className="text-[11px] text-slate-600 font-medium">
+                          Final exams require 100% full tuition clearance via the CIU EXAMS API or active Accounts Temporary Clearance override. Students with 50% clearance via the TESTS API are permitted to take tests only.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <span className="text-[10px] uppercase font-bold text-slate-400 block">Final Exams Gate</span>
+                      <span className="font-extrabold text-xs text-rose-800 bg-white px-2.5 py-1 rounded-xl border border-rose-200 shadow-2xs inline-block">
+                        100% Required
+                      </span>
+                    </div>
+                  </div>
+                )}
+
                 {(() => {
                   const studentFacCode = user?.faculty_code;
                   const studentExams = exams.filter(e => {
@@ -861,272 +990,621 @@ ANSWER: C`;
                     return !fCode || fCode === studentFacCode;
                   });
 
-                  return studentExams.length === 0 ? (
-                    <p className="text-slate-400 text-xs py-8 text-center">No active examination papers scheduled for {user?.faculty_name || 'your assigned faculty'}.</p>
-                  ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                      {studentExams.map((examItem) => {
-                        const myAttempt = attempts.find(a => a.exam === examItem.id);
-                        return (
-                          <div key={examItem.id} className="green-card rounded-2xl p-5 flex flex-col justify-between space-y-4 hover:border-emerald-300 hover:shadow-md transition-all shadow-sm">
-                            <div className="space-y-2">
-                              <div className="flex items-center justify-between">
-                                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider bg-brand-light/10 text-brand-dark border border-brand-light/20">
-                                  {examItem.course_code}
-                                </span>
-                                <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${examItem.is_results_released ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-slate-200 text-slate-600 border-slate-300'}`}>
-                                  {examItem.is_results_released ? 'RESULTS RELEASED' : 'WITHHELD'}
-                                </span>
-                              </div>
-
-                              <h4 className="font-bold text-slate-850 text-base leading-tight">{examItem.title}</h4>
-                              <p className="text-xs text-slate-500 font-medium">
-                                Unit: <span className="font-semibold text-slate-800">{examItem.course_unit_name || examItem.course_code}</span>
-                              </p>
-
-                              <div className="pt-2 text-[11px] text-slate-600 space-y-1 bg-slate-50 p-2.5 rounded-xl border border-slate-100 font-medium">
-                                <p>⏱️ Duration: <span className="font-bold text-slate-800">{examItem.duration_minutes} mins</span> | ❓ Questions: <span className="font-bold text-slate-800">{examItem.questions_count}</span></p>
-                                <p>📅 Scheduled Start (EAT): <span className="font-bold text-slate-800">{formatUgandanTime(examItem.scheduled_start)}</span></p>
-                                {examItem.due_date && (
-                                  <p>⏳ Due Date (EAT): <span className="font-bold text-amber-700">{formatUgandanTime(examItem.due_date)}</span></p>
-                                )}
-                                <p>💰 Fee Gate: <span className="font-bold text-emerald-700">100% Tuition Clearance</span></p>
-                              </div>
-                            </div>
-
-                            <div className="pt-2 border-t border-slate-100">
-                              {myAttempt ? (
-                                myAttempt.completed_at ? (
-                                  examItem.is_results_released ? (
-                                    <div className="flex items-center justify-between">
-                                      <span className="px-2.5 py-1 rounded text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                                        Score: {myAttempt.score}%
-                                      </span>
-                                      <button
-                                        onClick={() => router.push(`/dashboard/exams/${examItem.id}/results?attemptId=${myAttempt.id}`)}
-                                        className="px-3.5 py-1.5 bg-emerald-600 text-white text-xs font-bold rounded-lg hover:bg-emerald-700 transition-all shadow-sm"
-                                      >
-                                        View Scorecard
-                                      </button>
-                                    </div>
-                                  ) : (
-                                    <span className="w-full block text-center px-2.5 py-1.5 rounded text-xs font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
-                                      🔒 Results Withheld
-                                    </span>
-                                  )
-                                ) : (
-                                  <button
-                                    onClick={() => startExam(examItem.id)}
-                                    className="w-full py-2 bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold rounded-lg shadow-sm transition-all"
-                                  >
-                                    Resume Exam
-                                  </button>
-                                )
-                              ) : (
-                                <button
-                                  onClick={() => startExam(examItem.id)}
-                                  disabled={!examItem.is_active || examItem.questions_count === 0}
-                                  className="w-full py-2 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-lg shadow-sm transition-all disabled:opacity-50"
-                                >
-                                  Launch Exam
-                                </button>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                );
-              })()}
-              </div>
-            ) : (
-              /* STAFF FACULTY ORGANIZED EXAMS VIEW */
-              <div className="space-y-6">
-                
-                {facultyGroups.map(({ faculty, exams: facExams }) => {
-                  if (selectedFacultyFilter !== 'All' && faculty.code !== selectedFacultyFilter) return null;
                   return (
-                    <div key={faculty.id} className="green-card rounded-2xl p-6 space-y-4">
-                      
-                      {/* Faculty Group Header */}
-                      <div className="flex items-center justify-between border-b border-emerald-100 pb-3">
+                    <>
+                      {/* List Controls Summary */}
+                      <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
                         <div className="flex items-center space-x-2">
-                          <span className="px-2.5 py-1 bg-brand-light/10 text-brand-dark font-black text-xs rounded-lg border border-brand-light/20 uppercase">
-                            {faculty.code}
+                          <span className="font-extrabold text-slate-800 uppercase tracking-wider">
+                            Scheduled Examination Papers
                           </span>
-                          <h3 className="text-base font-bold text-slate-850">{faculty.name}</h3>
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                            {studentExams.length} Exams
+                          </span>
                         </div>
-                        <span className="text-xs font-extrabold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-xl border border-emerald-200">
-                          {facExams.length} Exams Set
+                        <span className="text-slate-500 text-[11px]">
+                          Official final examination papers for your enrolled program and units.
                         </span>
                       </div>
 
-                      {/* Faculty Exams List */}
-                      {facExams.length === 0 ? (
-                        <p className="text-slate-400 text-xs py-4 text-center italic">No exams set for {faculty.name} yet.</p>
+                      {/* High-Density Student Exams Table */}
+                      {studentExams.length === 0 ? (
+                        <div className="bg-white rounded-2xl p-8 border border-slate-200 text-center space-y-2">
+                          <span className="text-3xl block">📋</span>
+                          <p className="text-slate-700 font-bold text-sm">No examination papers scheduled</p>
+                          <p className="text-slate-500 text-xs">No active examination papers scheduled for {user?.faculty_name || 'your assigned faculty'}.</p>
+                        </div>
                       ) : (
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                          {facExams.map((examItem) => {
-                            const isMyExam = (isLecturer && (examItem.lecturer === user.id || examItem.lecturer_name === user.username || examItem.lecturer_name === user.first_name));
-                            const isApproved = Boolean(examItem.is_approved_by_dean);
-                            const isLockedForLecturer = isLecturer && isApproved;
-                            const canManageThisExam = isAdmin || (isLecturer && !isLockedForLecturer);
+                        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                          <div className="overflow-x-auto custom-scrollbar">
+                            <table className="w-full text-left text-xs border-collapse">
+                              <thead>
+                                <tr className="bg-slate-50/80 border-b border-slate-200 text-slate-500 uppercase font-semibold">
+                                  <th className="px-4 py-3">Exam Title & Unit</th>
+                                  <th className="px-3 py-3">Program & Faculty</th>
+                                  <th className="px-3 py-3">Schedule (EAT)</th>
+                                  <th className="px-3 py-3 text-center">Duration</th>
+                                  <th className="px-3 py-3 text-center">Questions</th>
+                                  <th className="px-3 py-3 text-center">Approval & Status</th>
+                                  <th className="px-4 py-3 text-center">Actions</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-100 text-slate-700">
+                                {studentExams.map((examItem) => {
+                                  const myAttempt = attempts.find(a => a.exam === examItem.id);
+                                  const isExpanded = expandedExamIds.includes(examItem.id);
+                                  const isApproved = Boolean(examItem.is_approved_by_dean);
 
-                            return (
-                              <div key={examItem.id} className="bg-gradient-to-br from-white to-emerald-50/30 rounded-2xl border border-emerald-200/80 p-5 shadow-sm hover:border-emerald-300 hover:shadow-md transition-all flex flex-col justify-between space-y-3">
-                                <div className="space-y-2">
-                                  <div className="flex items-center justify-between flex-wrap gap-1">
-                                    <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-emerald-100 text-emerald-800 border border-emerald-200">
-                                      {examItem.course_code}
-                                    </span>
-                                    <div className="flex items-center space-x-1">
-                                      {isApproved ? (
-                                        <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-300">
-                                          ✅ Approved
-                                        </span>
-                                      ) : (
-                                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
-                                          ⏳ Pending
-                                        </span>
+                                  return (
+                                    <Fragment key={examItem.id}>
+                                      <tr
+                                        className={`transition-all ${
+                                          isExpanded
+                                            ? 'bg-emerald-50/30 border-l-4 border-l-brand-light'
+                                            : 'hover:bg-slate-50'
+                                        }`}
+                                      >
+                                        <td className="px-4 py-3">
+                                          <div className="space-y-0.5">
+                                            <div className="flex items-center space-x-1.5">
+                                              <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                                {examItem.course_code}
+                                              </span>
+                                              <span className="font-extrabold text-slate-900 leading-tight block">
+                                                {examItem.title}
+                                              </span>
+                                            </div>
+                                            <span className="text-[11px] text-slate-500 block">
+                                              Unit: <strong className="text-slate-700">{examItem.course_unit_name || examItem.course_code}</strong> · Lecturer: <strong className="text-slate-700">{examItem.lecturer_name || 'Assigned Lecturer'}</strong>
+                                            </span>
+                                          </div>
+                                        </td>
+                                        <td className="px-3 py-3">
+                                          <span className="font-mono font-bold text-brand-dark block">
+                                            [{examItem.course_code}]
+                                          </span>
+                                          <span className="text-[11px] text-slate-600 truncate max-w-[150px] block">
+                                            Faculty: {examItem.faculty_code || 'General'}
+                                          </span>
+                                        </td>
+                                        <td className="px-3 py-3 text-[11px]">
+                                          <div className="space-y-0.5">
+                                            <span className="block font-medium text-slate-800">
+                                              📅 {formatUgandanTime(examItem.scheduled_start)}
+                                            </span>
+                                            {examItem.due_date && (
+                                              <span className="block text-amber-700 font-medium text-[10px]">
+                                                ⏳ Due: {formatUgandanTime(examItem.due_date)}
+                                              </span>
+                                            )}
+                                          </div>
+                                        </td>
+                                        <td className="px-3 py-3 text-center">
+                                          <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-800 border border-slate-200 block">
+                                            ⏱️ {examItem.duration_minutes}m
+                                          </span>
+                                        </td>
+                                        <td className="px-3 py-3 text-center">
+                                          <span className="font-bold text-slate-800 text-xs">
+                                            ❓ {examItem.questions_count} Qs
+                                          </span>
+                                        </td>
+                                        <td className="px-3 py-3 text-center">
+                                          <div className="space-y-1">
+                                            {isApproved ? (
+                                              <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-300 block">
+                                                ✅ Approved
+                                              </span>
+                                            ) : (
+                                              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200 block">
+                                                ⏳ Pending Review
+                                              </span>
+                                            )}
+                                            {myAttempt ? (
+                                              myAttempt.completed_at ? (
+                                                examItem.is_results_released ? (
+                                                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 block">
+                                                    Score: {myAttempt.score}%
+                                                  </span>
+                                                ) : (
+                                                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-600 border border-slate-200 block">
+                                                    🔒 Results Withheld
+                                                  </span>
+                                                )
+                                              ) : (
+                                                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-50 text-blue-800 border border-blue-200 block">
+                                                  🔄 In Progress
+                                                </span>
+                                              )
+                                            ) : (
+                                              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-50 text-slate-500 border border-slate-200 block">
+                                                Unattempted
+                                              </span>
+                                            )}
+                                          </div>
+                                        </td>
+                                        <td className="px-4 py-3 text-center">
+                                          <div className="flex items-center justify-center space-x-1.5">
+                                            <button
+                                              type="button"
+                                              onClick={() => toggleExpandExam(examItem.id)}
+                                              className={`px-2 py-1 text-[10px] font-bold rounded-lg border transition-all cursor-pointer ${
+                                                isExpanded
+                                                  ? 'bg-brand-dark text-white border-brand-dark shadow-xs'
+                                                  : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-200'
+                                              }`}
+                                              title="Expand preview"
+                                            >
+                                              <span>{isExpanded ? '▲ Hide' : '🔍 Preview'}</span>
+                                            </button>
+
+                                            {myAttempt ? (
+                                              myAttempt.completed_at ? (
+                                                examItem.is_results_released ? (
+                                                  <button
+                                                    onClick={() => router.push(`/dashboard/exams/${examItem.id}/results?attemptId=${myAttempt.id}`)}
+                                                    className="px-2.5 py-1 bg-emerald-600 text-white text-[10px] font-bold rounded-lg hover:bg-emerald-700 transition-all shadow-xs cursor-pointer"
+                                                  >
+                                                    Scorecard
+                                                  </button>
+                                                ) : (
+                                                  <span className="text-[10px] text-slate-400 font-medium italic">Withheld</span>
+                                                )
+                                              ) : (
+                                                <button
+                                                  onClick={() => startExam(examItem.id)}
+                                                  className="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-white text-[10px] font-bold rounded-lg transition-all shadow-xs cursor-pointer"
+                                                >
+                                                  Resume
+                                                </button>
+                                              )
+                                            ) : (
+                                              <button
+                                                onClick={() => startExam(examItem.id)}
+                                                disabled={!examItem.is_active || examItem.questions_count === 0}
+                                                className="px-2.5 py-1 bg-brand-light hover:bg-brand-medium text-white text-[10px] font-bold rounded-lg shadow-xs transition-all disabled:opacity-50 cursor-pointer"
+                                              >
+                                                Launch
+                                              </button>
+                                            )}
+                                          </div>
+                                        </td>
+                                      </tr>
+
+                                      {/* Expand / Preview Drawer */}
+                                      {isExpanded && (
+                                        <tr className="bg-slate-50/70 border-b border-emerald-100 animate-fade-in">
+                                          <td colSpan={7} className="px-6 py-4">
+                                            <div className="bg-white rounded-2xl p-4 border border-emerald-200/80 shadow-xs space-y-3 text-xs">
+                                              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-slate-100 pb-2">
+                                                <div>
+                                                  <h5 className="font-extrabold text-slate-900 text-sm">
+                                                    {examItem.title}
+                                                  </h5>
+                                                  <p className="text-slate-500 text-[11px]">
+                                                    Unit: [{examItem.course_code}] {examItem.course_unit_name || examItem.course_code}
+                                                  </p>
+                                                </div>
+                                                <span className="px-2.5 py-1 rounded-xl text-xs font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                                                  Tuition Gate: 100% Clearance Required (CIU EXAMS API Gate)
+                                                </span>
+                                              </div>
+                                              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 p-3 rounded-xl border border-slate-100 text-xs">
+                                                <div>
+                                                  <span className="text-[10px] uppercase font-bold text-slate-400 block">Duration</span>
+                                                  <span className="font-bold text-slate-800">{examItem.duration_minutes} Minutes</span>
+                                                </div>
+                                                <div>
+                                                  <span className="text-[10px] uppercase font-bold text-slate-400 block">Total Questions</span>
+                                                  <span className="font-bold text-slate-800">{examItem.questions_count}</span>
+                                                </div>
+                                                <div>
+                                                  <span className="text-[10px] uppercase font-bold text-slate-400 block">Dean Approval</span>
+                                                  <span className={`font-bold ${isApproved ? 'text-emerald-700' : 'text-amber-700'}`}>
+                                                    {isApproved ? 'Approved by Dean' : 'Pending Dean Approval'}
+                                                  </span>
+                                                </div>
+                                                <div>
+                                                  <span className="text-[10px] uppercase font-bold text-slate-400 block">Fee Requirement</span>
+                                                  <span className="font-bold text-emerald-700">100% CIU Cleared / Override</span>
+                                                </div>
+                                              </div>
+                                            </div>
+                                          </td>
+                                        </tr>
                                       )}
-                                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${examItem.is_results_released ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-slate-200 text-slate-600 border-slate-300'}`}>
-                                        {examItem.is_results_released ? 'RELEASED' : 'WITHHELD'}
-                                      </span>
-                                    </div>
-                                  </div>
-
-                                  <h4 className="font-bold text-slate-850 text-base leading-tight">{examItem.title}</h4>
-                                  <p className="text-xs text-slate-500 font-medium">
-                                    Unit: <span className="font-semibold text-slate-800">{examItem.course_unit_name || examItem.course_code}</span>
-                                  </p>
-                                  <p className="text-xs text-slate-500">
-                                    Lecturer: <span className="font-semibold text-slate-800">{examItem.lecturer_name}</span>
-                                  </p>
-
-                                  <div className="pt-2 text-[11px] text-slate-600 space-y-1 bg-white p-2.5 rounded-xl border border-slate-200 font-medium">
-                                    <p>⏱️ Duration: <span className="font-bold text-slate-800">{examItem.duration_minutes} mins</span> | ❓ Questions: <span className="font-bold text-slate-800">{examItem.questions_count}</span></p>
-                                    <p>📅 Scheduled Start (EAT): <span className="font-bold text-slate-800">{formatUgandanTime(examItem.scheduled_start)}</span></p>
-                                    {examItem.due_date && (
-                                      <p>⏳ Due Date (EAT): <span className="font-bold text-amber-700">{formatUgandanTime(examItem.due_date)}</span></p>
-                                    )}
-                                    {isLockedForLecturer && (
-                                      <p className="text-[10px] text-red-600 font-bold">🔒 Locked (Approved by Dean)</p>
-                                    )}
-                                  </div>
-                                </div>
-
-                                {/* Staff Actions Footer */}
-                                <div className="pt-2 border-t border-slate-200 flex flex-wrap items-center justify-between gap-1">
-                                  <button
-                                    onClick={() => handleSelectExamForQuestions(examItem)}
-                                    className="px-2 py-1 bg-white border border-emerald-200 hover:bg-emerald-50 text-slate-800 text-xs font-bold rounded-lg transition-all"
-                                  >
-                                    Questions ({examItem.questions_count})
-                                  </button>
-
-                                  <button
-                                    onClick={() => {
-                                      setSelectedExamFilter(String(examItem.id));
-                                      setActiveTab('submissions');
-                                    }}
-                                    className="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-bold rounded-lg transition-all"
-                                    title="Filter student exam submissions and view scorecards"
-                                  >
-                                    📊 Submissions ({allAttempts.filter(a => a.exam === examItem.id).length})
-                                  </button>
-
-                                  <button
-                                    onClick={() => handlePreviewExamScorecard(examItem)}
-                                    className="px-2 py-1 bg-purple-50 hover:bg-purple-100 text-purple-800 border border-purple-200 text-xs font-bold rounded-lg transition-all"
-                                    title="Preview exam paper and score card layout"
-                                  >
-                                    👁️ Preview
-                                  </button>
-
-                                  {!isExecutiveReadOnly && (
-                                    <>
-                                      {canManageThisExam && (
-                                        <>
-                                          <button
-                                            onClick={() => handleToggleExamPublish(examItem)}
-                                            className={`px-2 py-1 text-xs font-bold rounded-lg transition-all ${examItem.is_active || examItem.is_published ? 'bg-amber-50 text-amber-800 border border-amber-200' : 'bg-brand-light text-white'}`}
-                                            title="Toggle exam publish status"
-                                          >
-                                            {examItem.is_active || examItem.is_published ? 'Unpublish' : 'Publish'}
-                                          </button>
-                                          <button
-                                            onClick={() => handleOpenEditExamModal(examItem)}
-                                            className="px-2 py-1 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 text-emerald-800 text-xs font-bold rounded-lg transition-all"
-                                            title="Edit exam details"
-                                          >
-                                            ✏️ Edit
-                                          </button>
-                                          <button
-                                            onClick={() => handleDeleteExam(examItem)}
-                                            className="px-2 py-1 bg-red-50 border border-red-200 hover:bg-red-100 text-red-700 text-xs font-bold rounded-lg transition-all"
-                                            title="Delete exam paper"
-                                          >
-                                            🗑️
-                                          </button>
-                                        </>
-                                      )}
-
-                                      {isRegistrarOrStaff && (
-                                        <button
-                                          onClick={() => handleReleaseExamResults(examItem.id)}
-                                          className={`px-2 py-1 text-xs font-bold rounded-lg transition-all ${examItem.is_results_released ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' : 'bg-brand-light text-white'}`}
-                                        >
-                                          {examItem.is_results_released ? '🔒 Withhold' : '📢 Release'}
-                                        </button>
-                                      )}
-                                    </>
-                                  )}
-
-                                  <button
-                                    onClick={() => downloadResultsCSV(examItem.id)}
-                                    className="p-1 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 text-xs font-bold rounded-lg"
-                                    title="Export Results CSV"
-                                  >
-                                    📊 CSV
-                                  </button>
-                                </div>
-                              </div>
-                            );
-                          })}
+                                    </Fragment>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
                         </div>
                       )}
-                    </div>
+                    </>
                   );
-                })}
-
-                {/* Unassigned / General Exams */}
-                {unassignedExams.length > 0 && (
-                  <div className="green-card rounded-2xl p-6 space-y-4">
-                    <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">General / Unassigned Faculty Exams</h3>
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                      {unassignedExams.map((examItem) => (
-                        <div key={examItem.id} className="bg-white rounded-2xl border border-slate-200 p-5 flex flex-col justify-between space-y-3 shadow-sm hover:border-emerald-300 transition-all">
-                          <div className="space-y-1.5">
-                            <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-slate-100 text-slate-800 border border-slate-200">
-                              {examItem.course_code}
-                            </span>
-                            <h4 className="font-bold text-slate-850 text-base leading-tight">{examItem.title}</h4>
-                            <p className="text-xs text-slate-500 font-medium">Lecturer: <span className="font-semibold text-slate-800">{examItem.lecturer_name}</span></p>
-                          </div>
-                          <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
-                            <button
-                              onClick={() => handleSelectExamForQuestions(examItem)}
-                              className="px-3 py-1.5 bg-white border border-slate-200 text-slate-800 text-xs font-bold rounded-lg"
-                            >
-                              Questions ({examItem.questions_count})
-                            </button>
-                          </div>
-                        </div>
-                      ))}
+                })()}
+              </div>
+            ) : (
+              /* STAFF HIGH-DENSITY LIST EXAMS VIEW */
+              <div className="space-y-4">
+                
+                {/* Sticky Bulk Action Bar for Exams */}
+                {selectedExamIds.length > 0 && !isExecutiveReadOnly && (
+                  <div className="sticky top-2 z-20 bg-gradient-to-r from-emerald-800 via-teal-800 to-emerald-900 text-white p-3.5 rounded-2xl shadow-xl border border-emerald-500/50 flex flex-wrap items-center justify-between gap-3 animate-fade-in">
+                    <div className="flex items-center space-x-3">
+                      <span className="w-8 h-8 rounded-xl bg-white/20 flex items-center justify-center text-sm font-bold shadow-inner">
+                        🎓
+                      </span>
+                      <div>
+                        <p className="text-xs font-black tracking-wide uppercase">
+                          {selectedExamIds.length} Exam{selectedExamIds.length > 1 ? 's' : ''} Selected
+                        </p>
+                        <p className="text-[11px] text-emerald-100 font-medium">
+                          Execute bulk operations on selected examinations.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedExamIds([])}
+                        className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-bold transition-all border border-white/20 cursor-pointer"
+                      >
+                        Deselect All
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleBulkPublishExams(true)}
+                        className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl text-xs font-black shadow-sm transition-all flex items-center space-x-1 cursor-pointer"
+                      >
+                        <span>🚀 Bulk Activate</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleBulkPublishExams(false)}
+                        className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-black shadow-sm transition-all flex items-center space-x-1 cursor-pointer"
+                      >
+                        <span>📁 Bulk Deactivate</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleBulkDeleteExams}
+                        className="px-4 py-1.5 bg-white text-red-700 hover:bg-red-50 rounded-xl text-xs font-black shadow-md hover:shadow transition-all flex items-center space-x-1.5 cursor-pointer"
+                      >
+                        <span>🗑️ Delete Selected ({selectedExamIds.length})</span>
+                      </button>
                     </div>
                   </div>
                 )}
 
+                {/* List Controls Summary */}
+                <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
+                  <div className="flex items-center space-x-2">
+                    <span className="font-extrabold text-slate-800 uppercase tracking-wider">
+                      Examinations Directory
+                    </span>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                      {examsFiltered.length} Exams
+                    </span>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    {!isExecutiveReadOnly && examsFiltered.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleToggleSelectAllExams}
+                        className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-all border border-slate-200 cursor-pointer"
+                      >
+                        {selectedExamIds.length >= examsFiltered.length && examsFiltered.length > 0
+                          ? '✕ Deselect All'
+                          : `☑️ Select All (${examsFiltered.length})`}
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* High-Density Exams List Table */}
+                {examsFiltered.length === 0 ? (
+                  <div className="bg-white rounded-2xl p-8 border border-slate-200 text-center space-y-2">
+                    <span className="text-3xl block">📋</span>
+                    <p className="text-slate-700 font-bold text-sm">No examinations match your active filter criteria</p>
+                    <p className="text-slate-500 text-xs">Try selecting a different faculty or course filter.</p>
+                  </div>
+                ) : (
+                  <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                    <div className="overflow-x-auto custom-scrollbar">
+                      <table className="w-full text-left text-xs border-collapse">
+                        <thead>
+                          <tr className="bg-slate-50/80 border-b border-slate-200 text-slate-500 uppercase font-semibold">
+                            {!isExecutiveReadOnly && (
+                              <th className="px-3 py-3 w-10 text-center">
+                                <input
+                                  type="checkbox"
+                                  checked={examsFiltered.length > 0 && examsFiltered.every(e => selectedExamIds.includes(e.id))}
+                                  onChange={handleToggleSelectAllExams}
+                                  className="w-4 h-4 text-emerald-600 rounded border-slate-300 focus:ring-emerald-400 cursor-pointer"
+                                  title="Select / deselect all filtered exams"
+                                />
+                              </th>
+                            )}
+                            <th className="px-4 py-3">Exam Title & Unit</th>
+                            <th className="px-3 py-3">Course & Faculty</th>
+                            <th className="px-3 py-3">Schedule (EAT)</th>
+                            <th className="px-3 py-3 text-center">Duration</th>
+                            <th className="px-3 py-3 text-center">Questions</th>
+                            <th className="px-3 py-3 text-center">Status</th>
+                            <th className="px-4 py-3 text-center">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 text-slate-700">
+                          {examsFiltered.map((examItem) => {
+                            const isSelected = selectedExamIds.includes(examItem.id);
+                            const isExpanded = expandedExamIds.includes(examItem.id);
+                            const isApproved = Boolean(examItem.is_approved_by_dean);
+                            const isLockedForLecturer = isLecturer && isApproved;
+                            const canManageThisExam = isAdmin || (isLecturer && !isLockedForLecturer);
+                            const examSubmissionsCount = allAttempts.filter(a => a.exam === examItem.id).length;
+
+                            return (
+                              <Fragment key={examItem.id}>
+                                <tr
+                                  className={`transition-all ${
+                                    isSelected
+                                      ? 'bg-emerald-50/60 hover:bg-emerald-50/80 border-l-4 border-l-brand-light'
+                                      : isExpanded
+                                      ? 'bg-teal-50/30 border-l-4 border-l-teal-600'
+                                      : 'hover:bg-slate-50'
+                                  }`}
+                                >
+                                  {!isExecutiveReadOnly && (
+                                    <td className="px-3 py-3 text-center" onClick={(e) => e.stopPropagation()}>
+                                      <input
+                                        type="checkbox"
+                                        checked={isSelected}
+                                        onChange={() => handleToggleSelectExam(examItem.id)}
+                                        className="w-4 h-4 text-emerald-600 rounded border-slate-300 focus:ring-emerald-400 cursor-pointer"
+                                        title={`Select ${examItem.title}`}
+                                      />
+                                    </td>
+                                  )}
+                                  <td className="px-4 py-3">
+                                    <div className="space-y-0.5">
+                                      <div className="flex items-center space-x-1.5">
+                                        <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                          {examItem.course_code}
+                                        </span>
+                                        <span className="font-extrabold text-slate-900 leading-tight block">
+                                          {examItem.title}
+                                        </span>
+                                      </div>
+                                      <span className="text-[11px] text-slate-500 block">
+                                        Unit: <strong className="text-slate-700">{examItem.course_unit_name || examItem.course_code}</strong> · Lecturer: <strong className="text-slate-700">{examItem.lecturer_name || 'Unassigned'}</strong>
+                                      </span>
+                                    </div>
+                                  </td>
+                                  <td className="px-3 py-3">
+                                    <span className="font-mono font-bold text-brand-dark block">
+                                      [{examItem.course_code}]
+                                    </span>
+                                    <span className="text-[11px] text-slate-600 truncate max-w-[160px] block">
+                                      Faculty: {examItem.faculty_code || 'General'}
+                                    </span>
+                                  </td>
+                                  <td className="px-3 py-3 text-[11px]">
+                                    <div className="space-y-0.5">
+                                      <span className="block font-medium text-slate-800">
+                                        📅 {formatUgandanTime(examItem.scheduled_start)}
+                                      </span>
+                                      {examItem.due_date && (
+                                        <span className="block text-amber-700 font-medium text-[10px]">
+                                          ⏳ Due: {formatUgandanTime(examItem.due_date)}
+                                        </span>
+                                      )}
+                                    </div>
+                                  </td>
+                                  <td className="px-3 py-3 text-center">
+                                    <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-800 border border-slate-200 block">
+                                      ⏱️ {examItem.duration_minutes}m
+                                    </span>
+                                    {isLockedForLecturer && (
+                                      <span className="text-[9px] text-red-600 font-bold block mt-0.5">
+                                        🔒 Dean Locked
+                                      </span>
+                                    )}
+                                  </td>
+                                  <td className="px-3 py-3 text-center">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleSelectExamForQuestions(examItem)}
+                                      className="px-2 py-1 bg-white hover:bg-emerald-50 text-slate-800 border border-emerald-200 font-bold rounded-lg text-[10px] transition-all inline-flex items-center space-x-1 cursor-pointer"
+                                      title="Manage exam questions"
+                                    >
+                                      <span>❓ {examItem.questions_count} Qs</span>
+                                    </button>
+                                  </td>
+                                  <td className="px-3 py-3 text-center">
+                                    <div className="space-y-1">
+                                      {isApproved ? (
+                                        <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-300 block">
+                                          ✅ Approved
+                                        </span>
+                                      ) : (
+                                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200 block">
+                                          ⏳ Pending
+                                        </span>
+                                      )}
+                                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold border block ${examItem.is_results_released ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-slate-200 text-slate-600 border-slate-300'}`}>
+                                        {examItem.is_results_released ? 'RELEASED' : 'WITHHELD'}
+                                      </span>
+                                    </div>
+                                  </td>
+                                  <td className="px-4 py-3 text-center">
+                                    <div className="flex items-center justify-center space-x-1">
+                                      <button
+                                        type="button"
+                                        onClick={() => toggleExpandExam(examItem.id)}
+                                        className={`px-2 py-1 text-[10px] font-bold rounded-lg border transition-all cursor-pointer ${
+                                          isExpanded
+                                            ? 'bg-brand-dark text-white border-brand-dark shadow-xs'
+                                            : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-200'
+                                        }`}
+                                        title="Expand details and preview drawer"
+                                      >
+                                        <span>{isExpanded ? '▲ Hide' : '🔍 Preview'}</span>
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handlePreviewExamScorecard(examItem)}
+                                        className="px-2 py-1 bg-purple-50 hover:bg-purple-100 text-purple-800 border border-purple-200 text-[10px] font-bold rounded-lg transition-all cursor-pointer"
+                                        title="Preview exam paper and scorecard layout"
+                                      >
+                                        👁️
+                                      </button>
+                                      {!isExecutiveReadOnly && (
+                                        <>
+                                          {canManageThisExam && (
+                                            <>
+                                              <button
+                                                type="button"
+                                                onClick={() => handleToggleExamPublish(examItem)}
+                                                className={`px-2 py-1 text-[10px] font-bold rounded-lg transition-all cursor-pointer ${
+                                                  examItem.is_active || examItem.is_published
+                                                    ? 'bg-amber-50 text-amber-800 border border-amber-200'
+                                                    : 'bg-brand-light text-white'
+                                                }`}
+                                                title="Toggle exam publish status"
+                                              >
+                                                {examItem.is_active || examItem.is_published ? 'Unpub' : 'Pub'}
+                                              </button>
+                                              <button
+                                                type="button"
+                                                onClick={() => handleOpenEditExamModal(examItem)}
+                                                className="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-[10px] font-bold rounded-lg transition-all border border-emerald-200 cursor-pointer"
+                                                title="Edit exam details"
+                                              >
+                                                ✏️
+                                              </button>
+                                              <button
+                                                type="button"
+                                                onClick={() => handleDeleteExam(examItem)}
+                                                className="px-2 py-1 bg-red-50 hover:bg-red-100 text-red-700 text-[10px] font-bold rounded-lg transition-all border border-red-200 cursor-pointer"
+                                                title="Delete exam paper"
+                                              >
+                                                🗑️
+                                              </button>
+                                            </>
+                                          )}
+                                          {isRegistrarOrStaff && (
+                                            <button
+                                              type="button"
+                                              onClick={() => handleReleaseExamResults(examItem.id)}
+                                              className={`px-2 py-1 text-[10px] font-bold rounded-lg transition-all cursor-pointer ${
+                                                examItem.is_results_released
+                                                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                                                  : 'bg-brand-light text-white'
+                                              }`}
+                                              title={examItem.is_results_released ? 'Withhold exam results' : 'Release exam results to students'}
+                                            >
+                                              {examItem.is_results_released ? '🔒' : '📢'}
+                                            </button>
+                                          )}
+                                        </>
+                                      )}
+                                      <button
+                                        type="button"
+                                        onClick={() => downloadResultsCSV(examItem.id)}
+                                        className="p-1 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 text-[10px] font-bold rounded-lg cursor-pointer"
+                                        title="Export Results CSV"
+                                      >
+                                        📊
+                                      </button>
+                                    </div>
+                                  </td>
+                                </tr>
+
+                                {/* Expand / Preview Drawer */}
+                                {isExpanded && (
+                                  <tr className="bg-slate-50/70 border-b border-emerald-100 animate-fade-in">
+                                    <td colSpan={!isExecutiveReadOnly ? 8 : 7} className="px-6 py-4">
+                                      <div className="bg-white rounded-2xl p-4 border border-emerald-200/80 shadow-xs space-y-3 text-xs">
+                                        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-slate-100 pb-2.5">
+                                          <div className="space-y-0.5">
+                                            <h5 className="font-extrabold text-slate-900 text-sm flex items-center space-x-2">
+                                              <span>{examItem.title}</span>
+                                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-100 text-purple-800 border border-purple-200">
+                                                {examItem.questions_count} Questions · {examSubmissionsCount} Submissions
+                                              </span>
+                                            </h5>
+                                            <p className="text-slate-500 text-[11px]">
+                                              Course Unit: [{examItem.course_code}] {examItem.course_unit_name || examItem.course_code} · Faculty: {examItem.faculty_code || 'N/A'}
+                                            </p>
+                                          </div>
+                                          <div className="flex items-center space-x-1.5 shrink-0">
+                                            <button
+                                              type="button"
+                                              onClick={() => {
+                                                setSelectedExamFilter(String(examItem.id));
+                                                setActiveTab('submissions');
+                                              }}
+                                              className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 font-bold rounded-xl text-xs transition-all cursor-pointer"
+                                            >
+                                              📊 View Submissions ({examSubmissionsCount})
+                                            </button>
+                                            <button
+                                              type="button"
+                                              onClick={() => downloadResultsCSV(examItem.id)}
+                                              className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 font-bold rounded-xl text-xs transition-all cursor-pointer"
+                                            >
+                                              📥 Export CSV
+                                            </button>
+                                          </div>
+                                        </div>
+
+                                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 p-3 rounded-xl border border-slate-100 text-xs">
+                                          <div>
+                                            <span className="text-[10px] uppercase font-bold text-slate-400 block">Examination Type</span>
+                                            <span className="font-bold text-slate-800">Final University Exam</span>
+                                          </div>
+                                          <div>
+                                            <span className="text-[10px] uppercase font-bold text-slate-400 block">Dean Approval</span>
+                                            <span className={`font-bold ${isApproved ? 'text-emerald-700' : 'text-amber-700'}`}>
+                                              {isApproved ? 'Approved & Locked' : 'Pending Review'}
+                                            </span>
+                                          </div>
+                                          <div>
+                                            <span className="text-[10px] uppercase font-bold text-slate-400 block">Tuition Fee Gate</span>
+                                            <span className="font-bold text-emerald-700">100% Cleared (CIU EXAMS API)</span>
+                                          </div>
+                                          <div>
+                                            <span className="text-[10px] uppercase font-bold text-slate-400 block">Duration</span>
+                                            <span className="font-bold text-slate-800">{examItem.duration_minutes} Minutes</span>
+                                          </div>
+                                        </div>
+
+                                        <div className="bg-emerald-50/60 p-2.5 rounded-xl border border-emerald-200 text-[11px] text-emerald-900 flex items-center justify-between">
+                                          <span>
+                                            🔒 <strong>Fee Clearance Policy:</strong> Students must have 100% tuition clearance via the CIU EXAMS API or active Accounts Temporary Clearance to launch this exam.
+                                          </span>
+                                          <button
+                                            type="button"
+                                            onClick={() => handlePreviewExamScorecard(examItem)}
+                                            className="px-2.5 py-1 bg-white hover:bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold rounded-lg text-[10px] transition-all shrink-0 ml-2"
+                                          >
+                                            View Layout
+                                          </button>
+                                        </div>
+                                      </div>
+                                    </td>
+                                  </tr>
+                                )}
+                              </Fragment>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>

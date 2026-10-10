@@ -16,11 +16,15 @@ class UserSerializer(serializers.ModelSerializer):
     is_test_cleared = serializers.SerializerMethodField()
     is_exam_cleared = serializers.SerializerMethodField()
     clearance_source = serializers.SerializerMethodField()
+    clearance_mode = serializers.SerializerMethodField()
+    is_temp_cleared = serializers.SerializerMethodField()
+    temp_clearance_info = serializers.SerializerMethodField()
+    effective_tuition_percentage = serializers.SerializerMethodField()
 
     class Meta:
         model = User
-        fields = ('id', 'username', 'email', 'first_name', 'last_name', 'role', 'phone', 'gender', 'gender_display', 'tuition_paid_percentage', 'faculty', 'faculty_name', 'faculty_code', 'assigned_courses', 'assigned_course_codes', 'reg_number', 'registration_number', 'year_of_study', 'semester', 'entry_year', 'intake', 'must_change_password', 'is_test_cleared', 'is_exam_cleared', 'clearance_source')
-        read_only_fields = ('role', 'registration_number')
+        fields = ('id', 'username', 'email', 'first_name', 'last_name', 'role', 'phone', 'gender', 'gender_display', 'tuition_paid_percentage', 'effective_tuition_percentage', 'faculty', 'faculty_name', 'faculty_code', 'assigned_courses', 'assigned_course_codes', 'reg_number', 'registration_number', 'year_of_study', 'semester', 'entry_year', 'intake', 'must_change_password', 'is_active', 'is_test_cleared', 'is_exam_cleared', 'is_temp_cleared', 'clearance_source', 'clearance_mode', 'temp_clearance_info')
+        read_only_fields = ('role', 'registration_number', 'is_active')
 
     def validate_gender(self, value):
         if not value:
@@ -54,7 +58,11 @@ class UserSerializer(serializers.ModelSerializer):
                 obj._cached_clearance = {
                     'is_exam_cleared': True,
                     'is_test_cleared': True,
-                    'source': 'Staff'
+                    'tuition_paid_percentage': 100.0,
+                    'clearance_mode': 'staff',
+                    'is_temp_cleared': False,
+                    'temp_info': None,
+                    'source': 'Staff / Faculty Role'
                 }
             else:
                 from .clearance import check_student_clearance
@@ -70,6 +78,18 @@ class UserSerializer(serializers.ModelSerializer):
     def get_clearance_source(self, obj):
         return self._get_clearance(obj).get('source', 'Staff')
 
+    def get_clearance_mode(self, obj):
+        return self._get_clearance(obj).get('clearance_mode', 'staff' if obj.role != 'student' else 'uncleared')
+
+    def get_is_temp_cleared(self, obj):
+        return self._get_clearance(obj).get('is_temp_cleared', False)
+
+    def get_temp_clearance_info(self, obj):
+        return self._get_clearance(obj).get('temp_info', None)
+
+    def get_effective_tuition_percentage(self, obj):
+        return self._get_clearance(obj).get('tuition_paid_percentage', float(obj.tuition_paid_percentage or 0.0))
+
 class AdminUserSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, required=False, allow_blank=True, allow_null=True)
     faculty_name = serializers.CharField(source='faculty.name', read_only=True, allow_null=True)
@@ -80,10 +100,14 @@ class AdminUserSerializer(serializers.ModelSerializer):
     is_test_cleared = serializers.SerializerMethodField()
     is_exam_cleared = serializers.SerializerMethodField()
     clearance_source = serializers.SerializerMethodField()
+    clearance_mode = serializers.SerializerMethodField()
+    is_temp_cleared = serializers.SerializerMethodField()
+    temp_clearance_info = serializers.SerializerMethodField()
+    effective_tuition_percentage = serializers.SerializerMethodField()
 
     class Meta:
         model = User
-        fields = ('id', 'username', 'email', 'password', 'first_name', 'last_name', 'role', 'phone', 'gender', 'gender_display', 'tuition_paid_percentage', 'faculty', 'faculty_name', 'faculty_code', 'assigned_courses', 'assigned_course_codes', 'reg_number', 'registration_number', 'year_of_study', 'semester', 'entry_year', 'intake', 'must_change_password', 'is_test_cleared', 'is_exam_cleared', 'clearance_source')
+        fields = ('id', 'username', 'email', 'password', 'first_name', 'last_name', 'role', 'phone', 'gender', 'gender_display', 'tuition_paid_percentage', 'effective_tuition_percentage', 'faculty', 'faculty_name', 'faculty_code', 'assigned_courses', 'assigned_course_codes', 'reg_number', 'registration_number', 'year_of_study', 'semester', 'entry_year', 'intake', 'must_change_password', 'is_active', 'is_test_cleared', 'is_exam_cleared', 'is_temp_cleared', 'clearance_source', 'clearance_mode', 'temp_clearance_info')
 
     def validate_phone(self, value):
         if value:
@@ -142,7 +166,11 @@ class AdminUserSerializer(serializers.ModelSerializer):
                 obj._cached_clearance = {
                     'is_exam_cleared': True,
                     'is_test_cleared': True,
-                    'source': 'Staff'
+                    'tuition_paid_percentage': 100.0,
+                    'clearance_mode': 'staff',
+                    'is_temp_cleared': False,
+                    'temp_info': None,
+                    'source': 'Staff / Faculty Role'
                 }
             else:
                 from .clearance import check_student_clearance
@@ -157,6 +185,18 @@ class AdminUserSerializer(serializers.ModelSerializer):
 
     def get_clearance_source(self, obj):
         return self._get_clearance(obj).get('source', 'Staff')
+
+    def get_clearance_mode(self, obj):
+        return self._get_clearance(obj).get('clearance_mode', 'staff' if obj.role != 'student' else 'uncleared')
+
+    def get_is_temp_cleared(self, obj):
+        return self._get_clearance(obj).get('is_temp_cleared', False)
+
+    def get_temp_clearance_info(self, obj):
+        return self._get_clearance(obj).get('temp_info', None)
+
+    def get_effective_tuition_percentage(self, obj):
+        return self._get_clearance(obj).get('tuition_paid_percentage', float(obj.tuition_paid_percentage or 0.0))
 
 
 class UserCreateSerializer(serializers.ModelSerializer):

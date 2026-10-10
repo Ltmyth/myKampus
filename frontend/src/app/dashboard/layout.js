@@ -119,10 +119,10 @@ export default function DashboardLayout({ children }) {
     }
   ];
 
-  // System Admin & Platform Coordinator get user invite panel
-  if (user.role === 'admin' || user.role === 'platform_coordinator') {
+  // System Admin, Platform Coordinator & Accounts Personnel get admin/clearance panel
+  if (user.role === 'admin' || user.role === 'platform_coordinator' || user.role === 'accounts') {
     menuItems.push({
-      name: 'Manage Users & Invites',
+      name: user.role === 'accounts' ? 'Temporary Clearance & Accounts' : 'Manage Users & Invites',
       path: '/dashboard/admin',
       icon: (
         <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -141,6 +141,7 @@ export default function DashboardLayout({ children }) {
     switch (role) {
       case 'admin': return 'bg-brand-dark text-white border-brand-dark';
       case 'platform_coordinator': return 'bg-purple-900 text-white border-purple-900 font-bold';
+      case 'accounts': return 'bg-amber-100 text-amber-900 border-amber-300 font-bold';
       case 'vc': return 'bg-emerald-100 text-emerald-900 border-emerald-300 font-extrabold';
       case 'dvc': return 'bg-emerald-100 text-emerald-900 border-emerald-300 font-extrabold';
       case 'registrar': return 'bg-emerald-50 text-emerald-800 border-emerald-200';
@@ -155,6 +156,7 @@ export default function DashboardLayout({ children }) {
     switch (role) {
       case 'admin': return 'System Admin';
       case 'platform_coordinator': return 'Platform Coordinator';
+      case 'accounts': return 'Accounts Personnel';
       case 'vc': return 'Vice-Chancellor (VC)';
       case 'dvc': return 'DVC / Chancellor';
       case 'registrar': return 'Academic Registrar';

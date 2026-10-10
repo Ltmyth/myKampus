@@ -133,9 +133,23 @@ export default function AdminPage() {
   const [newPasswordInput, setNewPasswordInput] = useState('');
   const [showResetPassVisibility, setShowResetPassVisibility] = useState(false);
 
-  // Cleared Faculty Data
+  // Single Staff Onboarding State (Platform Coordinator & System Admin)
+  const [showSingleStaffModal, setShowSingleStaffModal] = useState(false);
+  const [staffFullName, setStaffFullName] = useState('');
+  const [staffEmail, setStaffEmail] = useState('');
+  const [staffRole, setStaffRole] = useState('lecturer');
+  const [staffFacultyId, setStaffFacultyId] = useState('');
+  const [staffGender, setStaffGender] = useState('other');
+  const [staffPhone, setStaffPhone] = useState('');
+  const [staffPasswordMode, setStaffPasswordMode] = useState('auto');
+  const [staffCustomPassword, setStaffCustomPassword] = useState('');
+  const [createdStaffCredentials, setCreatedStaffCredentials] = useState(null);
+  const [submittingStaff, setSubmittingStaff] = useState(false);
+
+  // Cleared Faculty Data & API Stream Segment Filter
   const [clearedFacultyData, setClearedFacultyData] = useState(null);
   const [loadingCleared, setLoadingCleared] = useState(false);
+  const [selectedExamType, setSelectedExamType] = useState('ALL'); // 'ALL', 'EXAMS', 'TESTS'
 
   // Universal Confirmation Modal State
   const [confirmModal, setConfirmModal] = useState({
@@ -203,7 +217,10 @@ export default function AdminPage() {
   }, [resetUserObj, editingUser, submitting, proctorModal.isOpen, proctorModal.loading]);
 
   useEffect(() => {
-    if (user && (user.role === 'admin' || user.role === 'platform_coordinator')) {
+    if (user && (user.role === 'admin' || user.role === 'platform_coordinator' || user.role === 'accounts')) {
+      if (user.role === 'accounts') {
+        setActiveTab('temp_clearance');
+      }
       loadAdminData();
     }
   }, [user]);
@@ -257,10 +274,11 @@ export default function AdminPage() {
     }
   };
 
-  const fetchClearedFacultyData = async () => {
+  const fetchClearedFacultyData = async (examtype = selectedExamType) => {
     setLoadingCleared(true);
     try {
-      const res = await api.get('/admin/users/ciu_cleared_students/');
+      const query = examtype && examtype !== 'ALL' ? `?examtype=${examtype}` : '';
+      const res = await api.get(`/admin/users/ciu_cleared_students/${query}`);
       setClearedFacultyData(res);
     } catch (err) {
       setErrorMsg('Failed to load CIU Cleared Students data.');
@@ -277,12 +295,129 @@ export default function AdminPage() {
       const interval = setInterval(fetchLiveProctorFeeds, 10000);
       return () => clearInterval(interval);
     } else if (activeTab === 'ciu_cleared') {
-      fetchClearedFacultyData();
+      fetchClearedFacultyData(selectedExamType);
     }
   }, [activeTab]);
 
+  // Handle Account Suspension (System Admin Only)
+  const handleToggleSuspendUser = (targetUser) => {
+    if (user?.role !== 'admin') {
+      setErrorMsg('Permission Denied: Only the System Administrator can suspend or reactivate user accounts.');
+      return;
+    }
+    const isSuspending = targetUser.is_active !== false;
+    showConfirm({
+      title: isSuspending ? 'Suspend User Account' : 'Reactivate User Account',
+      description: isSuspending
+        ? `Are you sure you want to suspend @${targetUser.username} (${targetUser.email})? They will be immediately blocked from logging in.`
+        : `Are you sure you want to reactivate @${targetUser.username}? Their login and portal privileges will be restored immediately.`,
+      confirmText: isSuspending ? 'Suspend Account' : 'Reactivate Account',
+      variant: isSuspending ? 'danger' : 'success',
+      icon: isSuspending ? '⛔' : '✅',
+      onConfirm: async () => {
+        setConfirmModal(prev => ({ ...prev, loading: true }));
+        try {
+          const res = await api.post(`/admin/users/${targetUser.id}/toggle_suspend/`);
+          setSuccessMsg(res.detail || (isSuspending ? `Account @${targetUser.username} suspended successfully.` : `Account @${targetUser.username} reactivated successfully.`));
+          setUsers(prev => prev.map(u => u.id === targetUser.id ? { ...u, is_active: !isSuspending } : u));
+          closeConfirm();
+        } catch (err) {
+          setErrorMsg(err.response?.data?.detail || err.message || 'Failed to toggle account suspension.');
+          setConfirmModal(prev => ({ ...prev, loading: false }));
+        }
+      }
+    });
+  };
+
+  const handleBulkSuspendUsers = (setActiveStatus) => {
+    if (user?.role !== 'admin') {
+      setErrorMsg('Permission Denied: Only the System Administrator can bulk suspend or reactivate accounts.');
+      return;
+    }
+    const actionLabel = setActiveStatus ? 'Reactivate' : 'Suspend';
+    showConfirm({
+      title: `${actionLabel} Selected Accounts`,
+      description: `Are you sure you want to ${actionLabel.toLowerCase()} ${selectedUserIds.length} selected user account(s)?`,
+      confirmText: `${actionLabel} ${selectedUserIds.length} Accounts`,
+      variant: setActiveStatus ? 'success' : 'danger',
+      icon: setActiveStatus ? '✅' : '⛔',
+      onConfirm: async () => {
+        setConfirmModal(prev => ({ ...prev, loading: true }));
+        try {
+          const res = await api.post('/admin/users/bulk_suspend/', {
+            user_ids: selectedUserIds,
+            is_active: setActiveStatus
+          });
+          setSuccessMsg(res.detail || `Successfully ${actionLabel.toLowerCase()}ed ${res.count || selectedUserIds.length} accounts.`);
+          setUsers(prev => prev.map(u => selectedUserIds.includes(u.id) ? { ...u, is_active: setActiveStatus } : u));
+          setSelectedUserIds([]);
+          closeConfirm();
+        } catch (err) {
+          setErrorMsg(err.response?.data?.detail || err.message || `Failed to ${actionLabel.toLowerCase()} accounts.`);
+          setConfirmModal(prev => ({ ...prev, loading: false }));
+        }
+      }
+    });
+  };
+
+  // Handle Single Staff Onboarding (Platform Coordinator & System Admin)
+  const handleOnboardSingleStaff = async (e) => {
+    e.preventDefault();
+    if (!staffFullName.trim() || !staffEmail.trim()) {
+      setErrorMsg('Staff Full Name and Email address are required.');
+      return;
+    }
+    if (staffPasswordMode === 'custom' && (!staffCustomPassword || staffCustomPassword.length < 6)) {
+      setErrorMsg('Custom initial password must be at least 6 characters.');
+      return;
+    }
+    setErrorMsg('');
+    setSuccessMsg('');
+    setSubmittingStaff(true);
+
+    try {
+      const payload = {
+        full_name: staffFullName.trim(),
+        email: staffEmail.trim(),
+        role: staffRole,
+        faculty: staffFacultyId || undefined,
+        gender: staffGender,
+        phone_number: staffPhone.trim() || undefined,
+        initial_password: staffPasswordMode === 'custom' ? staffCustomPassword : undefined
+      };
+
+      const res = await api.post('/admin/users/onboard_single_staff/', payload);
+      setSuccessMsg(res.detail || 'Staff member onboarded successfully!');
+      setCreatedStaffCredentials({
+        user: res.user,
+        initial_password: res.initial_password,
+        role: staffRole,
+        full_name: staffFullName.trim(),
+        email: staffEmail.trim(),
+        username: res.user?.username
+      });
+      setShowSingleStaffModal(false);
+      setStaffFullName('');
+      setStaffEmail('');
+      setStaffRole('lecturer');
+      setStaffFacultyId('');
+      setStaffGender('other');
+      setStaffPhone('');
+      setStaffCustomPassword('');
+      loadAdminData();
+    } catch (err) {
+      setErrorMsg(err.response?.data?.detail || err.message || 'Failed to onboard staff member.');
+    } finally {
+      setSubmittingStaff(false);
+    }
+  };
+
   const handleGrantTemporaryClearance = async (e) => {
     e.preventDefault();
+    if (user?.role !== 'admin' && user?.role !== 'accounts') {
+      setErrorMsg('Permission Denied: Temporary clearance can only be issued by Accounts Personnel or the System Administrator.');
+      return;
+    }
     if (!selectedStudentForClearance) {
       setErrorMsg('Please select a student for temporary clearance.');
       return;
@@ -296,7 +431,7 @@ export default function AdminPage() {
         student: parseInt(selectedStudentForClearance),
         clearance_type: clearanceScope,
         duration_days: parseInt(clearanceDurationDays),
-        reason: clearanceReason || 'Financial arrangement approved by administration'
+        reason: clearanceReason || 'Financial arrangement approved by Accounts'
       });
       setSuccessMsg('Temporary exam/test clearance granted successfully!');
       setSelectedStudentForClearance('');
@@ -311,6 +446,10 @@ export default function AdminPage() {
 
   const handleBulkTempClearanceExcelUpload = async (e) => {
     e.preventDefault();
+    if (user?.role !== 'admin' && user?.role !== 'accounts') {
+      setErrorMsg('Permission Denied: Bulk temporary clearance can only be uploaded by Accounts Personnel or the System Administrator.');
+      return;
+    }
     if (!bulkClearanceFile) {
       setErrorMsg('Please select an Excel (.xlsx/.xls) or CSV file for bulk clearance.');
       return;
@@ -358,6 +497,10 @@ export default function AdminPage() {
   };
 
   const handleRevokeClearance = (id) => {
+    if (user?.role !== 'admin' && user?.role !== 'accounts') {
+      setErrorMsg('Permission Denied: Temporary clearance can only be revoked by Accounts Personnel or the System Administrator.');
+      return;
+    }
     showConfirm({
       title: 'Revoke Temporary Clearance',
       description: 'Are you sure you want to revoke this student\'s temporary clearance? The student will immediately lose test and exam clearance privileges.',
@@ -382,6 +525,10 @@ export default function AdminPage() {
   };
 
   const handleExtendClearance = async (id, days) => {
+    if (user?.role !== 'admin' && user?.role !== 'accounts') {
+      setErrorMsg('Permission Denied: Temporary clearance can only be extended by Accounts Personnel or the System Administrator.');
+      return;
+    }
     setErrorMsg('');
     setSuccessMsg('');
     try {
@@ -389,7 +536,7 @@ export default function AdminPage() {
       setSuccessMsg(res.detail || `Clearance extended by ${days} days.`);
       loadTemporaryClearances();
     } catch (err) {
-      setErrorMsg('Failed to extend temporary clearance.');
+      setErrorMsg(err.message || 'Failed to extend temporary clearance.');
     }
   };
 
@@ -1190,50 +1337,69 @@ export default function AdminPage() {
         </div>
       )}
 
-      {/* Navigation Tabs - Note: 'faculties' tab removed as requested */}
+      {/* Navigation Tabs */}
       <div className="flex space-x-4 border-b border-slate-200 pb-3 flex-wrap gap-y-2">
-        <button
-          onClick={() => setActiveTab('users')}
-          className={`pb-3 text-xs font-bold border-b-2 transition-all ${activeTab === 'users' ? 'border-brand-light text-brand-dark' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
-        >
-          👥 User Directory ({users.length})
-        </button>
-        <button
-          onClick={() => setActiveTab('temp_clearance')}
-          className={`pb-3 text-xs font-bold border-b-2 transition-all ${activeTab === 'temp_clearance' ? 'border-brand-light text-brand-dark' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
-        >
-          ⏳ Temporary Clearance Manager
-        </button>
-        <button
-          onClick={() => setActiveTab('excel_onboarding')}
-          className={`pb-3 text-xs font-bold border-b-2 transition-all ${activeTab === 'excel_onboarding' ? 'border-brand-light text-brand-dark' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
-        >
-          📥 Student Onboarding
-        </button>
-        <button
-          onClick={() => setActiveTab('proctoring_monitor')}
-          className={`pb-3 text-xs font-bold border-b-2 transition-all ${activeTab === 'proctoring_monitor' ? 'border-brand-light text-brand-dark' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
-        >
-          🎥 Live Proctoring Monitor
-        </button>
-        <button
-          onClick={() => setActiveTab('ciu_cleared')}
-          className={`pb-3 text-xs font-bold border-b-2 transition-all ${activeTab === 'ciu_cleared' ? 'border-brand-light text-brand-dark' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
-        >
-          🎓 Cleared Students
-        </button>
-        <button
-          onClick={() => setActiveTab('invites')}
-          className={`pb-3 text-xs font-bold border-b-2 transition-all ${activeTab === 'invites' ? 'border-brand-light text-brand-dark' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
-        >
-          ✉️ Invitations ({invitations.length})
-        </button>
-        <button
-          onClick={() => setActiveTab('logs')}
-          className={`pb-3 text-xs font-bold border-b-2 transition-all ${activeTab === 'logs' ? 'border-brand-light text-brand-dark' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
-        >
-          🛡️ Audit Logs ({systemLogs.length})
-        </button>
+        {user?.role === 'accounts' ? (
+          <>
+            <button
+              onClick={() => setActiveTab('temp_clearance')}
+              className={`pb-3 text-xs font-bold border-b-2 transition-all ${activeTab === 'temp_clearance' ? 'border-brand-light text-brand-dark' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
+            >
+              ⏳ Temporary Clearance Manager ({tempClearances.length})
+            </button>
+            <button
+              onClick={() => setActiveTab('ciu_cleared')}
+              className={`pb-3 text-xs font-bold border-b-2 transition-all ${activeTab === 'ciu_cleared' ? 'border-brand-light text-brand-dark' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
+            >
+              🎓 Cleared Students (Exams & Tests Streams)
+            </button>
+          </>
+        ) : (
+          <>
+            <button
+              onClick={() => setActiveTab('users')}
+              className={`pb-3 text-xs font-bold border-b-2 transition-all ${activeTab === 'users' ? 'border-brand-light text-brand-dark' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
+            >
+              👥 User Directory ({users.length})
+            </button>
+            <button
+              onClick={() => setActiveTab('temp_clearance')}
+              className={`pb-3 text-xs font-bold border-b-2 transition-all ${activeTab === 'temp_clearance' ? 'border-brand-light text-brand-dark' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
+            >
+              ⏳ Temporary Clearance Manager ({tempClearances.length})
+            </button>
+            <button
+              onClick={() => setActiveTab('excel_onboarding')}
+              className={`pb-3 text-xs font-bold border-b-2 transition-all ${activeTab === 'excel_onboarding' ? 'border-brand-light text-brand-dark' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
+            >
+              📥 Student Onboarding
+            </button>
+            <button
+              onClick={() => setActiveTab('proctoring_monitor')}
+              className={`pb-3 text-xs font-bold border-b-2 transition-all ${activeTab === 'proctoring_monitor' ? 'border-brand-light text-brand-dark' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
+            >
+              🎥 Live Proctoring Monitor
+            </button>
+            <button
+              onClick={() => setActiveTab('ciu_cleared')}
+              className={`pb-3 text-xs font-bold border-b-2 transition-all ${activeTab === 'ciu_cleared' ? 'border-brand-light text-brand-dark' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
+            >
+              🎓 Cleared Students
+            </button>
+            <button
+              onClick={() => setActiveTab('invites')}
+              className={`pb-3 text-xs font-bold border-b-2 transition-all ${activeTab === 'invites' ? 'border-brand-light text-brand-dark' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
+            >
+              ✉️ Invitations ({invitations.length})
+            </button>
+            <button
+              onClick={() => setActiveTab('logs')}
+              className={`pb-3 text-xs font-bold border-b-2 transition-all ${activeTab === 'logs' ? 'border-brand-light text-brand-dark' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
+            >
+              🛡️ Audit Logs ({systemLogs.length})
+            </button>
+          </>
+        )}
       </div>
 
       {/* TAB 1: USERS DIRECTORY WITH USER GROUPS, SEARCH & ROLE FILTERS, PAGINATION & BULK DELETE */}
@@ -1274,6 +1440,14 @@ export default function AdminPage() {
               </div>
 
               <div className="flex items-center space-x-2">
+                <button
+                  type="button"
+                  onClick={() => setShowSingleStaffModal(true)}
+                  className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-sm transition-all flex items-center space-x-1.5"
+                  title="Onboard individual lecturer, dean, registrar, secretary or staff member"
+                >
+                  <span>➕ Onboard Single Staff</span>
+                </button>
                 <button
                   type="button"
                   onClick={() => setShowBulkStaffModal(true)}
@@ -1365,6 +1539,7 @@ export default function AdminPage() {
                     <option value="lecturer">Lecturer</option>
                     <option value="faculty_admin">Faculty Secretary</option>
                     <option value="registrar">Academic Registrar</option>
+                    <option value="accounts">Accounts Personnel</option>
                     <option value="dean">School Dean</option>
                     <option value="dvc">Chancellor (DVC)</option>
                     <option value="vc">Vice-Chancellor (VC)</option>
@@ -1490,6 +1665,26 @@ export default function AdminPage() {
                       >
                         <span>🔑 Reset Passwords ({selectedUserIds.length})</span>
                       </button>
+                      {user?.role === 'admin' && (
+                        <>
+                          <button
+                            onClick={() => handleBulkSuspendUsers(false)}
+                            disabled={submitting}
+                            className="px-3 py-1 bg-rose-700 hover:bg-rose-800 text-white text-xs font-bold rounded-xl shadow-sm transition-all flex items-center space-x-1"
+                            title="Suspend selected accounts"
+                          >
+                            <span>⛔ Bulk Suspend</span>
+                          </button>
+                          <button
+                            onClick={() => handleBulkSuspendUsers(true)}
+                            disabled={submitting}
+                            className="px-3 py-1 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold rounded-xl shadow-sm transition-all flex items-center space-x-1"
+                            title="Reactivate selected accounts"
+                          >
+                            <span>✅ Bulk Reactivate</span>
+                          </button>
+                        </>
+                      )}
                       <button
                         onClick={handleBulkDeleteUsers}
                         disabled={submitting}
@@ -1532,6 +1727,7 @@ export default function AdminPage() {
                       </th>
                       <th className="px-4 py-3">User & Registration</th>
                       <th className="px-4 py-3">Role & Permissions</th>
+                      <th className="px-4 py-3 text-center">Account Status</th>
                       <th className="px-4 py-3 text-center">Clearance Status</th>
                       <th className="px-4 py-3 text-center">Actions</th>
                     </tr>
@@ -1603,9 +1799,20 @@ export default function AdminPage() {
                             )}
                           </td>
                           <td className="px-4 py-3">
-                            <span className={`px-2.5 py-0.5 rounded text-[10px] font-extrabold uppercase border ${u.role === 'student' ? 'bg-emerald-50 text-emerald-800 border-emerald-200' : u.role === 'admin' ? 'bg-purple-50 text-purple-800 border-purple-200' : u.role === 'platform_coordinator' ? 'bg-purple-900 text-white border-purple-900 font-bold' : 'bg-blue-50 text-blue-800 border-blue-200'}`}>
-                              {u.role === 'faculty_admin' ? 'Faculty Secretary' : u.role.replace('_', ' ')}
+                            <span className={`px-2.5 py-0.5 rounded text-[10px] font-extrabold uppercase border ${u.role === 'student' ? 'bg-emerald-50 text-emerald-800 border-emerald-200' : u.role === 'admin' ? 'bg-purple-50 text-purple-800 border-purple-200' : u.role === 'platform_coordinator' ? 'bg-purple-900 text-white border-purple-900 font-bold' : u.role === 'accounts' ? 'bg-amber-100 text-amber-900 border-amber-300 font-bold' : 'bg-blue-50 text-blue-800 border-blue-200'}`}>
+                              {u.role === 'faculty_admin' ? 'Faculty Secretary' : u.role === 'accounts' ? 'Accounts Personnel' : u.role.replace('_', ' ')}
                             </span>
+                          </td>
+                          <td className="px-4 py-3 text-center">
+                            {u.is_active === false ? (
+                              <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase bg-red-100 text-red-800 border border-red-300 inline-flex items-center space-x-1">
+                                <span>⛔ Suspended</span>
+                              </span>
+                            ) : (
+                              <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase bg-emerald-50 text-emerald-800 border border-emerald-200 inline-flex items-center space-x-1">
+                                <span>✅ Active</span>
+                              </span>
+                            )}
                           </td>
                           <td className="px-4 py-3 text-center">
                             {u.role === 'student' ? (
@@ -1639,6 +1846,19 @@ export default function AdminPage() {
                                 >
                                   🔑 Reset Pass
                                 </button>
+                                {user?.role === 'admin' && user?.id !== u.id && (
+                                  <button
+                                    onClick={() => handleToggleSuspendUser(u)}
+                                    className={`px-2.5 py-1 text-[11px] font-bold rounded-lg border transition-all shadow-2xs ${
+                                      u.is_active === false
+                                        ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-300'
+                                        : 'bg-rose-50 hover:bg-rose-100 text-rose-700 border-rose-200'
+                                    }`}
+                                    title={u.is_active === false ? "Reactivate user account" : "Suspend user account"}
+                                  >
+                                    {u.is_active === false ? '✅ Reactivate' : '⛔ Suspend'}
+                                  </button>
+                                )}
                                 {user?.id !== u.id && (
                                   <button
                                     onClick={() => handleDeleteUser(u.id)}
@@ -1752,160 +1972,185 @@ export default function AdminPage() {
       {/* TAB 2: TEMPORARY EXAM / TEST CLEARANCE MANAGER WITH EXCEL BULK UPLOAD */}
       {activeTab === 'temp_clearance' && (
         <div className="space-y-8">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            
-            {/* Single Student Grant Form */}
-            <div className="green-card rounded-2xl p-6 space-y-4">
-              <div className="border-b border-emerald-100 pb-3">
-                <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">Grant Single Student Temporary Clearance</h3>
-                <p className="text-[11px] text-slate-500 font-medium">Select an individual student to temporarily override exam/test fee clearance.</p>
+          {(user?.role === 'admin' || user?.role === 'accounts') ? (
+            <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-2xl text-emerald-900 text-xs font-semibold flex items-center justify-between shadow-2xs">
+              <div className="flex items-center space-x-2">
+                <span className="text-xl">✅</span>
+                <div>
+                  <span className="font-extrabold uppercase tracking-wide text-brand-dark">Clearance Authority Verified:</span>
+                  <span className="ml-1 text-slate-700">You are logged in as {user?.role === 'accounts' ? 'Accounts Personnel' : 'System Administrator'} with active authority to grant, extend, and revoke temporary financial clearance.</span>
+                </div>
               </div>
-
-              <form onSubmit={handleGrantTemporaryClearance} className="space-y-4 text-xs">
-                <div>
-                  <label className="block text-slate-700 font-bold uppercase mb-1">Search & Select Student</label>
-                  <input
-                    type="text"
-                    placeholder="Search by Reg No, Name, or Email..."
-                    value={studentSearchTerm}
-                    onChange={(e) => setStudentSearchTerm(e.target.value)}
-                    className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs mb-2"
-                  />
-                  <select
-                    value={selectedStudentForClearance}
-                    onChange={(e) => setSelectedStudentForClearance(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800"
-                    required
-                  >
-                    <option value="">-- Choose Student Account --</option>
-                    {filteredStudentOptions.map(s => (
-                      <option key={s.id} value={s.id}>
-                        {s.reg_number || s.registration_number} - {s.first_name} {s.last_name} ({s.tuition_paid_percentage}%)
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-slate-700 font-bold uppercase mb-1">Clearance Scope</label>
-                  <select
-                    value={clearanceScope}
-                    onChange={(e) => setClearanceScope(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold"
-                  >
-                    <option value="both">Both Tests & Exams (50% & 100% Gates)</option>
-                    <option value="tests">Tests Only (50% Fee Gate Bypass)</option>
-                    <option value="exams">Exams Only (100% Fee Gate Bypass)</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-slate-700 font-bold uppercase mb-1">Duration Presets</label>
-                  <div className="grid grid-cols-3 gap-2">
-                    {[
-                      { label: '3 Days', days: '3' },
-                      { label: '1 Week', days: '7' },
-                      { label: '2 Weeks', days: '14' },
-                      { label: '3 Weeks', days: '21' },
-                      { label: '1 Month', days: '30' },
-                      { label: '60 Days', days: '60' },
-                    ].map(p => (
-                      <button
-                        key={p.days}
-                        type="button"
-                        onClick={() => setClearanceDurationDays(p.days)}
-                        className={`py-1.5 px-2 rounded-lg text-xs font-bold border transition-all ${clearanceDurationDays === p.days ? 'bg-brand-dark text-white border-brand-dark shadow-sm' : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'}`}
-                      >
-                        {p.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-slate-700 font-bold uppercase mb-1">Reason / Note</label>
-                  <input
-                    type="text"
-                    value={clearanceReason}
-                    onChange={(e) => setClearanceReason(e.target.value)}
-                    placeholder="e.g. Dean Special Approval"
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs"
-                  />
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={submitting}
-                  className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-md transition-all flex items-center justify-center space-x-1"
-                >
-                  <span>⚡ Grant Single Temporary Clearance</span>
-                </button>
-              </form>
+              <span className="px-2.5 py-1 bg-brand-light text-white text-[10px] font-black rounded-lg uppercase tracking-wider shrink-0">
+                {user?.role === 'accounts' ? 'ACCOUNTS OFFICER' : 'SYSTEM ADMIN'}
+              </span>
             </div>
-
-            {/* Excel / CSV Bulk Temporary Clearance Upload Form */}
-            <div className="green-card rounded-2xl p-6 space-y-4 border border-emerald-300">
-              <div className="border-b border-emerald-100 pb-3">
-                <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">📥 Multiple Student Excel Bulk Clearance</h3>
-                <p className="text-[11px] text-slate-500 font-medium">Upload an Excel (.xlsx / .csv) file of student registration numbers to grant temporary clearance in bulk.</p>
+          ) : (
+            <div className="p-4 bg-amber-50 border-l-4 border-amber-500 rounded-2xl text-amber-900 text-xs font-semibold flex items-center space-x-3 shadow-2xs">
+              <span className="text-2xl">🔒</span>
+              <div>
+                <p className="font-bold text-slate-850 text-sm">Clearance Issuance Restricted</p>
+                <p className="text-[11px] text-slate-600">Temporary fee clearance overrides can only be granted, extended, or revoked by Accounts Personnel or the System Administrator. Your role has read-only clearance viewing access.</p>
               </div>
+            </div>
+          )}
 
-              <form onSubmit={handleBulkTempClearanceExcelUpload} className="space-y-4 text-xs">
-                <div className="border-2 border-dashed border-slate-300 hover:border-emerald-500 rounded-xl p-5 text-center bg-slate-50/50 transition-all">
-                  <input
-                    type="file"
-                    accept=".xlsx, .xls, .csv"
-                    onChange={(e) => setBulkClearanceFile(e.target.files[0])}
-                    className="hidden"
-                    id="bulk_clearance_file_input"
-                  />
-                  <label htmlFor="bulk_clearance_file_input" className="cursor-pointer font-bold text-brand-dark hover:underline text-xs block">
-                    {bulkClearanceFile ? `Selected: ${bulkClearanceFile.name}` : 'Click to select Excel (.xlsx) or CSV file'}
-                  </label>
-                  <p className="text-[10px] text-slate-400 mt-1">Header required: reg_number, registration_number, or student_no</p>
+          {(user?.role === 'admin' || user?.role === 'accounts') && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              
+              {/* Single Student Grant Form */}
+              <div className="green-card rounded-2xl p-6 space-y-4">
+                <div className="border-b border-emerald-100 pb-3">
+                  <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">Grant Single Student Temporary Clearance</h3>
+                  <p className="text-[11px] text-slate-500 font-medium">Select an individual student to temporarily override exam/test fee clearance.</p>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2">
+                <form onSubmit={handleGrantTemporaryClearance} className="space-y-4 text-xs">
                   <div>
-                    <label className="block text-slate-700 font-bold uppercase mb-1">Scope</label>
+                    <label className="block text-slate-700 font-bold uppercase mb-1">Search & Select Student</label>
+                    <input
+                      type="text"
+                      placeholder="Search by Reg No, Name, or Email..."
+                      value={studentSearchTerm}
+                      onChange={(e) => setStudentSearchTerm(e.target.value)}
+                      className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs mb-2"
+                    />
+                    <select
+                      value={selectedStudentForClearance}
+                      onChange={(e) => setSelectedStudentForClearance(e.target.value)}
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800"
+                      required
+                    >
+                      <option value="">-- Choose Student Account --</option>
+                      {filteredStudentOptions.map(s => (
+                        <option key={s.id} value={s.id}>
+                          {s.reg_number || s.registration_number} - {s.first_name} {s.last_name} ({s.tuition_paid_percentage}%)
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-700 font-bold uppercase mb-1">Clearance Scope</label>
                     <select
                       value={clearanceScope}
                       onChange={(e) => setClearanceScope(e.target.value)}
-                      className="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold"
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold"
                     >
-                      <option value="both">Both Tests & Exams</option>
-                      <option value="tests">Tests Only</option>
-                      <option value="exams">Exams Only</option>
+                      <option value="both">Both Tests & Exams (50% & 100% Gates)</option>
+                      <option value="tests">Tests Only (50% Fee Gate Bypass)</option>
+                      <option value="exams">Exams Only (100% Fee Gate Bypass)</option>
                     </select>
                   </div>
 
                   <div>
-                    <label className="block text-slate-700 font-bold uppercase mb-1">Duration Days</label>
-                    <select
-                      value={clearanceDurationDays}
-                      onChange={(e) => setClearanceDurationDays(e.target.value)}
-                      className="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold"
-                    >
-                      <option value="3">3 Days</option>
-                      <option value="7">1 Week (7 Days)</option>
-                      <option value="14">2 Weeks (14 Days)</option>
-                      <option value="21">3 Weeks (21 Days)</option>
-                      <option value="30">1 Month (30 Days)</option>
-                    </select>
+                    <label className="block text-slate-700 font-bold uppercase mb-1">Duration Presets</label>
+                    <div className="grid grid-cols-3 gap-2">
+                      {[
+                        { label: '3 Days', days: '3' },
+                        { label: '1 Week', days: '7' },
+                        { label: '2 Weeks', days: '14' },
+                        { label: '3 Weeks', days: '21' },
+                        { label: '1 Month', days: '30' },
+                        { label: '60 Days', days: '60' },
+                      ].map(p => (
+                        <button
+                          key={p.days}
+                          type="button"
+                          onClick={() => setClearanceDurationDays(p.days)}
+                          className={`py-1.5 px-2 rounded-lg text-xs font-bold border transition-all ${clearanceDurationDays === p.days ? 'bg-brand-dark text-white border-brand-dark shadow-sm' : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'}`}
+                        >
+                          {p.label}
+                        </button>
+                      ))}
+                    </div>
                   </div>
+
+                  <div>
+                    <label className="block text-slate-700 font-bold uppercase mb-1">Reason / Note</label>
+                    <input
+                      type="text"
+                      value={clearanceReason}
+                      onChange={(e) => setClearanceReason(e.target.value)}
+                      placeholder="e.g. Approved fee installment agreement"
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs"
+                    />
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={submitting}
+                    className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-md transition-all flex items-center justify-center space-x-1"
+                  >
+                    <span>⚡ Grant Single Temporary Clearance</span>
+                  </button>
+                </form>
+              </div>
+
+              {/* Excel / CSV Bulk Temporary Clearance Upload Form */}
+              <div className="green-card rounded-2xl p-6 space-y-4 border border-emerald-300">
+                <div className="border-b border-emerald-100 pb-3">
+                  <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">📥 Multiple Student Excel Bulk Clearance</h3>
+                  <p className="text-[11px] text-slate-500 font-medium">Upload an Excel (.xlsx / .csv) file of student registration numbers to grant temporary clearance in bulk.</p>
                 </div>
 
-                <button
-                  type="submit"
-                  disabled={uploadingBulkClearance || !bulkClearanceFile}
-                  className="w-full py-2.5 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-xl shadow-md transition-all disabled:opacity-50"
-                >
-                  {uploadingBulkClearance ? 'Processing Excel File...' : '⚡ Upload Excel & Grant Bulk Clearance'}
-                </button>
-              </form>
-            </div>
+                <form onSubmit={handleBulkTempClearanceExcelUpload} className="space-y-4 text-xs">
+                  <div className="border-2 border-dashed border-slate-300 hover:border-emerald-500 rounded-xl p-5 text-center bg-slate-50/50 transition-all">
+                    <input
+                      type="file"
+                      accept=".xlsx, .xls, .csv"
+                      onChange={(e) => setBulkClearanceFile(e.target.files[0])}
+                      className="hidden"
+                      id="bulk_clearance_file_input"
+                    />
+                    <label htmlFor="bulk_clearance_file_input" className="cursor-pointer font-bold text-brand-dark hover:underline text-xs block">
+                      {bulkClearanceFile ? `Selected: ${bulkClearanceFile.name}` : 'Click to select Excel (.xlsx) or CSV file'}
+                    </label>
+                    <p className="text-[10px] text-slate-400 mt-1">Header required: reg_number, registration_number, or student_no</p>
+                  </div>
 
-          </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-slate-700 font-bold uppercase mb-1">Scope</label>
+                      <select
+                        value={clearanceScope}
+                        onChange={(e) => setClearanceScope(e.target.value)}
+                        className="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold"
+                      >
+                        <option value="both">Both Tests & Exams</option>
+                        <option value="tests">Tests Only</option>
+                        <option value="exams">Exams Only</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-slate-700 font-bold uppercase mb-1">Duration Days</label>
+                      <select
+                        value={clearanceDurationDays}
+                        onChange={(e) => setClearanceDurationDays(e.target.value)}
+                        className="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold"
+                      >
+                        <option value="3">3 Days</option>
+                        <option value="7">1 Week (7 Days)</option>
+                        <option value="14">2 Weeks (14 Days)</option>
+                        <option value="21">3 Weeks (21 Days)</option>
+                        <option value="30">1 Month (30 Days)</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={uploadingBulkClearance || !bulkClearanceFile}
+                    className="w-full py-2.5 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-xl shadow-md transition-all disabled:opacity-50"
+                  >
+                    {uploadingBulkClearance ? 'Processing Excel File...' : '⚡ Upload Excel & Grant Bulk Clearance'}
+                  </button>
+                </form>
+              </div>
+
+            </div>
+          )}
 
           {/* Active Clearances Table */}
           <div className="green-card rounded-2xl p-6 space-y-4">
@@ -1938,41 +2183,44 @@ export default function AdminPage() {
                         <td className="px-4 py-3">
                           <div className="font-bold text-slate-900">{c.student_name}</div>
                           <div className="text-[11px] font-mono text-brand-medium font-bold">{c.student_reg_number}</div>
-                          <div className="text-[10px] text-slate-400 font-medium italic">{c.reason}</div>
+                          <div className="text-[10px] text-slate-500">{c.student_email}</div>
                         </td>
                         <td className="px-4 py-3">
-                          <span className="px-2 py-0.5 rounded text-[10px] font-extrabold uppercase bg-cyan-50 text-cyan-800 border border-cyan-200">
-                            {c.clearance_type}
+                          <span className="px-2 py-0.5 rounded text-[10px] font-extrabold uppercase bg-emerald-100 text-emerald-800 border border-emerald-200">
+                            {c.clearance_type === 'both' ? 'Tests & Exams' : c.clearance_type === 'tests' ? 'Tests Only' : 'Exams Only'}
                           </span>
                         </td>
                         <td className="px-4 py-3">
-                          {c.is_currently_valid ? (
-                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 inline-block">
-                              🟢 Active (Expires {new Date(c.expires_at).toLocaleDateString()})
+                          <div className="flex items-center space-x-1.5">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${c.is_currently_valid ? 'bg-emerald-50 text-emerald-800 border border-emerald-300' : 'bg-red-50 text-red-700 border border-red-200'}`}>
+                              {c.status}
                             </span>
-                          ) : (
-                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-red-50 text-red-700 border border-red-200 inline-block">
-                              🔴 Expired / Inactive
-                            </span>
+                            <span className="text-[11px] text-slate-600 font-medium">Expires: {new Date(c.expires_at).toLocaleDateString()}</span>
+                          </div>
+                          {c.reason && (
+                            <p className="text-[10px] text-slate-400 italic mt-0.5">"{c.reason}"</p>
                           )}
                         </td>
                         <td className="px-4 py-3 text-slate-600 font-medium">
-                          {c.granted_by_username || 'Admin'}
+                          {c.granted_by_username || 'Accounts / Admin'}
                         </td>
                         <td className="px-4 py-3 text-center space-x-1">
-                          <button
-                            onClick={() => handleExtendClearance(c.id, 7)}
-                            className="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-[10px] font-bold rounded border border-emerald-200 transition-all"
-                          >
-                            +7 Days
-                          </button>
-                          {c.is_active && (
-                            <button
-                              onClick={() => handleRevokeClearance(c.id)}
-                              className="px-2 py-1 bg-red-50 hover:bg-red-100 text-red-700 text-[10px] font-bold rounded border border-red-200 transition-all"
-                            >
-                              Revoke
-                            </button>
+                          {c.is_currently_valid && (user?.role === 'admin' || user?.role === 'accounts') && (
+                            <>
+                              <button
+                                onClick={() => handleExtendClearance(c.id, 7)}
+                                className="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-[10px] font-bold rounded border border-emerald-200 transition-all"
+                                title="Extend clearance by 7 days"
+                              >
+                                +7 Days
+                              </button>
+                              <button
+                                onClick={() => handleRevokeClearance(c.id)}
+                                className="px-2 py-1 bg-red-50 hover:bg-red-100 text-red-700 text-[10px] font-bold rounded border border-red-200 transition-all"
+                              >
+                                Revoke
+                              </button>
+                            </>
                           )}
                         </td>
                       </tr>
@@ -2451,18 +2699,87 @@ export default function AdminPage() {
       {/* TAB 5: CLEARED STUDENTS */}
       {activeTab === 'ciu_cleared' && (
         <div className="space-y-6">
-          <div className="green-card p-5 rounded-2xl flex justify-between items-center">
-            <div>
-              <h3 className="font-bold text-slate-850 text-base">Faculty Cleared Students Directory</h3>
-              <p className="text-slate-500 text-xs">Students organized by Faculties with live API validation status.</p>
+          <div className="green-card p-5 rounded-2xl space-y-4">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+              <div>
+                <h3 className="font-bold text-slate-850 text-base flex items-center space-x-2">
+                  <span>Faculty Cleared Students Directory</span>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-cyan-100 text-cyan-800 border border-cyan-300">
+                    Dual Gate CIU API
+                  </span>
+                </h3>
+                <p className="text-slate-500 text-xs">Students organized by Faculties with live external API tuition clearance validation.</p>
+              </div>
+              <button
+                onClick={() => fetchClearedFacultyData(selectedExamType)}
+                disabled={loadingCleared}
+                className="px-3.5 py-1.5 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-xl shadow-sm transition-all flex items-center space-x-1.5 cursor-pointer disabled:opacity-50"
+              >
+                <span>{loadingCleared ? 'Refreshing...' : '🔄 Refresh Feed'}</span>
+              </button>
             </div>
-            <button
-              onClick={fetchClearedFacultyData}
-              disabled={loadingCleared}
-              className="px-3 py-1 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-xl shadow-sm transition-all"
-            >
-              {loadingCleared ? 'Refreshing...' : 'Refresh Feed'}
-            </button>
+
+            {/* Segmented Exam Type / Stream Filter */}
+            <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-emerald-100">
+              <div className="flex items-center space-x-1.5 bg-slate-100 p-1 rounded-xl">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedExamType('ALL');
+                    fetchClearedFacultyData('ALL');
+                  }}
+                  className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
+                    selectedExamType === 'ALL'
+                      ? 'bg-white text-slate-900 shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  🌐 Combined Streams
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedExamType('EXAMS');
+                    fetchClearedFacultyData('EXAMS');
+                  }}
+                  className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
+                    selectedExamType === 'EXAMS'
+                      ? 'bg-purple-600 text-white shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  🎓 EXAMS API (100% Tuition Cleared)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedExamType('TESTS');
+                    fetchClearedFacultyData('TESTS');
+                  }}
+                  className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
+                    selectedExamType === 'TESTS'
+                      ? 'bg-emerald-600 text-white shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  📝 TESTS API (50% Tuition Cleared)
+                </button>
+              </div>
+
+              <div className="text-[11px] text-slate-500 font-medium">
+                Active API Stream: <span className="font-bold text-slate-800">{selectedExamType === 'ALL' ? 'EXAMS (100%) + TESTS (50%)' : selectedExamType}</span>
+              </div>
+            </div>
+
+            <div className="p-3 bg-blue-50/70 border border-blue-200 rounded-xl text-blue-900 text-xs flex items-start space-x-2.5">
+              <span className="text-base">ℹ️</span>
+              <div className="space-y-0.5">
+                <span className="font-bold block">CIU Dual Clearance Policy:</span>
+                <span className="text-slate-600">
+                  Continuous Assessment Tests consume the <strong>TESTS API</strong> stream (<code className="bg-blue-100/70 px-1 py-0.5 rounded text-[10px]">examtype=TESTS</code>) allowing students who have cleared at least 50% tuition to sit for tests. Final Exams strictly require 100% tuition clearance or an active accounts override.
+                </span>
+              </div>
+            </div>
           </div>
 
           {loadingCleared ? (
@@ -3514,6 +3831,256 @@ export default function AdminPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Single Staff Onboarding Modal (Platform Coordinator & System Admin) */}
+      {showSingleStaffModal && (
+        <div
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-fade-in"
+          onClick={() => !submittingStaff && setShowSingleStaffModal(false)}
+        >
+          <div
+            className="bg-white rounded-3xl p-6 max-w-lg w-full space-y-4 shadow-2xl border border-slate-200"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+          >
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <div className="flex items-center space-x-2.5">
+                <span className="text-2xl p-2 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-600">
+                  👤
+                </span>
+                <div>
+                  <h3 className="font-bold text-slate-900 text-base">Onboard Single Staff Member</h3>
+                  <p className="text-slate-500 text-xs">Create staff account with role assignment and one-time password (OTP)</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowSingleStaffModal(false)}
+                disabled={submittingStaff}
+                className="text-slate-400 hover:text-slate-700 text-lg font-bold p-1 cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleOnboardSingleStaff} className="space-y-4 text-xs">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="block text-slate-700 font-bold uppercase">Full Name *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Dr. Sarah Namubiru"
+                    value={staffFullName}
+                    onChange={(e) => setStaffFullName(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-900 focus:bg-white focus:ring-2 focus:ring-brand-light/20"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="block text-slate-700 font-bold uppercase">Email Address *</label>
+                  <input
+                    type="email"
+                    required
+                    placeholder="e.g. snamubiru@ciu.ac.ug"
+                    value={staffEmail}
+                    onChange={(e) => setStaffEmail(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-900 focus:bg-white focus:ring-2 focus:ring-brand-light/20"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="block text-slate-700 font-bold uppercase">Role Assignment *</label>
+                  <select
+                    value={staffRole}
+                    onChange={(e) => setStaffRole(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-900 focus:bg-white focus:ring-2 focus:ring-brand-light/20"
+                  >
+                    <option value="lecturer">Lecturer</option>
+                    <option value="secretary">Secretary</option>
+                    <option value="dean">Dean</option>
+                    <option value="registrar">Academic Registrar</option>
+                    <option value="accounts">Accounts Personnel</option>
+                    {user?.role === 'admin' && (
+                      <option value="platform_coordinator">Platform Coordinator</option>
+                    )}
+                    {user?.role === 'admin' && (
+                      <option value="admin">System Administrator</option>
+                    )}
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="block text-slate-700 font-bold uppercase">Faculty (Optional)</label>
+                  <select
+                    value={staffFacultyId}
+                    onChange={(e) => setStaffFacultyId(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-900 focus:bg-white focus:ring-2 focus:ring-brand-light/20"
+                  >
+                    <option value="">-- No Faculty / University Wide --</option>
+                    {faculties.map((f) => (
+                      <option key={f.id} value={f.id}>{f.name} ({f.code})</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="block text-slate-700 font-bold uppercase">Gender</label>
+                  <select
+                    value={staffGender}
+                    onChange={(e) => setStaffGender(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-900 focus:bg-white focus:ring-2 focus:ring-brand-light/20"
+                  >
+                    <option value="other">Prefer not to say</option>
+                    <option value="male">Male</option>
+                    <option value="female">Female</option>
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="block text-slate-700 font-bold uppercase">Phone Number</label>
+                  <input
+                    type="tel"
+                    placeholder="e.g. +256 700 000000"
+                    value={staffPhone}
+                    onChange={(e) => setStaffPhone(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-900 focus:bg-white focus:ring-2 focus:ring-brand-light/20"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2 pt-2 border-t border-slate-100">
+                <label className="block text-slate-700 font-bold uppercase">Initial One-Time Password (OTP)</label>
+                <div className="flex items-center space-x-4">
+                  <label className="inline-flex items-center space-x-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="staffPasswordMode"
+                      checked={staffPasswordMode === 'auto'}
+                      onChange={() => setStaffPasswordMode('auto')}
+                      className="text-brand-dark focus:ring-brand-light"
+                    />
+                    <span className="font-semibold text-slate-700">Auto-Generate Secure OTP</span>
+                  </label>
+                  <label className="inline-flex items-center space-x-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="staffPasswordMode"
+                      checked={staffPasswordMode === 'custom'}
+                      onChange={() => setStaffPasswordMode('custom')}
+                      className="text-brand-dark focus:ring-brand-light"
+                    />
+                    <span className="font-semibold text-slate-700">Custom Password</span>
+                  </label>
+                </div>
+                {staffPasswordMode === 'custom' && (
+                  <input
+                    type="password"
+                    placeholder="Enter custom password (min 6 chars)..."
+                    value={staffCustomPassword}
+                    onChange={(e) => setStaffCustomPassword(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-900 focus:bg-white focus:ring-2 focus:ring-brand-light/20 mt-1"
+                  />
+                )}
+              </div>
+
+              <div className="flex items-center justify-end space-x-2 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  disabled={submittingStaff}
+                  onClick={() => setShowSingleStaffModal(false)}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition-all cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={submittingStaff}
+                  className="px-5 py-2 bg-brand-dark hover:bg-slate-850 text-white font-bold rounded-xl transition-all shadow-md disabled:opacity-50 flex items-center space-x-1.5 cursor-pointer"
+                >
+                  {submittingStaff && (
+                    <svg className="animate-spin -ml-1 mr-1.5 h-3.5 w-3.5 text-white" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                  )}
+                  <span>{submittingStaff ? 'Onboarding...' : '⚡ Onboard Staff Member'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Staff Credentials Modal (Displays generated OTP) */}
+      {createdStaffCredentials && (
+        <div
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-fade-in"
+          onClick={() => setCreatedStaffCredentials(null)}
+        >
+          <div
+            className="bg-white rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl border border-emerald-200"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+          >
+            <div className="flex items-center space-x-3 text-emerald-600">
+              <span className="text-3xl p-2.5 rounded-2xl bg-emerald-50 border border-emerald-200">✅</span>
+              <div>
+                <h3 className="font-bold text-slate-900 text-base">Staff Onboarded Successfully</h3>
+                <p className="text-slate-500 text-xs">Share these credentials with the staff member securely.</p>
+              </div>
+            </div>
+
+            <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-2.5 text-xs">
+              <div className="flex justify-between items-center py-1 border-b border-slate-200">
+                <span className="text-slate-500 font-semibold">Staff Name:</span>
+                <span className="font-bold text-slate-900">{createdStaffCredentials.full_name}</span>
+              </div>
+              <div className="flex justify-between items-center py-1 border-b border-slate-200">
+                <span className="text-slate-500 font-semibold">Username:</span>
+                <span className="font-mono font-bold text-brand-dark">{createdStaffCredentials.username}</span>
+              </div>
+              <div className="flex justify-between items-center py-1 border-b border-slate-200">
+                <span className="text-slate-500 font-semibold">Email:</span>
+                <span className="font-medium text-slate-800">{createdStaffCredentials.email}</span>
+              </div>
+              <div className="flex justify-between items-center py-1 border-b border-slate-200">
+                <span className="text-slate-500 font-semibold">Assigned Role:</span>
+                <span className="font-bold uppercase text-brand-medium">{createdStaffCredentials.role}</span>
+              </div>
+              <div className="flex justify-between items-center py-2 bg-emerald-100/50 px-2.5 rounded-xl border border-emerald-300">
+                <div>
+                  <span className="text-emerald-900 font-bold block">One-Time Password (OTP):</span>
+                  <span className="font-mono text-sm font-black text-emerald-950">{createdStaffCredentials.initial_password}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard?.writeText(createdStaffCredentials.initial_password);
+                    setSuccessMsg('Initial password copied to clipboard!');
+                  }}
+                  className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-xs transition-all shadow-sm cursor-pointer"
+                >
+                  📋 Copy
+                </button>
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-2">
+              <button
+                type="button"
+                onClick={() => setCreatedStaffCredentials(null)}
+                className="px-5 py-2 bg-brand-dark hover:bg-slate-850 text-white font-bold rounded-xl transition-all shadow-sm cursor-pointer"
+              >
+                Done
+              </button>
+            </div>
           </div>
         </div>
       )}

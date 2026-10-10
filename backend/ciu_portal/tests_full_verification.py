@@ -216,7 +216,10 @@ def run_tests():
     # 6. Test Dean and Faculty Secretary Strict Faculty Scoping (Rule 7)
     print("\n--- 6. Testing Dean & Faculty Secretary Strict Scoping ---")
     from ciu_portal.models import ClassTimetable, ExamTimetable, CourseUnit
-    from ciu_portal.views import FacultyViewSet, CourseViewSet, CourseUnitViewSet, TestViewSet, ExamViewSet, ClassTimetableViewSet, ExamTimetableViewSet, ReportsViewSet
+    from ciu_portal.views import (
+        FacultyViewSet, CourseViewSet, CourseUnitViewSet, TestViewSet, ExamViewSet,
+        ClassTimetableViewSet, ExamTimetableViewSet, ReportsViewSet, TemporaryClearanceViewSet, AdminUserViewSet
+    )
 
     fac_sci, _ = Faculty.objects.get_or_create(code='FACS', defaults={'name': 'Faculty of Science'})
     fac_nur, _ = Faculty.objects.get_or_create(code='FACN', defaults={'name': 'Faculty of Nursing'})
@@ -353,13 +356,20 @@ def run_tests():
     assert not CourseUnit.objects.filter(id__in=[u_a.id, u_b.id]).exists(), "Course units u_a and u_b should be deleted!"
     print(f"✓ System Admin successfully bulk deleted {resp_admin_del_u.data.get('count')} course units.")
 
-    # 7d. Platform Coordinator can bulk delete course units
+    # 7d. Platform Coordinator correctly blocked from deleting course units (Only System Admin can delete/edit course units)
     req_coord_del_u = factory.post('/api/course-units/bulk_delete/', {'unit_ids': [u_c.id, u_d.id]}, format='json')
     force_authenticate(req_coord_del_u, user=coord_user)
     resp_coord_del_u = view_bulk_unit(req_coord_del_u)
-    assert resp_coord_del_u.status_code == 200, f"Platform Coordinator bulk unit delete failed: {resp_coord_del_u.data}"
-    assert not CourseUnit.objects.filter(id__in=[u_c.id, u_d.id]).exists(), "Course units u_c and u_d should be deleted!"
-    print(f"✓ Platform Coordinator successfully bulk deleted {resp_coord_del_u.data.get('count')} course units.")
+    assert resp_coord_del_u.status_code == 403, f"Platform Coordinator must be forbidden from bulk deleting course units! Got {resp_coord_del_u.status_code}"
+    print("✓ Platform Coordinator correctly blocked from bulk deleting course units (403 Forbidden - Admin only).")
+
+    # System admin finishes deleting u_c and u_d
+    req_adm_u = factory.post('/api/course-units/bulk_delete/', {'unit_ids': [u_c.id, u_d.id]}, format='json')
+    force_authenticate(req_adm_u, user=sys_admin)
+    resp_adm_u = view_bulk_unit(req_adm_u)
+    assert resp_adm_u.status_code == 200
+    assert not CourseUnit.objects.filter(id__in=[u_c.id, u_d.id]).exists()
+    print("✓ System Admin successfully deleted remaining course units.")
 
     # 7e. System Admin can bulk delete courses
     req_admin_del_c = factory.post('/api/courses/bulk_delete/', {'course_ids': [c_a.id, c_b.id]}, format='json')
@@ -502,13 +512,18 @@ def run_tests():
     c_sci_scoped = Course.objects.create(name='Science Course Scoped', code='SCS101', faculty=fac_sci)
     u_sci_scoped = CourseUnit.objects.create(name='Science Unit Scoped', code='SUS101', course=c_sci_scoped)
     
-    # Sec_sci deletes course unit in assigned fac_sci -> 200 OK
+    # Sec_sci blocked from deleting course unit even in assigned fac_sci -> 403 Forbidden (Admin only)
     req_sec_u_del = factory.post('/api/course-units/bulk_delete/', {'unit_ids': [u_sci_scoped.id]}, format='json')
     force_authenticate(req_sec_u_del, user=sec_sci)
     resp_sec_u_del = view_bulk_unit(req_sec_u_del)
-    assert resp_sec_u_del.status_code == 200, f"Faculty Admin should be able to bulk delete units in their faculty: {resp_sec_u_del.data}"
+    assert resp_sec_u_del.status_code == 403, f"Faculty Admin must be blocked from deleting course units! Got {resp_sec_u_del.status_code}"
+    # System Admin can delete the unit
+    req_admin_u_del = factory.post('/api/course-units/bulk_delete/', {'unit_ids': [u_sci_scoped.id]}, format='json')
+    force_authenticate(req_admin_u_del, user=sys_admin)
+    resp_admin_u_del = view_bulk_unit(req_admin_u_del)
+    assert resp_admin_u_del.status_code == 200
     assert not CourseUnit.objects.filter(id=u_sci_scoped.id).exists()
-    print("✓ Faculty Admin successfully bulk deleted course units within assigned faculty.")
+    print("✓ Course unit deletion correctly restricted exclusively to System Admin (403 Forbidden for Faculty Admin, 200 for Sys Admin).")
 
     # Sec_sci deletes course in assigned fac_sci -> 200 OK
     req_sec_c_del = factory.post('/api/courses/bulk_delete/', {'course_ids': [c_sci_scoped.id]}, format='json')
@@ -592,7 +607,277 @@ def run_tests():
     assert resp_detach.status_code == 200, f"Detach unit failed: {resp_detach.data}"
     assert len(resp_detach.data['units']) == 1
     assert resp_detach.data['units'][0]['code'] == 'SE303'
-    print("✓ Detach course unit succeeded.")
+    # 9. Testing New Requirements (Temporary Clearance by Accounts, TESTS API, Suspension, Single Staff, Course Filtering, Bulk Actions)
+    print("\n--- 9. Testing New Features & Restrictions ---")
+    
+    # 9a. Temporary Clearance: Accounts & Admin permitted, others blocked
+    accounts_user, _ = User.objects.get_or_create(username='test_accounts_user', defaults={'role': 'accounts', 'email': 'accounts@ciu.ac.ug'})
+    view_tc = TemporaryClearanceViewSet.as_view({'post': 'create'})
+    
+    # Block Platform Coordinator
+    req_tc_coord = factory.post('/api/temporary-clearances/', {'student': student.id, 'clearance_type': 'both', 'duration_days': 5}, format='json')
+    force_authenticate(req_tc_coord, user=coord_user)
+    resp_tc_coord = view_tc(req_tc_coord)
+    assert resp_tc_coord.status_code == 403, f"Platform Coordinator should be 403 for temporary clearance! Got {resp_tc_coord.status_code}"
+    print("✓ Platform Coordinator correctly blocked from issuing temporary clearance (403 Forbidden).")
+
+    # Allow Accounts Personnel
+    req_tc_acc = factory.post('/api/temporary-clearances/', {'student': student.id, 'clearance_type': 'both', 'duration_days': 5}, format='json')
+    force_authenticate(req_tc_acc, user=accounts_user)
+    resp_tc_acc = view_tc(req_tc_acc)
+    assert resp_tc_acc.status_code in [200, 201], f"Accounts user should be able to grant temporary clearance! Got {resp_tc_acc.status_code}"
+    print("✓ Accounts personnel successfully granted temporary clearance.")
+
+    # 9b. CIU TESTS API (50% gate for tests, blocked for exams)
+    student_test_only, _ = User.objects.get_or_create(username='student_test_50', defaults={'role': 'student', 'reg_number': 'REG50TEST', 'tuition_paid_percentage': 0.0})
+    TemporaryClearance.objects.filter(student=student_test_only).delete()
+    
+    # Simulate matching TESTS API payload only (50%)
+    tests_payload = [{'RegistrationNo': 'REG50TEST', 'StudentName': 'Test Student 50'}]
+    cl_tests_only = check_student_clearance(student_test_only, preloaded_api_data={'exams': [], 'tests': tests_payload})
+    assert cl_tests_only['is_test_cleared'] is True, "Student in TESTS API must be cleared for tests!"
+    assert cl_tests_only['is_exam_cleared'] is False, "Student in TESTS API only must NOT be cleared for exams!"
+    assert cl_tests_only['tuition_paid_percentage'] == 50.0, "Effective tuition should be 50.0%!"
+    print("✓ CIU TESTS API verification clears student for tests (50%) but strictly bars exams.")
+
+    # 9c. Account Suspension by System Admin
+    view_suspend = AdminUserViewSet.as_view({'post': 'toggle_suspend'})
+    User.objects.filter(username='suspendable_user').delete()
+    user_to_suspend = User.objects.create_user(username='suspendable_user', email='susp@ciu.ac.ug', role='student', password='testpassword123')
+    assert user_to_suspend.is_active is True
+    
+    # Non-admin blocked from suspending
+    req_susp_coord = factory.post(f'/api/admin/users/{user_to_suspend.id}/toggle_suspend/')
+    force_authenticate(req_susp_coord, user=coord_user)
+    resp_susp_coord = view_suspend(req_susp_coord, pk=user_to_suspend.id)
+    assert resp_susp_coord.status_code == 403, "Non-admin must be blocked from suspending accounts!"
+    print("✓ Non-admin correctly blocked from suspending user accounts (403 Forbidden).")
+
+    # System Admin can suspend
+    req_susp_admin = factory.post(f'/api/admin/users/{user_to_suspend.id}/toggle_suspend/')
+    force_authenticate(req_susp_admin, user=sys_admin)
+    resp_susp_admin = view_suspend(req_susp_admin, pk=user_to_suspend.id)
+    assert resp_susp_admin.status_code == 200, f"System Admin failed to toggle suspend: {resp_susp_admin.data}"
+    user_to_suspend.refresh_from_db()
+    assert user_to_suspend.is_active is False, "User should now be suspended (is_active=False)!"
+    print("✓ System Admin successfully suspended user account (is_active=False).")
+
+    # 9d. Onboard Single Staff by Coordinator & Admin
+    view_onboard_staff = AdminUserViewSet.as_view({'post': 'onboard_single_staff'})
+    User.objects.filter(email='newlecturer@ciu.ac.ug').delete()
+    
+    # Coordinator blocked from onboarding admin
+    req_onb_admin = factory.post('/api/admin/users/onboard_single_staff/', {'role': 'admin', 'email': 'eviladmin@ciu.ac.ug', 'full_name': 'Fake Admin'}, format='json')
+    force_authenticate(req_onb_admin, user=coord_user)
+    resp_onb_admin = view_onboard_staff(req_onb_admin)
+    assert resp_onb_admin.status_code == 403, "Coordinator must be blocked from onboarding admin role!"
+    print("✓ Coordinator correctly blocked from onboarding System Admin role (403 Forbidden).")
+
+    # Coordinator can onboard lecturer
+    req_onb_lec = factory.post('/api/admin/users/onboard_single_staff/', {'role': 'lecturer', 'email': 'newlecturer@ciu.ac.ug', 'full_name': 'New Lecturer John', 'gender': 'male'}, format='json')
+    force_authenticate(req_onb_lec, user=coord_user)
+    resp_onb_lec = view_onboard_staff(req_onb_lec)
+    assert resp_onb_lec.status_code == 201, f"Coordinator failed to onboard single staff: {resp_onb_lec.data}"
+    assert User.objects.filter(email='newlecturer@ciu.ac.ug', role='lecturer').exists()
+    print("✓ Platform Coordinator successfully onboarded single staff member.")
+
+    # 9e. Filter Courses by Faculty using Course Name
+    view_course_list = CourseViewSet.as_view({'get': 'list'})
+    Course.objects.get_or_create(code='CS_WEB_1', defaults={'name': 'Web Technologies', 'faculty': fac_sci})
+    Course.objects.get_or_create(code='CS_DB_1', defaults={'name': 'Database Systems', 'faculty': fac_sci})
+    Course.objects.get_or_create(code='NUR_WEB_1', defaults={'name': 'Web Nursing Informatics', 'faculty': fac_nur})
+
+    # Filter fac_sci by course name "Web"
+    req_filter_c = factory.get(f'/api/courses/?faculty={fac_sci.id}&search=Web')
+    force_authenticate(req_filter_c, user=sys_admin)
+    resp_filter_c = view_course_list(req_filter_c)
+    assert resp_filter_c.status_code == 200
+    matched_codes = [c['code'] for c in resp_filter_c.data]
+    assert 'CS_WEB_1' in matched_codes and 'NUR_WEB_1' not in matched_codes, f"Course filtering by faculty & course name failed: {matched_codes}"
+    print("✓ Filtering courses by faculty using course name works accurately.")
+
+    # 9f. Test & Exam Bulk Deletions
+    test_bulk_1 = Test.objects.create(title='Bulk Test 1', course=course_rev, lecturer=lecturer_acc)
+    test_bulk_2 = Test.objects.create(title='Bulk Test 2', course=course_rev, lecturer=lecturer_acc)
+    view_test_bulk_del = TestViewSet.as_view({'post': 'bulk_delete'})
+    req_t_bulk = factory.post('/api/tests/bulk_delete/', {'test_ids': [test_bulk_1.id, test_bulk_2.id]}, format='json')
+    force_authenticate(req_t_bulk, user=sys_admin)
+    resp_t_bulk = view_test_bulk_del(req_t_bulk)
+    assert resp_t_bulk.status_code == 200, f"Bulk delete tests failed: {resp_t_bulk.data}"
+    assert not Test.objects.filter(id__in=[test_bulk_1.id, test_bulk_2.id]).exists()
+    print("✓ Bulk deletion of tests succeeded.")
+
+    exam_bulk_1 = Exam.objects.create(title='Bulk Exam 1', course=course_rev, lecturer=lecturer_acc)
+    exam_bulk_2 = Exam.objects.create(title='Bulk Exam 2', course=course_rev, lecturer=lecturer_acc)
+    view_exam_bulk_del = ExamViewSet.as_view({'post': 'bulk_delete'})
+    req_e_bulk = factory.post('/api/exams/bulk_delete/', {'exam_ids': [exam_bulk_1.id, exam_bulk_2.id]}, format='json')
+    force_authenticate(req_e_bulk, user=sys_admin)
+    resp_e_bulk = view_exam_bulk_del(req_e_bulk)
+    assert resp_e_bulk.status_code == 200, f"Bulk delete exams failed: {resp_e_bulk.data}"
+    assert not Exam.objects.filter(id__in=[exam_bulk_1.id, exam_bulk_2.id]).exists()
+    # 10. Comprehensive Verification: Tests Work with 50%, 100%, Manual, or Temporary Clearance
+    print("\n--- 10. Testing Test Execution Under 50%, 100%, Manual, and Temporary Clearance Gates ---")
+    import time
+    from ciu_portal.clearance import _CLEARANCE_CACHE, _CACHE_LOCK
+    from ciu_portal.views import TestViewSet, TestAttemptViewSet, ExamViewSet
+    from ciu_portal.models import Exam
+
+    # Create a test with a question
+    course_gate, _ = Course.objects.get_or_create(code='GATE101', defaults={'name': 'Clearance Gate Course', 'faculty': fac_sci})
+    lecturer_gate, _ = User.objects.get_or_create(username='lec_gate', defaults={'role': 'lecturer', 'email': 'lecgate@ciu.ac.ug'})
+    test_gate = Test.objects.create(
+        title='Clearance Gate Verification Test',
+        course=course_gate,
+        lecturer=lecturer_gate,
+        pass_percentage=50.0,
+        is_published=True,
+        duration_minutes=30
+    )
+    tq = TestQuestion.objects.create(
+        test=test_gate,
+        question_text='Is 50% clearance sufficient for CIU tests?',
+        question_type='mcq',
+        option_a='Yes',
+        option_b='No',
+        correct_answer='A',
+        points=10.0
+    )
+
+    exam_gate = Exam.objects.create(
+        title='Clearance Gate Final Exam',
+        course=course_gate,
+        lecturer=lecturer_gate,
+        is_published=True,
+        is_active=True,
+        is_approved_by_dean=True,
+        duration_minutes=60
+    )
+
+    view_test_start = TestViewSet.as_view({'post': 'start_attempt'})
+    view_test_submit = TestAttemptViewSet.as_view({'post': 'submit_test'})
+    view_exam_start = ExamViewSet.as_view({'post': 'start_attempt'})
+
+    # 10a. Manual 50% Tuition Clearance
+    User.objects.filter(username='st_manual_50').delete()
+    st_manual_50 = User.objects.create_user(
+        username='st_manual_50',
+        email='st_man50@ciu.ac.ug',
+        role='student',
+        reg_number='CIU/2026/MAN50',
+        tuition_paid_percentage=50.0,
+        faculty=fac_sci
+    )
+    req_t_m50 = factory.post(f'/api/tests/{test_gate.id}/start_attempt/')
+    force_authenticate(req_t_m50, user=st_manual_50)
+    resp_t_m50 = view_test_start(req_t_m50, pk=test_gate.id)
+    assert resp_t_m50.status_code == 201, f"Student with manual 50% clearance should start test! Got {resp_t_m50.data}"
+    attempt_id_m50 = resp_t_m50.data['id']
+
+    # Submit test attempt with 50% manual clearance
+    req_sub_m50 = factory.post(f'/api/tests/{attempt_id_m50}/submit_test/', {'answers': {str(tq.id): 'A'}}, format='json')
+    force_authenticate(req_sub_m50, user=st_manual_50)
+    resp_sub_m50 = view_test_submit(req_sub_m50, pk=attempt_id_m50)
+    assert resp_sub_m50.status_code == 200, f"Submit test failed for manual 50%: {resp_sub_m50.data}"
+    assert resp_sub_m50.data['score'] == 100.0
+    assert resp_sub_m50.data['passed'] is True
+    print("✓ Student with manual 50% clearance can start and submit test successfully (score=100%).")
+
+    # Verify manual 50% student is barred from exams (100% required)
+    req_e_m50 = factory.post(f'/api/exams/{exam_gate.id}/start_attempt/')
+    force_authenticate(req_e_m50, user=st_manual_50)
+    resp_e_m50 = view_exam_start(req_e_m50, pk=exam_gate.id)
+    assert resp_e_m50.status_code == 403, f"Manual 50% student should be barred from exams! Got {resp_e_m50.status_code}"
+    print("✓ Student with manual 50% clearance is correctly barred from final exams (403 Forbidden).")
+
+    # 10b. Manual 100% Tuition Clearance
+    User.objects.filter(username='st_manual_100').delete()
+    st_manual_100 = User.objects.create_user(
+        username='st_manual_100',
+        email='st_man100@ciu.ac.ug',
+        role='student',
+        reg_number='CIU/2026/MAN100',
+        tuition_paid_percentage=100.0,
+        faculty=fac_sci
+    )
+    req_t_m100 = factory.post(f'/api/tests/{test_gate.id}/start_attempt/')
+    force_authenticate(req_t_m100, user=st_manual_100)
+    resp_t_m100 = view_test_start(req_t_m100, pk=test_gate.id)
+    assert resp_t_m100.status_code == 201, f"Student with manual 100% clearance should start test! Got {resp_t_m100.data}"
+    print("✓ Student with manual 100% clearance can start test successfully.")
+
+    # 100% student can also start exam
+    req_e_m100 = factory.post(f'/api/exams/{exam_gate.id}/start_attempt/')
+    force_authenticate(req_e_m100, user=st_manual_100)
+    resp_e_m100 = view_exam_start(req_e_m100, pk=exam_gate.id)
+    assert resp_e_m100.status_code == 201, f"Student with manual 100% clearance should start exam! Got {resp_e_m100.data}"
+    print("✓ Student with manual 100% clearance can start final exam successfully.")
+
+    # 10c. 50% Clearance via CIU TESTS API Endpoint Payload
+    User.objects.filter(username='st_api_50').delete()
+    st_api_50 = User.objects.create_user(
+        username='st_api_50',
+        email='st_api50@ciu.ac.ug',
+        role='student',
+        reg_number='CIU/2026/API50',
+        tuition_paid_percentage=0.0,
+        faculty=fac_sci
+    )
+    with _CACHE_LOCK:
+        _CLEARANCE_CACHE["TESTS_2026/2027_1"] = ([{'RegistrationNo': 'CIU/2026/API50', 'StudentName': 'API 50 Student'}], time.time())
+        _CLEARANCE_CACHE["EXAMS_2026/2027_1"] = ([], time.time())
+
+    req_t_api50 = factory.post(f'/api/tests/{test_gate.id}/start_attempt/')
+    force_authenticate(req_t_api50, user=st_api_50)
+    resp_t_api50 = view_test_start(req_t_api50, pk=test_gate.id)
+    assert resp_t_api50.status_code == 201, f"Student cleared via CIU TESTS API should start test! Got {resp_t_api50.data}"
+    print("✓ Student cleared via CIU TESTS API (50% gate) can start test successfully.")
+
+    # Verify CIU TESTS API student is barred from exams
+    req_e_api50 = factory.post(f'/api/exams/{exam_gate.id}/start_attempt/')
+    force_authenticate(req_e_api50, user=st_api_50)
+    resp_e_api50 = view_exam_start(req_e_api50, pk=exam_gate.id)
+    assert resp_e_api50.status_code == 403, f"CIU TESTS API student should be barred from exams! Got {resp_e_api50.status_code}"
+    print("✓ Student cleared via CIU TESTS API is correctly barred from final exams (403 Forbidden).")
+
+    # 10d. Temporary Clearance Override (Tests Only)
+    User.objects.filter(username='st_temp_test').delete()
+    st_temp = User.objects.create_user(
+        username='st_temp_test',
+        email='st_temp@ciu.ac.ug',
+        role='student',
+        reg_number='CIU/2026/TEMP',
+        tuition_paid_percentage=0.0,
+        faculty=fac_sci
+    )
+    TemporaryClearance.objects.create(
+        student=st_temp,
+        granted_by=accounts_user,
+        clearance_type='tests',
+        expires_at=timezone.now() + timezone.timedelta(days=3),
+        reason='Emergency Test Clearance'
+    )
+    req_t_temp = factory.post(f'/api/tests/{test_gate.id}/start_attempt/')
+    force_authenticate(req_t_temp, user=st_temp)
+    resp_t_temp = view_test_start(req_t_temp, pk=test_gate.id)
+    assert resp_t_temp.status_code == 201, f"Student with Temporary Clearance for tests should start test! Got {resp_t_temp.data}"
+    print("✓ Student with Temporary Clearance (tests) can start test successfully.")
+
+    # 10e. Uncleared Student (0% tuition, no API clearance, no temporary override)
+    User.objects.filter(username='st_uncleared_0').delete()
+    st_uncleared = User.objects.create_user(
+        username='st_uncleared_0',
+        email='st_unc@ciu.ac.ug',
+        role='student',
+        reg_number='CIU/2026/UNC',
+        tuition_paid_percentage=0.0,
+        faculty=fac_sci
+    )
+    req_t_unc = factory.post(f'/api/tests/{test_gate.id}/start_attempt/')
+    force_authenticate(req_t_unc, user=st_uncleared)
+    resp_t_unc = view_test_start(req_t_unc, pk=test_gate.id)
+    assert resp_t_unc.status_code == 403, f"Uncleared student must be barred from tests! Got {resp_t_unc.status_code}"
+    assert '50%' in resp_t_unc.data['detail'], f"Expected 50% in message: {resp_t_unc.data['detail']}"
+    print("✓ Uncleared student is correctly barred from tests with 403 Forbidden.")
 
     print("\n==================================================")
     print("✅ ALL SYSTEM VERIFICATION CHECKS PASSED SUCCESSFULLY!")
