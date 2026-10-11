@@ -60,7 +60,7 @@ export default function ClassesPage() {
 
   // Filter assigned courses for Lecturers & Students
   const assignedCourses = user?.role === 'lecturer'
-    ? courses.filter(c => courseUnits.some(u => u.course_code === c.code && u.lecturer_details?.some(l => l.id === user.id)))
+    ? courses.filter(c => courseUnits.some(u => u.course_code === c.code && u.lecturer_details?.some(l => l.id === user.id)) || (user?.faculty && (c.faculty === user.faculty || c.faculty_code === user.faculty_code)))
     : user?.role === 'student'
     ? courses.filter(c => (user?.assigned_courses || []).includes(c.id) || (user?.assigned_course_codes || []).includes(c.code) || (!user?.assigned_courses?.length && (c.faculty === user?.faculty || c.faculty_code === user?.faculty_code)))
     : courses;

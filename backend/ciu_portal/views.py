@@ -556,6 +556,18 @@ class AdminUserViewSet(viewsets.ModelViewSet):
                 models.Q(assigned_courses__faculty__in=assigned_facs) |
                 models.Q(assigned_course_units__course__faculty__in=assigned_facs)
             ).distinct().order_by('-date_joined')
+        elif user.role == 'lecturer':
+            assigned_courses = Course.objects.filter(
+                models.Q(units__lecturers=user) | (models.Q(faculty=user.faculty) if user.faculty else models.Q())
+            ).distinct()
+            lec_scope = (
+                models.Q(assigned_courses__in=assigned_courses) |
+                models.Q(course_applications__course__in=assigned_courses, course_applications__status='approved') |
+                models.Q(assigned_course_units__course__in=assigned_courses) |
+                (models.Q(faculty=user.faculty) if user.faculty else models.Q()) |
+                models.Q(id=user.id)
+            )
+            return qs.filter(lec_scope).distinct().order_by('-date_joined')
         return qs
 
     def perform_create(self, serializer):
@@ -1737,7 +1749,7 @@ class AdminUserViewSet(viewsets.ModelViewSet):
                     'email': email,
                     'gender': gender_val,
                     'gender_display': user_obj.get_gender_display(),
-                    'faculty': faculty_obj.code if faculty_obj else 'SOBAT',
+                    'faculty': faculty_obj.code if faculty_obj else (user_obj.faculty.code if user_obj.faculty else 'UNASSIGNED'),
                     'entry_year': entry_year_val,
                     'intake': intake_val,
                     'year_of_study': year_of_study,
@@ -1799,7 +1811,7 @@ class AdminUserViewSet(viewsets.ModelViewSet):
                 if isinstance(item, dict):
                     reg_no = str(item.get('RegNo') or item.get('reg_no') or item.get('RegistrationNo') or item.get('StudentNo') or item.get('username') or '').strip()
                     name = str(item.get('StudentName') or item.get('name') or item.get('Fullname') or item.get('Student_Name') or 'CIU Student').strip()
-                    program = str(item.get('Program') or item.get('Faculty') or item.get('Course') or item.get('Department') or item.get('StudyProgramme') or 'SOBAT').strip()
+                    program = str(item.get('Program') or item.get('Faculty') or item.get('Course') or item.get('Department') or item.get('StudyProgramme') or '').strip()
                     acad_year = str(item.get('AcademicYear') or item.get('AcadYear') or acad).strip()
                     sem_val = str(item.get('Semester') or item.get('Sem') or sem).strip()
                     status_txt = str(item.get('Status') or item.get('ClearanceStatus') or ('CLEARED (100%)' if examtype == 'EXAMS' else 'CLEARED (50% TESTS)')).strip()
@@ -1834,7 +1846,7 @@ class AdminUserViewSet(viewsets.ModelViewSet):
                             'full_name': matched_user.get_full_name() or matched_user.username,
                             'email': matched_user.email,
                             'faculty': matched_user.faculty.name if matched_user.faculty else 'General / Unassigned',
-                            'faculty_code': matched_user.faculty.code if matched_user.faculty else 'SOBAT',
+                            'faculty_code': matched_user.faculty.code if matched_user.faculty else 'UNASSIGNED',
                             'tuition_paid_percentage': clearance['tuition_paid_percentage'],
                             'is_exam_cleared': clearance['is_exam_cleared'],
                             'is_test_cleared': clearance['is_test_cleared'],
@@ -1878,7 +1890,7 @@ class AdminUserViewSet(viewsets.ModelViewSet):
                     continue
 
             f_name = student.faculty.name if student.faculty else 'General / Unassigned'
-            f_code = student.faculty.code if student.faculty else 'SOBAT'
+            f_code = student.faculty.code if student.faculty else 'UNASSIGNED'
             if f_name not in faculties_map:
                 faculties_map[f_name] = {'code': f_code, 'students': []}
 

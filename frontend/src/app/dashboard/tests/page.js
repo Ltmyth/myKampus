@@ -265,7 +265,7 @@ export default function TestPortalPage() {
     : courseUnits.filter(u => (assignedCourses || []).some(c => c.code === u.course_code || c.id === u.course));
 
   const scopedFaculties = isLecturer
-    ? faculties.filter(f => (assignedCourses || []).some(c => c.faculty === f.id || c.faculty_code === f.code))
+    ? faculties.filter(f => (assignedCourses || []).some(c => c.faculty === f.id || c.faculty_code === f.code) || (user?.faculty && (f.id === user.faculty || String(f.id) === String(user.faculty))) || (user?.faculty_code && f.code === user.faculty_code))
     : user?.role === 'student'
     ? faculties.filter(f => (user?.faculty && (f.id === user.faculty || String(f.id) === String(user.faculty))) || (user?.faculty_code && f.code === user.faculty_code) || (assignedCourses || []).some(c => c.faculty === f.id || c.faculty_code === f.code))
     : faculties;
@@ -862,8 +862,8 @@ ANSWER: C`;
           {isStaff && (
             <div className="flex items-center space-x-1">
               <select
-                value={['lecturer', 'student', 'faculty_admin', 'dean'].includes(user?.role) ? (user?.faculty_code || (typeof user?.faculty === 'object' ? user?.faculty?.code : (activeFacultiesList[0]?.code || selectedFacultyFilter))) : selectedFacultyFilter}
-                disabled={['lecturer', 'student', 'faculty_admin', 'dean'].includes(user?.role)}
+                value={['lecturer', 'student', 'faculty_admin', 'dean'].includes(user?.role) && (user?.faculty_code || user?.faculty) ? (user?.faculty_code || (typeof user?.faculty === 'object' ? user?.faculty?.code : String(user?.faculty))) : selectedFacultyFilter}
+                disabled={['lecturer', 'student', 'faculty_admin', 'dean'].includes(user?.role) && Boolean(user?.faculty_code || user?.faculty)}
                 onChange={(e) => setSelectedFacultyFilter(e.target.value)}
                 className="px-3 py-1.5 bg-slate-50 border border-slate-200 text-slate-800 text-xs font-bold rounded-lg focus:outline-none focus:ring-1 focus:ring-brand-light disabled:opacity-85"
               >
@@ -872,7 +872,7 @@ ANSWER: C`;
                   <option key={f.id} value={f.code}>[{f.code}] {f.name}</option>
                 ))}
               </select>
-              {['lecturer', 'student', 'faculty_admin', 'dean'].includes(user?.role) && (
+              {['lecturer', 'student', 'faculty_admin', 'dean'].includes(user?.role) && (user?.faculty_code || user?.faculty) && (
                 <span className="text-[10px] text-amber-700 font-bold">🔒 Locked to Faculty</span>
               )}
             </div>

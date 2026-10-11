@@ -85,8 +85,8 @@ export default function ReportsDashboardPage() {
             <>
               <div className="flex items-center space-x-1">
                 <select
-                  value={['lecturer', 'student', 'faculty_admin', 'dean'].includes(user?.role) ? (user?.faculty?.id || user?.faculty || selectedFaculty) : selectedFaculty}
-                  disabled={['lecturer', 'student', 'faculty_admin', 'dean'].includes(user?.role)}
+                  value={['lecturer', 'student', 'faculty_admin', 'dean'].includes(user?.role) && (user?.faculty?.id || user?.faculty) ? (user?.faculty?.id || user?.faculty) : selectedFaculty}
+                  disabled={['lecturer', 'student', 'faculty_admin', 'dean'].includes(user?.role) && Boolean(user?.faculty?.id || user?.faculty)}
                   onChange={(e) => setSelectedFaculty(e.target.value)}
                   className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 disabled:opacity-85"
                 >
@@ -95,7 +95,7 @@ export default function ReportsDashboardPage() {
                     <option key={f.id} value={f.id}>{f.code} - {f.name}</option>
                   ))}
                 </select>
-                {['lecturer', 'student', 'faculty_admin', 'dean'].includes(user?.role) && (
+                {['lecturer', 'student', 'faculty_admin', 'dean'].includes(user?.role) && Boolean(user?.faculty?.id || user?.faculty) && (
                   <span className="text-[10px] text-amber-700 font-bold">🔒 Locked to Faculty</span>
                 )}
               </div>

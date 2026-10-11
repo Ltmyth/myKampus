@@ -702,7 +702,7 @@ export default function AdminPage() {
     try {
       const formData = new FormData();
       const csvHeader = "Registration No,Full Name,Email,Gender,Faculty,Entry Year,Intake,Year of Study,Semester,One Time Password\n";
-      const csvRow = `"${singleRegNumber.trim()}","${singleFullName.trim()}","${singleEmail.trim() || `student_${Date.now()}@ciu.ac.ug`}","${singleGender || 'other'}","${singleFaculty || 'SOBAT'}","${singleEntryYear}","${singleIntake}","${singleYearOfStudy || 1}","${singleSemester || 1}","${singleInitialPassword.trim()}"\n`;
+      const csvRow = `"${singleRegNumber.trim()}","${singleFullName.trim()}","${singleEmail.trim() || `student_${Date.now()}@ciu.ac.ug`}","${singleGender || 'other'}","${singleFaculty || (faculties[0]?.code || '')}","${singleEntryYear}","${singleIntake}","${singleYearOfStudy || 1}","${singleSemester || 1}","${singleInitialPassword.trim()}"\n`;
       const blob = new Blob([csvHeader + csvRow], { type: 'text/csv' });
       formData.append('file', blob, 'single_student.csv');
       formData.append('entry_year', singleEntryYear);
@@ -2546,7 +2546,7 @@ export default function AdminPage() {
                       onChange={(e) => setBatchFacultyId(e.target.value)}
                       className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl font-bold text-slate-800 text-xs"
                     >
-                      <option value="">-- Read from File / Default SOBAT --</option>
+                      <option value="">-- Read from File / Select Faculty --</option>
                       {faculties.map(f => (
                         <option key={f.id} value={f.id}>[{f.code}] {f.name}</option>
                       ))}

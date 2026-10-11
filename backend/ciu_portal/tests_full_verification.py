@@ -1257,6 +1257,32 @@ def run_tests():
     assert len(resp_e_foreign_search.data) == 0, "Student searching exams for foreign courses must return 0 results"
     print("✓ Student ExamViewSet correctly scoped and searchable without foreign leakage.")
 
+    # 12i. Verify no hardcoded faculty returned when student/lecturer has no faculty assigned
+    st_no_fac, _ = User.objects.get_or_create(
+        username='st_unassigned_fac_001',
+        defaults={'role': 'student', 'faculty': None, 'year_of_study': 1, 'semester': 1}
+    )
+    st_no_fac.faculty = None
+    st_no_fac.assigned_courses.clear()
+    st_no_fac.save()
+
+    req_st_no_fac = factory.get('/api/faculties/')
+    force_authenticate(req_st_no_fac, user=st_no_fac)
+    resp_st_no_fac = view_f_list(req_st_no_fac)
+    assert resp_st_no_fac.status_code == 200
+    assert len(resp_st_no_fac.data) == 0, f"Unassigned student must see 0 faculties, got {resp_st_no_fac.data}"
+    print("✓ Unassigned student receives 0 faculties (no hardcoded fallback faculty).")
+
+    # Lecturer scoping: lec_eng only sees users in fac_eng / c_eng
+    req_lec_users = factory.get('/api/admin/users/?role=lecturer')
+    force_authenticate(req_lec_users, user=lec_eng)
+    resp_lec_users = view_users(req_lec_users)
+    assert resp_lec_users.status_code == 200
+    lec_view_ids = [u['id'] for u in resp_lec_users.data]
+    assert lec_eng.id in lec_view_ids
+    assert lec_sob.id not in lec_view_ids
+    print("✓ Lecturer view correctly scoped to assigned faculty without hardcoded fallbacks.")
+
     print("\n==================================================")
     print("✅ ALL SYSTEM VERIFICATION CHECKS PASSED SUCCESSFULLY!")
     print("==================================================")

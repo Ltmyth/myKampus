@@ -1228,15 +1228,19 @@ export default function FacultyManagementPage() {
       const assignedCodes = user?.assigned_course_codes || [];
       if (assignedCodes.length > 0 && !assignedCodes.includes(tt.course_code)) return false;
     }
+    if (isLecturer) {
+      if (user?.faculty_code && tt.faculty_code && tt.faculty_code !== user.faculty_code && !tt.lecturer_name?.includes(user.username)) return false;
+    }
     return true;
   });
 
-  // Students ONLY see their designated faculty & leadership
-  const visibleFaculties = isStudent
+  // Students & Lecturers ONLY see their designated faculty & leadership
+  const visibleFaculties = (isStudent || isLecturer)
     ? faculties.filter(fac => {
         if (user?.faculty && (fac.id === user.faculty || String(fac.id) === String(user.faculty))) return true;
         if (user?.faculty_code && fac.code === user.faculty_code) return true;
         if (user?.faculty_name && fac.name === user.faculty_name) return true;
+        if (isLecturer && (courses.some(c => (c.faculty === fac.id || c.faculty_code === fac.code)) || courseUnits.some(u => (u.faculty_id === fac.id || u.faculty_code === fac.code)))) return true;
         return false;
       })
     : faculties;
@@ -1252,6 +1256,11 @@ export default function FacultyManagementPage() {
         const matchesUnit = assignedCodes.includes(u.course_code) || assignedIds.includes(u.course);
         if (!matchesUnit) return false;
       }
+    }
+    if (isLecturer) {
+      const lecturerFacCode = user?.faculty_code;
+      const isAssignedUnit = u.lecturer_details?.some(l => l.id === user.id) || u.lecturers?.includes(user.id);
+      if (lecturerFacCode && u.faculty_code && u.faculty_code !== lecturerFacCode && !isAssignedUnit) return false;
     }
     const matchesFaculty = selectedUnitFacultyFilter === 'All' ||
       u.faculty_code === selectedUnitFacultyFilter ||
@@ -1383,7 +1392,7 @@ export default function FacultyManagementPage() {
           onClick={() => setActiveTab('faculties')}
           className={`pb-3 text-xs font-bold border-b-2 transition-all ${activeTab === 'faculties' ? 'border-brand-light text-brand-dark' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
         >
-          🏛️ {isStudent ? 'My Faculty & Leadership' : 'Faculties & Leadership'} ({visibleFaculties.length})
+          🏛️ {(isStudent || isLecturer) ? 'My Faculty & Leadership' : 'Faculties & Leadership'} ({visibleFaculties.length})
         </button>
         <button
           onClick={() => setActiveTab('assignments')}
@@ -1503,11 +1512,11 @@ export default function FacultyManagementPage() {
               {/* Faculty Filter */}
               <div>
                 <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">
-                  Filter by Faculty {isStudent && <span className="text-amber-700 font-bold text-[10px]">🔒 Locked</span>}
+                  Filter by Faculty {(isStudent || isLecturer) && (user?.faculty || user?.faculty_code) && <span className="text-amber-700 font-bold text-[10px]">🔒 Locked</span>}
                 </label>
                 <select
-                  value={isStudent && (user?.faculty || user?.faculty_code) ? (user.faculty || user.faculty_code) : courseFacultyFilter}
-                  disabled={isStudent}
+                  value={(isStudent || isLecturer) && (user?.faculty || user?.faculty_code) ? (user.faculty || user.faculty_code) : courseFacultyFilter}
+                  disabled={(isStudent || isLecturer) && Boolean(user?.faculty || user?.faculty_code)}
                   onChange={(e) => setCourseFacultyFilter(e.target.value)}
                   className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:ring-1 focus:ring-brand-light disabled:opacity-85"
                 >
@@ -1834,6 +1843,8 @@ export default function FacultyManagementPage() {
                   <option value="All">All Course Programs</option>
                   {(isStudent
                     ? courses.filter(c => (user?.assigned_courses || []).includes(c.id) || (user?.assigned_course_codes || []).includes(c.code) || (!user?.assigned_courses?.length && (c.faculty === user?.faculty || c.faculty_code === user?.faculty_code)))
+                    : isLecturer
+                    ? courses.filter(c => courseUnits.some(u => u.course_code === c.code && u.lecturer_details?.some(l => l.id === user.id)) || (user?.faculty && (c.faculty === user.faculty || c.faculty_code === user.faculty_code)))
                     : courses
                   ).map(c => (
                     <option key={c.id} value={c.code}>[{c.code}] {c.name}</option>
@@ -2218,11 +2229,11 @@ export default function FacultyManagementPage() {
 
               <div>
                 <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">
-                  Filter Faculty {isStudent && <span className="text-amber-700 font-bold text-[10px]">🔒 Locked</span>}
+                  Filter Faculty {(isStudent || isLecturer) && (user?.faculty_code || user?.faculty) && <span className="text-amber-700 font-bold text-[10px]">🔒 Locked</span>}
                 </label>
                 <select
-                  value={isStudent && (user?.faculty_code || user?.faculty) ? (user.faculty_code || String(user.faculty)) : selectedUnitFacultyFilter}
-                  disabled={isStudent}
+                  value={(isStudent || isLecturer) && (user?.faculty_code || user?.faculty) ? (user.faculty_code || String(user.faculty)) : selectedUnitFacultyFilter}
+                  disabled={(isStudent || isLecturer) && Boolean(user?.faculty_code || user?.faculty)}
                   onChange={(e) => { setSelectedUnitFacultyFilter(e.target.value); setSelectedUnitCourseFilter('All'); }}
                   className="w-full bg-white border border-slate-200 text-slate-800 font-bold rounded-lg px-2.5 py-1.5 focus:ring-1 focus:ring-brand-light disabled:opacity-85"
                 >

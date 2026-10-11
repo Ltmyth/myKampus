@@ -267,8 +267,8 @@ export default function DashboardLayout({ children }) {
           </div>
         </header>
 
-        {/* Student Academic Info Banner - Top Faculty Header */}
-        {user.role === 'student' && (
+        {/* Academic Info Banner - Top Faculty Header for Students & Lecturers */}
+        {(user.role === 'student' || user.role === 'lecturer') && (
           <div className="bg-gradient-to-r from-[#0f4a2e] via-[#1a5c38] to-[#154d2f] text-white px-6 py-3.5 border-b border-emerald-800/60 flex flex-wrap items-center justify-between gap-3 shadow-md animate-fade-in">
             <div className="flex items-center space-x-3">
               <div className="w-10 h-10 rounded-xl bg-white/15 border border-white/20 flex items-center justify-center font-extrabold text-white text-base shadow-sm">
@@ -277,15 +277,15 @@ export default function DashboardLayout({ children }) {
               <div>
                 <span className="text-[10px] font-extrabold uppercase tracking-widest text-emerald-300 block">ASSIGNED FACULTY</span>
                 <p className="text-sm font-black tracking-wide text-white">
-                  {user.faculty_name ? `${user.faculty_code} - ${user.faculty_name}` : 'SOBAT - School of Business & Technology'}
+                  {user.faculty_name ? (user.faculty_code ? `${user.faculty_code} - ${user.faculty_name}` : user.faculty_name) : (user.faculty_code || 'Unassigned Faculty')}
                 </p>
               </div>
             </div>
 
             <div className="flex flex-wrap items-center gap-3 text-xs font-semibold">
               <div className="flex items-center space-x-2 bg-black/20 px-3 py-1.5 rounded-xl border border-white/10 shadow-sm">
-                <span className="text-emerald-300 font-bold uppercase text-[10px]">Student Reg No:</span>
-                <span className="font-mono text-white font-bold">{user.registration_number || user.reg_number || `2026/CIU/FST/${user.id}`}</span>
+                <span className="text-emerald-300 font-bold uppercase text-[10px]">{user.role === 'student' ? 'Student Reg No:' : 'Staff ID / Code:'}</span>
+                <span className="font-mono text-white font-bold">{user.registration_number || user.reg_number || user.username}</span>
               </div>
             </div>
           </div>
