@@ -116,6 +116,7 @@ export default function FacultyManagementPage() {
   const [selectedUnitYearFilter, setSelectedUnitYearFilter] = useState('All');
   const [selectedUnitSemesterFilter, setSelectedUnitSemesterFilter] = useState('All');
   const [selectedUnitFacultyFilter, setSelectedUnitFacultyFilter] = useState('All');
+  const [selectedUnitLecturerFilter, setSelectedUnitLecturerFilter] = useState('All');
   const [studentCourseFilter, setStudentCourseFilter] = useState('All');
 
   // Course Units Review & Attachment Modal State
@@ -730,6 +731,17 @@ export default function FacultyManagementPage() {
   };
 
   const filteredCourses = courses.filter(c => {
+    if (isStudent) {
+      const studentFacCode = user?.faculty_code;
+      const studentFacId = user?.faculty;
+      if (studentFacCode && c.faculty_code && c.faculty_code !== studentFacCode) return false;
+      if (studentFacId && c.faculty && String(c.faculty) !== String(studentFacId)) return false;
+      const assignedIds = user?.assigned_courses || [];
+      const assignedCodes = user?.assigned_course_codes || [];
+      if (assignedIds.length > 0 || assignedCodes.length > 0) {
+        if (!assignedIds.includes(c.id) && !assignedCodes.includes(c.code)) return false;
+      }
+    }
     if (courseFacultyFilter !== 'All') {
       const targetFac = faculties.find(f => String(f.id) === String(courseFacultyFilter) || f.code === courseFacultyFilter);
       if (targetFac) {
@@ -1211,22 +1223,36 @@ export default function FacultyManagementPage() {
   const filteredTimetables = classTimetables.filter(tt => {
     if (selectedDayFilter !== 'All' && tt.day_of_week !== selectedDayFilter) return false;
     if (selectedCourseFilter !== 'All' && tt.course_code !== selectedCourseFilter) return false;
-    if (isStudent && user?.faculty_code && tt.faculty_code && tt.faculty_code !== user.faculty_code) return false;
+    if (isStudent) {
+      if (user?.faculty_code && tt.faculty_code && tt.faculty_code !== user.faculty_code) return false;
+      const assignedCodes = user?.assigned_course_codes || [];
+      if (assignedCodes.length > 0 && !assignedCodes.includes(tt.course_code)) return false;
+    }
     return true;
   });
 
   // Students ONLY see their designated faculty & leadership
   const visibleFaculties = isStudent
     ? faculties.filter(fac => {
-        if (user?.faculty && fac.id === user.faculty) return true;
+        if (user?.faculty && (fac.id === user.faculty || String(fac.id) === String(user.faculty))) return true;
         if (user?.faculty_code && fac.code === user.faculty_code) return true;
         if (user?.faculty_name && fac.name === user.faculty_name) return true;
-        return fac.code === 'SOBAT' || fac.code === 'FHS';
-      }).slice(0, 1)
+        return false;
+      })
     : faculties;
 
-  // Filter course units according to faculty, year filter, program filter, and search text
+  // Filter course units according to faculty, year filter, program filter, lecturer filter, and search text
   const filteredCourseUnits = courseUnits.filter(u => {
+    if (isStudent) {
+      const studentFacCode = user?.faculty_code;
+      if (studentFacCode && u.faculty_code && u.faculty_code !== studentFacCode) return false;
+      const assignedCodes = user?.assigned_course_codes || [];
+      const assignedIds = user?.assigned_courses || [];
+      if (assignedCodes.length > 0 || assignedIds.length > 0) {
+        const matchesUnit = assignedCodes.includes(u.course_code) || assignedIds.includes(u.course);
+        if (!matchesUnit) return false;
+      }
+    }
     const matchesFaculty = selectedUnitFacultyFilter === 'All' ||
       u.faculty_code === selectedUnitFacultyFilter ||
       String(u.faculty_id) === String(selectedUnitFacultyFilter) ||
@@ -1234,6 +1260,8 @@ export default function FacultyManagementPage() {
     const matchesYear = selectedUnitYearFilter === 'All' || (u.year_of_study || 1) === parseInt(selectedUnitYearFilter);
     const matchesSemester = selectedUnitSemesterFilter === 'All' || (u.semester || 1) === parseInt(selectedUnitSemesterFilter);
     const matchesCourse = selectedUnitCourseFilter === 'All' || u.course_code === selectedUnitCourseFilter;
+    const matchesLecturer = selectedUnitLecturerFilter === 'All' ||
+      (u.lecturer_details && u.lecturer_details.some(l => String(l.id) === String(selectedUnitLecturerFilter) || l.username === selectedUnitLecturerFilter));
     const s = unitSearchText.toLowerCase().trim();
     const matchesSearch = !s ||
       (u.code && u.code.toLowerCase().includes(s)) ||
@@ -1244,7 +1272,7 @@ export default function FacultyManagementPage() {
         (l.last_name && l.last_name.toLowerCase().includes(s)) ||
         (l.username && l.username.toLowerCase().includes(s))
       ));
-    return matchesFaculty && matchesYear && matchesSemester && matchesCourse && matchesSearch;
+    return matchesFaculty && matchesYear && matchesSemester && matchesCourse && matchesLecturer && matchesSearch;
   });
 
   const filteredReviewUnits = (reviewUnitsList || []).filter(u => {
@@ -1474,11 +1502,14 @@ export default function FacultyManagementPage() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full md:w-auto flex-1">
               {/* Faculty Filter */}
               <div>
-                <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">Filter by Faculty</label>
+                <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">
+                  Filter by Faculty {isStudent && <span className="text-amber-700 font-bold text-[10px]">🔒 Locked</span>}
+                </label>
                 <select
-                  value={courseFacultyFilter}
+                  value={isStudent && (user?.faculty || user?.faculty_code) ? (user.faculty || user.faculty_code) : courseFacultyFilter}
+                  disabled={isStudent}
                   onChange={(e) => setCourseFacultyFilter(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:ring-1 focus:ring-brand-light"
+                  className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:ring-1 focus:ring-brand-light disabled:opacity-85"
                 >
                   <option value="All">🏛️ All Faculties ({faculties.length})</option>
                   {faculties.map((f) => (
@@ -1801,7 +1832,10 @@ export default function FacultyManagementPage() {
                   className="px-3 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800"
                 >
                   <option value="All">All Course Programs</option>
-                  {courses.map(c => (
+                  {(isStudent
+                    ? courses.filter(c => (user?.assigned_courses || []).includes(c.id) || (user?.assigned_course_codes || []).includes(c.code) || (!user?.assigned_courses?.length && (c.faculty === user?.faculty || c.faculty_code === user?.faculty_code)))
+                    : courses
+                  ).map(c => (
                     <option key={c.id} value={c.code}>[{c.code}] {c.name}</option>
                   ))}
                 </select>
@@ -2170,7 +2204,7 @@ export default function FacultyManagementPage() {
             )}
 
             {/* Search and Filters Toolbar */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 bg-slate-50 p-3 rounded-xl border border-slate-200 text-xs">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 bg-slate-50 p-3 rounded-xl border border-slate-200 text-xs">
               <div>
                 <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Search Course Units</label>
                 <input
@@ -2183,11 +2217,14 @@ export default function FacultyManagementPage() {
               </div>
 
               <div>
-                <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Filter Faculty</label>
+                <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">
+                  Filter Faculty {isStudent && <span className="text-amber-700 font-bold text-[10px]">🔒 Locked</span>}
+                </label>
                 <select
-                  value={selectedUnitFacultyFilter}
+                  value={isStudent && (user?.faculty_code || user?.faculty) ? (user.faculty_code || String(user.faculty)) : selectedUnitFacultyFilter}
+                  disabled={isStudent}
                   onChange={(e) => { setSelectedUnitFacultyFilter(e.target.value); setSelectedUnitCourseFilter('All'); }}
-                  className="w-full bg-white border border-slate-200 text-slate-800 font-bold rounded-lg px-2.5 py-1.5 focus:ring-1 focus:ring-brand-light"
+                  className="w-full bg-white border border-slate-200 text-slate-800 font-bold rounded-lg px-2.5 py-1.5 focus:ring-1 focus:ring-brand-light disabled:opacity-85"
                 >
                   <option value="All">All Faculties ({faculties.length})</option>
                   {faculties.map(f => (
@@ -2205,10 +2242,31 @@ export default function FacultyManagementPage() {
                 >
                   <option value="All">All Course Programs</option>
                   {courses
-                    .filter(c => selectedUnitFacultyFilter === 'All' || c.faculty_code === selectedUnitFacultyFilter || String(c.faculty) === String(selectedUnitFacultyFilter))
+                    .filter(c => {
+                      if (isStudent) {
+                        const isAssigned = (user?.assigned_courses || []).includes(c.id) || (user?.assigned_course_codes || []).includes(c.code);
+                        const isFac = user?.faculty && (c.faculty === user.faculty || c.faculty_code === user.faculty_code);
+                        if (!isAssigned && !(!user?.assigned_courses?.length && isFac)) return false;
+                      }
+                      return selectedUnitFacultyFilter === 'All' || c.faculty_code === selectedUnitFacultyFilter || String(c.faculty) === String(selectedUnitFacultyFilter);
+                    })
                     .map(c => (
                       <option key={c.id} value={c.code}>[{c.code}] {c.name}</option>
                     ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Assigned Lecturer</label>
+                <select
+                  value={selectedUnitLecturerFilter}
+                  onChange={(e) => setSelectedUnitLecturerFilter(e.target.value)}
+                  className="w-full bg-white border border-slate-200 text-slate-800 font-bold rounded-lg px-2.5 py-1.5 focus:ring-1 focus:ring-brand-light"
+                >
+                  <option value="All">All Lecturers ({lecturers.length})</option>
+                  {lecturers.map(l => (
+                    <option key={l.id} value={l.id}>{l.first_name || l.username} {l.last_name || ''}</option>
+                  ))}
                 </select>
               </div>
 

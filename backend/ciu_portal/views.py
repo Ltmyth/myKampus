@@ -414,6 +414,8 @@ class AdminUserViewSet(viewsets.ModelViewSet):
             return [permissions.IsAuthenticated(), IsStrictSystemAdmin()]
         if self.action in ['bulk_onboard_staff', 'onboard_single_staff']:
             return [permissions.IsAuthenticated(), (IsAdmin | IsPlatformCoordinator)()]
+        if self.action in ['ciu_cleared_students', 'sync_clearance']:
+            return [permissions.IsAuthenticated(), (IsAdmin | IsPlatformCoordinator | IsAccountsPersonnel)()]
         return [permissions.IsAuthenticated(), (IsAdmin | IsPlatformCoordinator)()]
 
     def perform_content_negotiation(self, request, force=False):
@@ -446,6 +448,20 @@ class AdminUserViewSet(viewsets.ModelViewSet):
                 qs = qs.filter(semester=int(semester_param))
             except (ValueError, TypeError):
                 pass
+
+        acad_param = self.request.query_params.get('academic_year') or self.request.query_params.get('acad_year') or self.request.query_params.get('acad')
+        if acad_param and acad_param not in ['All', 'ALL']:
+            qs = qs.filter(academic_year__iexact=acad_param.strip())
+
+        clearance_param = self.request.query_params.get('clearance_level') or self.request.query_params.get('clearance') or self.request.query_params.get('tuition_level')
+        if clearance_param and clearance_param not in ['All', 'ALL']:
+            val = str(clearance_param).strip().lower().replace('%', '')
+            if val in ['0', 'barred', 'uncleared']:
+                qs = qs.filter(tuition_paid_percentage__lt=50.0)
+            elif val in ['50', 'tests']:
+                qs = qs.filter(tuition_paid_percentage__gte=50.0, tuition_paid_percentage__lt=100.0)
+            elif val in ['100', 'cleared', 'exams']:
+                qs = qs.filter(tuition_paid_percentage__gte=100.0)
 
         entry_year_param = self.request.query_params.get('entry_year')
         if entry_year_param and entry_year_param != 'All':
@@ -484,15 +500,55 @@ class AdminUserViewSet(viewsets.ModelViewSet):
             qs = qs.filter(course_filter).distinct()
 
         if user.role == 'student':
-            student_courses = Course.objects.filter(
-                models.Q(applications__student=user, applications__status='approved') |
+            student_fac = user.faculty
+            assigned_courses_qs = Course.objects.filter(
                 models.Q(assigned_students=user) |
-                models.Q(faculty=user.faculty)
+                models.Q(applications__student=user, applications__status='approved')
             ).distinct()
-            return User.objects.filter(
-                role='lecturer',
-                assigned_course_units__course__in=student_courses
-            ).distinct().order_by('-date_joined')
+            if assigned_courses_qs.exists():
+                student_courses = assigned_courses_qs
+            elif student_fac:
+                student_courses = Course.objects.filter(faculty=student_fac).distinct()
+            else:
+                student_courses = Course.objects.none()
+
+            student_scope = (
+                models.Q(role='lecturer', assigned_course_units__course__in=student_courses) |
+                (models.Q(role='lecturer', faculty=student_fac) if student_fac else models.Q()) |
+                (models.Q(role__in=['dean', 'faculty_admin', 'faculty_secretary'], managed_faculties=student_fac) if student_fac else models.Q()) |
+                (models.Q(role__in=['dean', 'faculty_admin', 'faculty_secretary'], administered_faculties=student_fac) if student_fac else models.Q()) |
+                (models.Q(role__in=['dean', 'faculty_admin', 'faculty_secretary'], faculty=student_fac) if student_fac else models.Q())
+            )
+            qs = qs.filter(student_scope)
+
+            if role_param:
+                if role_param == 'lecturer':
+                    qs = qs.filter(
+                        models.Q(role='lecturer'),
+                        models.Q(assigned_course_units__course__in=student_courses) | (models.Q(faculty=student_fac) if student_fac else models.Q())
+                    )
+                elif role_param == 'dean':
+                    if not student_fac:
+                        return User.objects.none()
+                    qs = qs.filter(
+                        role='dean'
+                    ).filter(
+                        models.Q(managed_faculties=student_fac) | models.Q(faculty=student_fac)
+                    )
+                elif role_param in ['faculty_admin', 'faculty_secretary']:
+                    if not student_fac:
+                        return User.objects.none()
+                    qs = qs.filter(
+                        role__in=['faculty_admin', 'faculty_secretary']
+                    ).filter(
+                        models.Q(administered_faculties=student_fac) | models.Q(faculty=student_fac)
+                    )
+                elif role_param == 'student':
+                    qs = qs.filter(id=user.id)
+                else:
+                    return User.objects.none()
+
+            return qs.distinct().order_by('-date_joined')
         elif user.role in ['dean', 'faculty_admin', 'faculty_secretary']:
             assigned_facs = get_user_assigned_faculties(user)
             return qs.filter(
@@ -1800,21 +1856,40 @@ class AdminUserViewSet(viewsets.ModelViewSet):
                         'is_db_matched': False
                     })
 
+        clearance_filter_param = (request.query_params.get('clearance_level') or request.query_params.get('clearance') or '').strip().lower().replace('%', '')
+
         faculties_map = {}
         for student in students:
+            clearance = check_student_clearance(student, acad=acad, sem=sem)
+            eff_pct = clearance['tuition_paid_percentage']
+            if clearance['is_exam_cleared'] or eff_pct >= 100.0:
+                clevel = 100
+            elif clearance['is_test_cleared'] or eff_pct >= 50.0:
+                clevel = 50
+            else:
+                clevel = 0
+
+            if clearance_filter_param:
+                if clearance_filter_param in ['0', 'barred', 'uncleared'] and clevel != 0:
+                    continue
+                elif clearance_filter_param in ['50', 'tests'] and clevel != 50:
+                    continue
+                elif clearance_filter_param in ['100', 'cleared', 'exams'] and clevel != 100:
+                    continue
+
             f_name = student.faculty.name if student.faculty else 'General / Unassigned'
             f_code = student.faculty.code if student.faculty else 'SOBAT'
             if f_name not in faculties_map:
                 faculties_map[f_name] = {'code': f_code, 'students': []}
-            
-            clearance = check_student_clearance(student, acad=acad, sem=sem)
+
             faculties_map[f_name]['students'].append({
                 'id': student.id,
                 'username': student.username,
                 'full_name': student.get_full_name() or student.username,
                 'email': student.email,
                 'reg_number': student.reg_number or student.registration_number,
-                'tuition_paid_percentage': clearance['tuition_paid_percentage'],
+                'tuition_paid_percentage': eff_pct,
+                'clearance_level': clevel,
                 'is_exam_cleared': clearance['is_exam_cleared'],
                 'is_test_cleared': clearance['is_test_cleared'],
                 'is_api_cleared': clearance['is_api_cleared'],
@@ -1830,7 +1905,8 @@ class AdminUserViewSet(viewsets.ModelViewSet):
             'exams_total_count': exams_count,
             'tests_total_count': tests_count,
             'acad_year': acad,
-            'semester': sem
+            'semester': sem,
+            'clearance_level': clearance_filter_param or 'ALL'
         })
 
 # 4b. Invitation Management ViewSet
@@ -1897,6 +1973,17 @@ class FacultyViewSet(viewsets.ModelViewSet):
             return Faculty.objects.filter(
                 models.Q(courses__units__lecturers=user) | models.Q(id=user.faculty_id)
             ).distinct().order_by('code')
+        if user.role == 'student':
+            student_fac_ids = set()
+            if user.faculty_id:
+                student_fac_ids.add(user.faculty_id)
+            for c in user.assigned_courses.all():
+                if c.faculty_id:
+                    student_fac_ids.add(c.faculty_id)
+            for app in user.course_applications.filter(status='approved').select_related('course'):
+                if app.course and app.course.faculty_id:
+                    student_fac_ids.add(app.course.faculty_id)
+            return Faculty.objects.filter(id__in=student_fac_ids).order_by('code')
         return Faculty.objects.all().order_by('code')
 
     def get_permissions(self):
@@ -2015,6 +2102,16 @@ class CourseViewSet(viewsets.ModelViewSet):
             qs = Course.objects.filter(
                 models.Q(units__lecturers=user) | models.Q(faculty=user.faculty)
             ).distinct()
+        elif user.role == 'student':
+            assigned_courses_qs = Course.objects.filter(
+                models.Q(assigned_students=user) | models.Q(applications__student=user, applications__status='approved')
+            ).distinct()
+            if assigned_courses_qs.exists():
+                qs = assigned_courses_qs
+            elif user.faculty_id:
+                qs = Course.objects.filter(faculty_id=user.faculty_id).distinct()
+            else:
+                qs = Course.objects.none()
         else:
             qs = Course.objects.all()
 
@@ -2254,11 +2351,18 @@ class CourseUnitViewSet(viewsets.ModelViewSet):
             assigned_facs = get_user_assigned_faculties(user)
             qs = CourseUnit.objects.filter(course__faculty__in=assigned_facs)
         elif user.role == 'student':
-            student_courses = Course.objects.filter(
-                models.Q(applications__student=user, applications__status='approved') |
-                models.Q(assigned_students=user) |
-                models.Q(faculty=user.faculty)
-            ).distinct()
+            if user.assigned_courses.exists():
+                student_courses = Course.objects.filter(
+                    models.Q(assigned_students=user) |
+                    models.Q(applications__student=user, applications__status='approved')
+                ).distinct()
+            elif user.faculty_id:
+                student_courses = Course.objects.filter(
+                    models.Q(faculty_id=user.faculty_id) |
+                    models.Q(applications__student=user, applications__status='approved')
+                ).distinct()
+            else:
+                student_courses = Course.objects.none()
             qs = CourseUnit.objects.filter(course__in=student_courses)
         elif user.role == 'lecturer':
             qs = CourseUnit.objects.filter(
@@ -2294,6 +2398,17 @@ class CourseUnitViewSet(viewsets.ModelViewSet):
                 qs = qs.filter(semester=int(semester_param.strip()))
             except (ValueError, TypeError):
                 pass
+
+        lecturer_param = self.request.query_params.get('lecturer') or self.request.query_params.get('lecturer_id')
+        if lecturer_param and str(lecturer_param).strip() and str(lecturer_param).strip() != 'All':
+            if str(lecturer_param).strip().isdigit():
+                qs = qs.filter(lecturers__id=int(lecturer_param.strip()))
+            else:
+                qs = qs.filter(
+                    models.Q(lecturers__username__iexact=str(lecturer_param).strip()) |
+                    models.Q(lecturers__first_name__icontains=str(lecturer_param).strip()) |
+                    models.Q(lecturers__last_name__icontains=str(lecturer_param).strip())
+                )
 
         return qs.select_related('course', 'course__faculty').prefetch_related('lecturers').order_by('year_of_study', 'semester', 'code')
 
@@ -2787,9 +2902,13 @@ class ExamViewSet(viewsets.ModelViewSet):
         user = self.request.user
         if not user or not user.is_authenticated:
             return Exam.objects.none()
+
+        acad_param = self.request.query_params.get('academic_year') or self.request.query_params.get('acad')
+        sem_param = self.request.query_params.get('semester') or self.request.query_params.get('sem')
+
         if user.role in ['dean', 'faculty_admin', 'faculty_secretary']:
             assigned_facs = get_user_assigned_faculties(user)
-            return Exam.objects.filter(
+            qs = Exam.objects.filter(
                 models.Q(course__faculty__in=assigned_facs) | models.Q(course_unit__course__faculty__in=assigned_facs)
             ).distinct().order_by('-created_at')
         elif user.role == 'student':
@@ -2798,22 +2917,77 @@ class ExamViewSet(viewsets.ModelViewSet):
             else:
                 student_courses = Course.objects.filter(
                     models.Q(applications__student=user, applications__status='approved') |
-                    models.Q(faculty=user.faculty)
+                    (models.Q(faculty=user.faculty) if user.faculty else models.Q())
                 ).distinct()
             student_year = getattr(user, 'year_of_study', 1) or 1
-            return Exam.objects.filter(
+            student_sem = getattr(user, 'semester', 1) or 1
+            student_acad = getattr(user, 'academic_year', '2026/2027') or '2026/2027'
+            qs = Exam.objects.filter(
                 models.Q(is_active=True) | models.Q(is_published=True),
                 course__in=student_courses
             ).filter(
                 models.Q(year_of_study=student_year) | models.Q(year_of_study=0) | models.Q(course_unit__year_of_study=student_year)
+            ).filter(
+                models.Q(semester=student_sem) | models.Q(semester=0) | models.Q(course_unit__semester=student_sem)
+            ).filter(
+                models.Q(academic_year__iexact=student_acad) | models.Q(academic_year__isnull=True) | models.Q(academic_year__iexact='All') | models.Q(academic_year='')
             ).order_by('-created_at')
         elif user.role == 'lecturer':
-            return Exam.objects.filter(
+            qs = Exam.objects.filter(
                 models.Q(lecturer=user) |
                 models.Q(course__units__lecturers=user) |
                 models.Q(course_unit__lecturers=user)
             ).distinct().order_by('-created_at')
-        return Exam.objects.all().order_by('-created_at')
+        else:
+            qs = Exam.objects.all().order_by('-created_at')
+
+        if acad_param and acad_param not in ['All', 'ALL']:
+            qs = qs.filter(models.Q(academic_year__iexact=acad_param.strip()) | models.Q(academic_year='All') | models.Q(academic_year__isnull=True))
+        if sem_param and sem_param not in ['All', 'ALL']:
+            try:
+                s_int = int(sem_param)
+                qs = qs.filter(models.Q(semester=s_int) | models.Q(semester=0))
+            except (ValueError, TypeError):
+                pass
+
+        course_param = self.request.query_params.get('course') or self.request.query_params.get('course_id')
+        if course_param and str(course_param).strip() and str(course_param).strip() != 'All':
+            if str(course_param).strip().isdigit():
+                qs = qs.filter(course_id=int(course_param.strip()))
+            else:
+                qs = qs.filter(course__code__iexact=str(course_param).strip())
+
+        faculty_param = self.request.query_params.get('faculty')
+        if faculty_param and str(faculty_param).strip() and str(faculty_param).strip() != 'All':
+            if str(faculty_param).strip().isdigit():
+                qs = qs.filter(course__faculty_id=int(faculty_param.strip()))
+            else:
+                qs = qs.filter(course__faculty__code__iexact=str(faculty_param).strip())
+
+        lecturer_param = self.request.query_params.get('lecturer') or self.request.query_params.get('lecturer_id')
+        if lecturer_param and str(lecturer_param).strip() and str(lecturer_param).strip() != 'All':
+            if str(lecturer_param).strip().isdigit():
+                qs = qs.filter(lecturer_id=int(lecturer_param.strip()))
+            else:
+                qs = qs.filter(
+                    models.Q(lecturer__username__iexact=str(lecturer_param).strip()) |
+                    models.Q(lecturer__first_name__icontains=str(lecturer_param).strip()) |
+                    models.Q(lecturer__last_name__icontains=str(lecturer_param).strip())
+                )
+
+        search_param = self.request.query_params.get('search')
+        if search_param and str(search_param).strip():
+            s_val = str(search_param).strip()
+            qs = qs.filter(
+                models.Q(title__icontains=s_val) |
+                models.Q(course__code__icontains=s_val) |
+                models.Q(course__name__icontains=s_val) |
+                models.Q(lecturer__username__icontains=s_val) |
+                models.Q(lecturer__first_name__icontains=s_val) |
+                models.Q(lecturer__last_name__icontains=s_val)
+            )
+
+        return qs
 
     def perform_create(self, serializer):
         user = self.request.user
@@ -2822,6 +2996,7 @@ class ExamViewSet(viewsets.ModelViewSet):
         
         course_unit = serializer.validated_data.get('course_unit')
         year_of_study = serializer.validated_data.get('year_of_study', 0)
+        semester = serializer.validated_data.get('semester', 0)
         target_course_ids = self.request.data.get('target_course_ids', [])
         target_years = self.request.data.get('target_years', [])
 
@@ -2829,8 +3004,11 @@ class ExamViewSet(viewsets.ModelViewSet):
         if user.role not in ['admin', 'platform_coordinator'] and year_of_study == 0 and not course_unit:
             raise serializers.ValidationError({"detail": "Permission Denied: Only System Administrators and Platform Coordinators can set exams for All Course Units & All Years (Year 0). Please select an assigned course unit and specific year of study."})
         
-        if course_unit and (year_of_study == 0 or 'year_of_study' not in serializer.validated_data):
-            serializer.validated_data['year_of_study'] = course_unit.year_of_study
+        if course_unit:
+            if year_of_study == 0 or 'year_of_study' not in serializer.validated_data:
+                serializer.validated_data['year_of_study'] = course_unit.year_of_study
+            if semester == 0 or 'semester' not in serializer.validated_data:
+                serializer.validated_data['semester'] = course_unit.semester
 
         if user.role == 'lecturer':
             course = serializer.validated_data.get('course')
@@ -3093,7 +3271,9 @@ class ExamViewSet(viewsets.ModelViewSet):
         student = request.user
 
         # Fee Gate: Exam requires 100% full tuition clearance or CIU Cleared Students API verification!
-        clearance = check_student_clearance(student, examtype="EXAMS")
+        acad = getattr(exam, 'academic_year', None) or getattr(student, 'academic_year', '2026/2027') or '2026/2027'
+        sem = str(exam.semester if exam.semester in [1, 2] else (student.semester or 1))
+        clearance = check_student_clearance(student, examtype="EXAMS", acad=acad, sem=sem)
         if not clearance['is_exam_cleared']:
             return Response({
                 'detail': f"Exam Access Denied: 100% tuition clearance or CIU Cleared Students API verification is required to sit for final examinations. Current clearance: {clearance['tuition_paid_percentage']}% ({clearance['source']})."
@@ -3320,9 +3500,13 @@ class TestViewSet(viewsets.ModelViewSet):
         user = self.request.user
         if not user or not user.is_authenticated:
             return Test.objects.none()
+
+        acad_param = self.request.query_params.get('academic_year') or self.request.query_params.get('acad')
+        sem_param = self.request.query_params.get('semester') or self.request.query_params.get('sem')
+
         if user.role in ['dean', 'faculty_admin', 'faculty_secretary']:
             assigned_facs = get_user_assigned_faculties(user)
-            return Test.objects.filter(
+            qs = Test.objects.filter(
                 models.Q(course__faculty__in=assigned_facs) | models.Q(course_unit__course__faculty__in=assigned_facs)
             ).distinct().order_by('-created_at')
         elif user.role == 'student':
@@ -3331,22 +3515,81 @@ class TestViewSet(viewsets.ModelViewSet):
             else:
                 student_courses = Course.objects.filter(
                     models.Q(applications__student=user, applications__status='approved') |
-                    models.Q(faculty=user.faculty)
+                    (models.Q(faculty=user.faculty) if user.faculty else models.Q())
                 ).distinct()
             student_year = getattr(user, 'year_of_study', 1) or 1
-            return Test.objects.filter(
+            student_sem = getattr(user, 'semester', 1) or 1
+            student_acad = getattr(user, 'academic_year', '2026/2027') or '2026/2027'
+            qs = Test.objects.filter(
                 is_published=True,
                 course__in=student_courses
             ).filter(
                 models.Q(year_of_study=student_year) | models.Q(year_of_study=0) | models.Q(course_unit__year_of_study=student_year)
+            ).filter(
+                models.Q(semester=student_sem) | models.Q(semester=0) | models.Q(course_unit__semester=student_sem)
+            ).filter(
+                models.Q(academic_year__iexact=student_acad) | models.Q(academic_year__isnull=True) | models.Q(academic_year__iexact='All') | models.Q(academic_year='')
             ).order_by('-created_at')
         elif user.role == 'lecturer':
-            return Test.objects.filter(
+            qs = Test.objects.filter(
                 models.Q(lecturer=user) |
                 models.Q(course__units__lecturers=user) |
                 models.Q(course_unit__lecturers=user)
             ).distinct().order_by('-created_at')
-        return Test.objects.all().order_by('-created_at')
+        else:
+            qs = Test.objects.all().order_by('-created_at')
+
+        if acad_param and acad_param not in ['All', 'ALL']:
+            qs = qs.filter(models.Q(academic_year__iexact=acad_param.strip()) | models.Q(academic_year='All') | models.Q(academic_year__isnull=True))
+        if sem_param and sem_param not in ['All', 'ALL']:
+            try:
+                s_int = int(sem_param)
+                qs = qs.filter(models.Q(semester=s_int) | models.Q(semester=0))
+            except (ValueError, TypeError):
+                pass
+
+        course_param = self.request.query_params.get('course') or self.request.query_params.get('course_id')
+        if course_param and str(course_param).strip() and str(course_param).strip() != 'All':
+            if str(course_param).strip().isdigit():
+                qs = qs.filter(course_id=int(course_param.strip()))
+            else:
+                qs = qs.filter(course__code__iexact=str(course_param).strip())
+
+        faculty_param = self.request.query_params.get('faculty')
+        if faculty_param and str(faculty_param).strip() and str(faculty_param).strip() != 'All':
+            if str(faculty_param).strip().isdigit():
+                qs = qs.filter(course__faculty_id=int(faculty_param.strip()))
+            else:
+                qs = qs.filter(course__faculty__code__iexact=str(faculty_param).strip())
+
+        category_param = self.request.query_params.get('category')
+        if category_param and str(category_param).strip() and str(category_param).strip() != 'All':
+            qs = qs.filter(category__iexact=str(category_param).strip())
+
+        lecturer_param = self.request.query_params.get('lecturer') or self.request.query_params.get('lecturer_id')
+        if lecturer_param and str(lecturer_param).strip() and str(lecturer_param).strip() != 'All':
+            if str(lecturer_param).strip().isdigit():
+                qs = qs.filter(lecturer_id=int(lecturer_param.strip()))
+            else:
+                qs = qs.filter(
+                    models.Q(lecturer__username__iexact=str(lecturer_param).strip()) |
+                    models.Q(lecturer__first_name__icontains=str(lecturer_param).strip()) |
+                    models.Q(lecturer__last_name__icontains=str(lecturer_param).strip())
+                )
+
+        search_param = self.request.query_params.get('search')
+        if search_param and str(search_param).strip():
+            s_val = str(search_param).strip()
+            qs = qs.filter(
+                models.Q(title__icontains=s_val) |
+                models.Q(course__code__icontains=s_val) |
+                models.Q(course__name__icontains=s_val) |
+                models.Q(lecturer__username__icontains=s_val) |
+                models.Q(lecturer__first_name__icontains=s_val) |
+                models.Q(lecturer__last_name__icontains=s_val)
+            )
+
+        return qs
 
     def perform_create(self, serializer):
         user = self.request.user
@@ -3355,6 +3598,7 @@ class TestViewSet(viewsets.ModelViewSet):
         
         course_unit = serializer.validated_data.get('course_unit')
         year_of_study = serializer.validated_data.get('year_of_study', 0)
+        semester = serializer.validated_data.get('semester', 0)
         target_course_ids = self.request.data.get('target_course_ids', [])
         target_years = self.request.data.get('target_years', [])
 
@@ -3362,8 +3606,11 @@ class TestViewSet(viewsets.ModelViewSet):
         if user.role not in ['admin', 'platform_coordinator'] and year_of_study == 0 and not course_unit:
             raise serializers.ValidationError({"detail": "Permission Denied: Only System Administrators and Platform Coordinators can set tests for All Course Units & All Years (Year 0). Please select an assigned course unit and specific year of study."})
         
-        if course_unit and (year_of_study == 0 or 'year_of_study' not in serializer.validated_data):
-            serializer.validated_data['year_of_study'] = course_unit.year_of_study
+        if course_unit:
+            if year_of_study == 0 or 'year_of_study' not in serializer.validated_data:
+                serializer.validated_data['year_of_study'] = course_unit.year_of_study
+            if semester == 0 or 'semester' not in serializer.validated_data:
+                serializer.validated_data['semester'] = course_unit.semester
 
         if user.role == 'lecturer':
             course = serializer.validated_data.get('course')
@@ -3679,7 +3926,9 @@ class TestViewSet(viewsets.ModelViewSet):
         student = request.user
 
         # Fee Gate: Test requires at least 50% tuition clearance or CIU Cleared Students API verification!
-        clearance = check_student_clearance(student, examtype="TESTS")
+        acad = getattr(test_obj, 'academic_year', None) or getattr(student, 'academic_year', '2026/2027') or '2026/2027'
+        sem = str(test_obj.semester if test_obj.semester in [1, 2] else (student.semester or 1))
+        clearance = check_student_clearance(student, examtype="TESTS", acad=acad, sem=sem)
         if not clearance['is_test_cleared']:
             return Response({
                 'detail': f"Test Access Denied: At least 50% tuition fee clearance or CIU Cleared Students API verification is required to access quizzes and tests. Current clearance: {clearance['tuition_paid_percentage']}% ({clearance['source']})."
@@ -3915,8 +4164,41 @@ class TestAttemptViewSet(viewsets.ReadOnlyModelViewSet):
 
 # 11. Class Content ViewSet
 class ClassContentViewSet(viewsets.ModelViewSet):
-    queryset = ClassContent.objects.all().order_by('-created_at')
     serializer_class = ClassContentSerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        if not user or not user.is_authenticated:
+            return ClassContent.objects.none()
+        if user.role == 'student':
+            student_courses = Course.objects.none()
+            if user.assigned_courses.exists():
+                student_courses = user.assigned_courses.all()
+            elif user.faculty_id:
+                student_courses = Course.objects.filter(
+                    models.Q(faculty_id=user.faculty_id) |
+                    models.Q(applications__student=user, applications__status='approved')
+                ).distinct()
+            qs = ClassContent.objects.filter(course__in=student_courses)
+        elif user.role == 'lecturer':
+            qs = ClassContent.objects.filter(
+                models.Q(lecturer=user) |
+                models.Q(course__units__lecturers=user)
+            ).distinct()
+        elif user.role in ['dean', 'faculty_admin', 'faculty_secretary']:
+            assigned_facs = get_user_assigned_faculties(user)
+            qs = ClassContent.objects.filter(course__faculty__in=assigned_facs).distinct()
+        else:
+            qs = ClassContent.objects.all()
+
+        course_param = self.request.query_params.get('course')
+        if course_param and str(course_param).strip() and str(course_param).strip() != 'All':
+            if str(course_param).strip().isdigit():
+                qs = qs.filter(course_id=int(course_param.strip()))
+            else:
+                qs = qs.filter(course__code__iexact=str(course_param).strip())
+
+        return qs.select_related('course', 'lecturer').order_by('-created_at')
 
     def get_permissions(self):
         if self.action in ['list', 'retrieve']:
@@ -3938,8 +4220,18 @@ class AttendanceSessionViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
+        if not user or not user.is_authenticated:
+            return AttendanceSession.objects.none()
         if user.role == 'student':
-            return AttendanceSession.objects.filter(is_active=True).order_by('-created_at')
+            student_courses = Course.objects.none()
+            if user.assigned_courses.exists():
+                student_courses = user.assigned_courses.all()
+            elif user.faculty_id:
+                student_courses = Course.objects.filter(
+                    models.Q(faculty_id=user.faculty_id) |
+                    models.Q(applications__student=user, applications__status='approved')
+                ).distinct()
+            return AttendanceSession.objects.filter(is_active=True, course__in=student_courses).order_by('-created_at')
         elif user.role == 'lecturer':
             return AttendanceSession.objects.filter(lecturer=user).order_by('-created_at')
         return AttendanceSession.objects.all().order_by('-created_at')
@@ -4004,6 +4296,31 @@ class ReportsViewSet(viewsets.ViewSet):
             total_exam_timetables = ExamTimetable.objects.filter(
                 models.Q(faculty__in=assigned_facs) | models.Q(course__faculty__in=assigned_facs)
             ).distinct().count()
+        elif user.role == 'student':
+            student_facs = Faculty.objects.filter(id=user.faculty_id) if user.faculty_id else Faculty.objects.none()
+            if user.assigned_courses.exists():
+                student_courses = user.assigned_courses.all()
+            else:
+                student_courses = Course.objects.filter(
+                    models.Q(applications__student=user, applications__status='approved') |
+                    (models.Q(faculty=user.faculty) if user.faculty else models.Q())
+                ).distinct()
+            student_qs = User.objects.filter(id=user.id)
+            lecturer_qs = User.objects.filter(
+                role='lecturer',
+                assigned_course_units__course__in=student_courses
+            ).distinct()
+            total_students = 1
+            total_lecturers = lecturer_qs.count()
+            total_faculties = student_facs.count()
+            total_courses = student_courses.count()
+            total_course_units = CourseUnit.objects.filter(course__in=student_courses).count()
+            total_exams = Exam.objects.filter(course__in=student_courses, is_published=True).count()
+            approved_exams = Exam.objects.filter(course__in=student_courses, is_approved_by_dean=True).count()
+            total_tests = Test.objects.filter(course__in=student_courses, is_published=True).count()
+            published_tests = total_tests
+            total_class_timetables = ClassTimetable.objects.filter(course__in=student_courses).count()
+            total_exam_timetables = ExamTimetable.objects.filter(course__in=student_courses).count()
         else:
             student_qs = User.objects.filter(role='student')
             total_students = student_qs.count()
@@ -4024,7 +4341,10 @@ class ReportsViewSet(viewsets.ViewSet):
         exam_attempts = ExamAttempt.objects.filter(completed_at__isnull=False)
         test_attempts = TestAttempt.objects.filter(completed_at__isnull=False)
 
-        if user.role in ['dean', 'faculty_admin', 'faculty_secretary']:
+        if user.role == 'student':
+            exam_attempts = exam_attempts.filter(student=user)
+            test_attempts = test_attempts.filter(student=user)
+        elif user.role in ['dean', 'faculty_admin', 'faculty_secretary']:
             assigned_facs = get_user_assigned_faculties(user)
             exam_attempts = exam_attempts.filter(
                 models.Q(exam__course__faculty__in=assigned_facs) | models.Q(student__faculty__in=assigned_facs)
@@ -4207,23 +4527,29 @@ class ClassTimetableViewSet(viewsets.ModelViewSet):
 
         course_id = self.request.query_params.get('course')
         course_code = self.request.query_params.get('course_code')
-        if course_id:
-            return qs.filter(course_id=course_id)
-        if course_code:
-            return qs.filter(course__code__iexact=course_code)
 
         if user.role == 'student':
             student_year = getattr(user, 'year_of_study', 1) or 1
-            approved_courses = Course.objects.filter(applications__student=user, applications__status='approved')
-            if approved_courses.exists():
-                return qs.filter(course__in=approved_courses).filter(models.Q(year_of_study=student_year) | models.Q(year_of_study=0))
-            default_course = Course.objects.filter(code='BIT2026').first()
-            if default_course:
-                return qs.filter(course=default_course).filter(models.Q(year_of_study=student_year) | models.Q(year_of_study=0))
-            if user.faculty:
-                return qs.filter(faculty=user.faculty).filter(models.Q(year_of_study=student_year) | models.Q(year_of_study=0))
+            if user.assigned_courses.exists():
+                student_courses = user.assigned_courses.all()
+            else:
+                student_courses = Course.objects.filter(
+                    models.Q(applications__student=user, applications__status='approved') |
+                    (models.Q(faculty=user.faculty) if user.faculty else models.Q())
+                ).distinct()
+            qs = qs.filter(course__in=student_courses).filter(models.Q(year_of_study=student_year) | models.Q(year_of_study=0))
+            if course_id:
+                qs = qs.filter(course_id=course_id)
+            if course_code:
+                qs = qs.filter(course__code__iexact=course_code)
+            return qs
 
-        elif user.role == 'dean':
+        if course_id:
+            qs = qs.filter(course_id=course_id)
+        if course_code:
+            qs = qs.filter(course__code__iexact=course_code)
+
+        if user.role == 'dean':
             dean_faculty = user.faculty or (user.managed_faculties.first() if hasattr(user, 'managed_faculties') else None)
             if dean_faculty:
                 return qs.filter(models.Q(faculty=dean_faculty) | models.Q(course__faculty=dean_faculty)).distinct()
@@ -4265,21 +4591,27 @@ class ExamTimetableViewSet(viewsets.ModelViewSet):
 
         course_id = self.request.query_params.get('course')
         course_code = self.request.query_params.get('course_code')
-        if course_id:
-            return qs.filter(course_id=course_id)
-        if course_code:
-            return qs.filter(course__code__iexact=course_code)
 
         if user.role == 'student':
             student_year = getattr(user, 'year_of_study', 1) or 1
-            approved_courses = Course.objects.filter(applications__student=user, applications__status='approved')
-            if approved_courses.exists():
-                return qs.filter(course__in=approved_courses).filter(models.Q(year_of_study=student_year) | models.Q(year_of_study=0))
-            default_course = Course.objects.filter(code='BIT2026').first()
-            if default_course:
-                return qs.filter(course=default_course).filter(models.Q(year_of_study=student_year) | models.Q(year_of_study=0))
-            if user.faculty:
-                return qs.filter(faculty=user.faculty).filter(models.Q(year_of_study=student_year) | models.Q(year_of_study=0))
+            if user.assigned_courses.exists():
+                student_courses = user.assigned_courses.all()
+            else:
+                student_courses = Course.objects.filter(
+                    models.Q(applications__student=user, applications__status='approved') |
+                    (models.Q(faculty=user.faculty) if user.faculty else models.Q())
+                ).distinct()
+            qs = qs.filter(course__in=student_courses).filter(models.Q(year_of_study=student_year) | models.Q(year_of_study=0))
+            if course_id:
+                qs = qs.filter(course_id=course_id)
+            if course_code:
+                qs = qs.filter(course__code__iexact=course_code)
+            return qs
+
+        if course_id:
+            qs = qs.filter(course_id=course_id)
+        if course_code:
+            qs = qs.filter(course__code__iexact=course_code)
 
         elif user.role == 'dean':
             dean_faculty = user.faculty or (user.managed_faculties.first() if hasattr(user, 'managed_faculties') else None)

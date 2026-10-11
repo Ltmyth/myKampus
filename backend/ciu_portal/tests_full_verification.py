@@ -9,7 +9,7 @@ django.setup()
 
 
 from django.utils import timezone
-from ciu_portal.models import User, Faculty, Course, Test, TestQuestion, TestAttempt, TemporaryClearance, QuestionBank, QuestionBankItem, SystemLog
+from ciu_portal.models import User, Faculty, Course, Test, Exam, TestQuestion, TestAttempt, TemporaryClearance, QuestionBank, QuestionBankItem, SystemLog
 from ciu_portal.clearance import check_student_clearance
 
 def run_tests():
@@ -878,6 +878,384 @@ def run_tests():
     assert resp_t_unc.status_code == 403, f"Uncleared student must be barred from tests! Got {resp_t_unc.status_code}"
     assert '50%' in resp_t_unc.data['detail'], f"Expected 50% in message: {resp_t_unc.data['detail']}"
     print("✓ Uncleared student is correctly barred from tests with 403 Forbidden.")
+
+    # 11. Testing Semester 1 & 2 Live API Clearance, 3-Tier Clearance Levels, and Student Scoping
+    print("\n--- 11. Testing Semester & Academic Year Clearance & Scoping ---")
+    from ciu_portal.views import AdminUserViewSet, ExamViewSet, TestViewSet
+
+    view_admin_cleared = AdminUserViewSet.as_view({'get': 'ciu_cleared_students'})
+    view_admin_users = AdminUserViewSet.as_view({'get': 'list'})
+    view_admin_sync = AdminUserViewSet.as_view({'post': 'sync_clearance'})
+    view_exam_list = ExamViewSet.as_view({'get': 'list'})
+    view_test_list = TestViewSet.as_view({'get': 'list'})
+
+    # 11a. Test live CIU clearance endpoint with acad and sem parameters
+    req_sem1 = factory.get('/admin/users/ciu_cleared_students/?examtype=TESTS&acad=2026/2027&sem=1')
+    force_authenticate(req_sem1, user=accounts_user)
+    resp_sem1 = view_admin_cleared(req_sem1)
+    assert resp_sem1.status_code == 200, f"Expected 200, got {resp_sem1.status_code}"
+    assert resp_sem1.data['acad_year'] == '2026/2027'
+    assert resp_sem1.data['semester'] == '1'
+    print("✓ Live CIU Cleared Students API filters correctly for 2026/2027 Semester 1.")
+
+    req_sem2 = factory.get('/admin/users/ciu_cleared_students/?examtype=EXAMS&acad=2026/2027&sem=2')
+    force_authenticate(req_sem2, user=accounts_user)
+    resp_sem2 = view_admin_cleared(req_sem2)
+    assert resp_sem2.status_code == 200, f"Expected 200, got {resp_sem2.status_code}"
+    assert resp_sem2.data['acad_year'] == '2026/2027'
+    assert resp_sem2.data['semester'] == '2'
+    print("✓ Live CIU Cleared Students API filters correctly for 2026/2027 Semester 2.")
+
+    # 11b. Test filtering students by 3 clearance levels (0%, 50%, 100%)
+    User.objects.filter(username__in=['st_level_0', 'st_level_50', 'st_level_100']).delete()
+    st_0 = User.objects.create_user(
+        username='st_level_0', email='st0@ciu.ac.ug', role='student',
+        reg_number='CIU/2026/L0', tuition_paid_percentage=20.0, semester=1, academic_year='2026/2027', faculty=fac_sci
+    )
+    st_50 = User.objects.create_user(
+        username='st_level_50', email='st50@ciu.ac.ug', role='student',
+        reg_number='CIU/2026/L50', tuition_paid_percentage=65.0, semester=1, academic_year='2026/2027', faculty=fac_sci
+    )
+    st_100 = User.objects.create_user(
+        username='st_level_100', email='st100@ciu.ac.ug', role='student',
+        reg_number='CIU/2026/L100', tuition_paid_percentage=100.0, semester=2, academic_year='2026/2027', faculty=fac_sci
+    )
+
+    # Test Admin users list with clearance_level=0
+    req_cl0 = factory.get('/admin/users/?clearance_level=0')
+    force_authenticate(req_cl0, user=admin_user)
+    resp_cl0 = view_admin_users(req_cl0)
+    cl0_ids = [u['id'] for u in resp_cl0.data]
+    assert st_0.id in cl0_ids, "st_0 should be in 0% clearance level list"
+    assert st_50.id not in cl0_ids, "st_50 should not be in 0% clearance level list"
+    assert st_100.id not in cl0_ids, "st_100 should not be in 0% clearance level list"
+    print("✓ Users Directory successfully filters 0% barred/uncleared students.")
+
+    # Test Admin users list with clearance_level=50
+    req_cl50 = factory.get('/admin/users/?clearance_level=50')
+    force_authenticate(req_cl50, user=admin_user)
+    resp_cl50 = view_admin_users(req_cl50)
+    cl50_ids = [u['id'] for u in resp_cl50.data]
+    assert st_50.id in cl50_ids, "st_50 should be in 50% clearance level list"
+    assert st_0.id not in cl50_ids, "st_0 should not be in 50% clearance level list"
+    assert st_100.id not in cl50_ids, "st_100 should not be in 50% clearance level list"
+    print("✓ Users Directory successfully filters 50% cleared (tests only) students.")
+
+    # Test Admin users list with clearance_level=100
+    req_cl100 = factory.get('/admin/users/?clearance_level=100')
+    force_authenticate(req_cl100, user=admin_user)
+    resp_cl100 = view_admin_users(req_cl100)
+    cl100_ids = [u['id'] for u in resp_cl100.data]
+    assert st_100.id in cl100_ids, "st_100 should be in 100% clearance level list"
+    assert st_0.id not in cl100_ids, "st_0 should not be in 100% clearance level list"
+    assert st_50.id not in cl100_ids, "st_50 should not be in 100% clearance level list"
+    print("✓ Users Directory successfully filters 100% fully cleared students.")
+
+    # Test ciu_cleared_students with clearance_level parameter
+    req_fac_cl50 = factory.get('/admin/users/ciu_cleared_students/?clearance_level=50&acad=2026/2027&sem=1')
+    force_authenticate(req_fac_cl50, user=accounts_user)
+    resp_fac_cl50 = view_admin_cleared(req_fac_cl50)
+    assert resp_fac_cl50.status_code == 200
+    for fac, f_data in resp_fac_cl50.data['faculties'].items():
+        for s in f_data['students']:
+            assert s['clearance_level'] == 50, f"Expected clearance_level 50, got {s['clearance_level']}"
+    print("✓ CIU Cleared Faculty Directory correctly filters by clearance_level=50.")
+
+    # 11c. Test tests & exams set and seen according to students' assigned semesters and academic year
+    # Create Semester 1 Test and Semester 2 Test
+    Test.objects.filter(title__in=['Test Sem 1 Only', 'Test Sem 2 Only']).delete()
+    test_sem1 = Test.objects.create(
+        title='Test Sem 1 Only', course=course, lecturer=lecturer,
+        year_of_study=1, semester=1, academic_year='2026/2027', is_published=True
+    )
+    test_sem2 = Test.objects.create(
+        title='Test Sem 2 Only', course=course, lecturer=lecturer,
+        year_of_study=1, semester=2, academic_year='2026/2027', is_published=True
+    )
+    st_50.assigned_courses.add(course)
+    st_100.assigned_courses.add(course)
+
+    # st_50 is in semester 1 and 2026/2027
+    req_st_tests = factory.get('/api/tests/')
+    force_authenticate(req_st_tests, user=st_50)
+    resp_st_tests = view_test_list(req_st_tests)
+    st_test_ids = [t['id'] for t in resp_st_tests.data]
+    assert test_sem1.id in st_test_ids, "Semester 1 student must see Semester 1 test"
+    assert test_sem2.id not in st_test_ids, "Semester 1 student must NOT see Semester 2 test"
+    print("✓ Students correctly see tests strictly matching their assigned semester (Semester 1).")
+
+    # st_100 is in semester 2 and 2026/2027
+    req_st2_tests = factory.get('/api/tests/')
+    force_authenticate(req_st2_tests, user=st_100)
+    resp_st2_tests = view_test_list(req_st2_tests)
+    st2_test_ids = [t['id'] for t in resp_st2_tests.data]
+    assert test_sem2.id in st2_test_ids, "Semester 2 student must see Semester 2 test"
+    assert test_sem1.id not in st2_test_ids, "Semester 2 student must NOT see Semester 1 test"
+    print("✓ Students correctly see tests strictly matching their assigned semester (Semester 2).")
+
+    # Exams semester scoping
+    Exam.objects.filter(title__in=['Exam Sem 1 Only', 'Exam Sem 2 Only']).delete()
+    exam_sem1 = Exam.objects.create(
+        title='Exam Sem 1 Only', course=course, lecturer=lecturer,
+        year_of_study=1, semester=1, academic_year='2026/2027', is_active=True
+    )
+    exam_sem2 = Exam.objects.create(
+        title='Exam Sem 2 Only', course=course, lecturer=lecturer,
+        year_of_study=1, semester=2, academic_year='2026/2027', is_active=True
+    )
+
+    req_st_exams = factory.get('/api/exams/')
+    force_authenticate(req_st_exams, user=st_50)
+    resp_st_exams = view_exam_list(req_st_exams)
+    st_exam_ids = [e['id'] for e in resp_st_exams.data]
+    assert exam_sem1.id in st_exam_ids, "Semester 1 student must see Semester 1 exam"
+    assert exam_sem2.id not in st_exam_ids, "Semester 1 student must NOT see Semester 2 exam"
+    print("✓ Students correctly see exams strictly matching their assigned semester (Semester 1).")
+
+    req_st2_exams = factory.get('/api/exams/')
+    force_authenticate(req_st2_exams, user=st_100)
+    resp_st2_exams = view_exam_list(req_st2_exams)
+    st2_exam_ids = [e['id'] for e in resp_st2_exams.data]
+    assert exam_sem2.id in st2_exam_ids, "Semester 2 student must see Semester 2 exam"
+    assert exam_sem1.id not in st2_exam_ids, "Semester 2 student must NOT see Semester 1 exam"
+    print("✓ Students correctly see exams strictly matching their assigned semester (Semester 2).")
+
+    # 12. Testing Student Scoping for Courses, Content, Lecturers, Leadership, and Timetables
+    print("\n--- 12. Testing Student Scoping for Courses, Content, Lecturers, Leadership, and Timetables ---")
+    from ciu_portal.views import (
+        CourseViewSet, CourseUnitViewSet, FacultyViewSet, AdminUserViewSet,
+        TestViewSet, ExamViewSet, ClassContentViewSet, ClassTimetableViewSet, ExamTimetableViewSet
+    )
+    from ciu_portal.models import ClassContent, ClassTimetable, ExamTimetable
+
+    # Setup two distinct faculties: Engineering (FENG) and Business (SOBAT)
+    fac_eng, _ = Faculty.objects.get_or_create(code='FENG', defaults={'name': 'Faculty of Engineering'})
+    fac_sob, _ = Faculty.objects.get_or_create(code='SOBAT', defaults={'name': 'School of Business & Tech'})
+
+    # Create Dean & Secretary for each faculty
+    dean_eng, _ = User.objects.get_or_create(
+        username='dean_eng_test',
+        defaults={'role': 'dean', 'faculty': fac_eng, 'first_name': 'Dean', 'last_name': 'Engineering'}
+    )
+    sec_eng, _ = User.objects.get_or_create(
+        username='sec_eng_test',
+        defaults={'role': 'faculty_admin', 'faculty': fac_eng, 'first_name': 'Sec', 'last_name': 'Engineering'}
+    )
+    fac_eng.dean = dean_eng
+    fac_eng.secretary = sec_eng
+    fac_eng.save()
+
+    dean_sob, _ = User.objects.get_or_create(
+        username='dean_sob_test',
+        defaults={'role': 'dean', 'faculty': fac_sob, 'first_name': 'Dean', 'last_name': 'Business'}
+    )
+    sec_sob, _ = User.objects.get_or_create(
+        username='sec_sob_test',
+        defaults={'role': 'faculty_admin', 'faculty': fac_sob, 'first_name': 'Sec', 'last_name': 'Business'}
+    )
+    fac_sob.dean = dean_sob
+    fac_sob.secretary = sec_sob
+    fac_sob.save()
+
+    # Lecturers in Engineering and Business
+    lec_eng, _ = User.objects.get_or_create(
+        username='lec_eng_test',
+        defaults={'role': 'lecturer', 'faculty': fac_eng, 'first_name': 'Lecturer', 'last_name': 'Eng'}
+    )
+    lec_sob, _ = User.objects.get_or_create(
+        username='lec_sob_test',
+        defaults={'role': 'lecturer', 'faculty': fac_sob, 'first_name': 'Lecturer', 'last_name': 'Sob'}
+    )
+
+    # Courses in each faculty
+    c_eng, _ = Course.objects.get_or_create(code='CIV_SCOPE_101', defaults={'name': 'Civil Engineering Scoped', 'faculty': fac_eng})
+    c_sob, _ = Course.objects.get_or_create(code='ACC_SCOPE_101', defaults={'name': 'Bachelor of Accounting Scoped', 'faculty': fac_sob})
+
+    # Course Units
+    u_eng, _ = CourseUnit.objects.get_or_create(code='CIV_SCOPE_101-1', defaults={'name': 'Fluid Mechanics Scoped', 'course': c_eng, 'year_of_study': 1, 'semester': 1})
+    u_eng.lecturers.add(lec_eng)
+    u_sob, _ = CourseUnit.objects.get_or_create(code='ACC_SCOPE_101-1', defaults={'name': 'Financial Accounting Scoped', 'course': c_sob, 'year_of_study': 1, 'semester': 1})
+    u_sob.lecturers.add(lec_sob)
+
+    # Student strictly in Engineering, assigned to c_eng
+    st_scoped, _ = User.objects.get_or_create(
+        username='st_scoped_eng_001',
+        defaults={'role': 'student', 'faculty': fac_eng, 'year_of_study': 1, 'semester': 1, 'academic_year': '2026/2027'}
+    )
+    st_scoped.faculty = fac_eng
+    st_scoped.assigned_courses.set([c_eng])
+    st_scoped.save()
+
+    # 12a. Course Listing Scoping: Student only sees c_eng, NOT c_sob
+    view_c_list = CourseViewSet.as_view({'get': 'list'})
+    req_c = factory.get('/api/courses/')
+    force_authenticate(req_c, user=st_scoped)
+    resp_c = view_c_list(req_c)
+    assert resp_c.status_code == 200
+    c_ids = [c['id'] for c in resp_c.data]
+    assert c_eng.id in c_ids, "Student must see their assigned course CIV101"
+    assert c_sob.id not in c_ids, "Student must NOT see course ACC101 from SOBAT"
+    print("✓ Student CourseViewSet correctly scopes to assigned course (c_eng seen, c_sob excluded).")
+
+    # Filtering by foreign faculty returns empty
+    req_c_foreign = factory.get(f'/api/courses/?faculty={fac_sob.code}')
+    force_authenticate(req_c_foreign, user=st_scoped)
+    resp_c_foreign = view_c_list(req_c_foreign)
+    assert resp_c_foreign.status_code == 200
+    assert len(resp_c_foreign.data) == 0, f"Querying foreign faculty must yield empty results for student, got {resp_c_foreign.data}"
+    print("✓ Student filtering courses by foreign faculty returns empty list.")
+
+    # 12b. Course Unit Scoping: Student only sees u_eng, NOT u_sob
+    view_u_list = CourseUnitViewSet.as_view({'get': 'list'})
+    req_u = factory.get('/api/course-units/')
+    force_authenticate(req_u, user=st_scoped)
+    resp_u = view_u_list(req_u)
+    assert resp_u.status_code == 200
+    u_ids = [u['id'] for u in resp_u.data]
+    assert u_eng.id in u_ids, "Student must see course unit u_eng"
+    assert u_sob.id not in u_ids, "Student must NOT see course unit u_sob"
+    print("✓ Student CourseUnitViewSet correctly scopes to assigned course units.")
+
+    # 12c. Faculty Scoping & Leadership: Student only sees fac_eng and its leadership, NOT fac_sob
+    view_f_list = FacultyViewSet.as_view({'get': 'list'})
+    req_f = factory.get('/api/faculties/')
+    force_authenticate(req_f, user=st_scoped)
+    resp_f = view_f_list(req_f)
+    assert resp_f.status_code == 200
+    f_codes = [f['code'] for f in resp_f.data]
+    assert 'FENG' in f_codes, "Student must see their designated faculty FENG"
+    assert 'SOBAT' not in f_codes, "Student must NOT see foreign faculty SOBAT"
+    feng_item = next(f for f in resp_f.data if f['code'] == 'FENG')
+    assert feng_item['dean_name'] == 'Dean Engineering'
+    print("✓ Student FacultyViewSet correctly returns only designated faculty with Dean leadership.")
+
+    # 12d. AdminUser Directory - Lecturers: Student listing lecturers sees lec_eng, NOT lec_sob
+    view_users = AdminUserViewSet.as_view({'get': 'list'})
+    req_lecs = factory.get('/api/admin/users/?role=lecturer')
+    force_authenticate(req_lecs, user=st_scoped)
+    resp_lecs = view_users(req_lecs)
+    assert resp_lecs.status_code == 200
+    lec_ids = [u['id'] for u in resp_lecs.data]
+    assert lec_eng.id in lec_ids, "Student must see lecturer of assigned course/faculty"
+    assert lec_sob.id not in lec_ids, "Student must NOT see lecturer from foreign faculty"
+    print("✓ Student querying lecturers only sees lecturers relative to assigned courses/faculty.")
+
+    # 12e. AdminUser Directory - Faculty Leadership (Dean & Secretary): Student only sees Dean/Sec of FENG, NOT SOBAT
+    req_deans = factory.get('/api/admin/users/?role=dean')
+    force_authenticate(req_deans, user=st_scoped)
+    resp_deans = view_users(req_deans)
+    assert resp_deans.status_code == 200
+    dean_ids = [u['id'] for u in resp_deans.data]
+    assert dean_eng.id in dean_ids, "Student must see Dean of own faculty"
+    assert dean_sob.id not in dean_ids, "Student must NOT see Dean of foreign faculty"
+
+    req_secs = factory.get('/api/admin/users/?role=faculty_admin')
+    force_authenticate(req_secs, user=st_scoped)
+    resp_secs = view_users(req_secs)
+    assert resp_secs.status_code == 200
+    sec_ids = [u['id'] for u in resp_secs.data]
+    assert sec_eng.id in sec_ids, "Student must see Secretary of own faculty"
+    assert sec_sob.id not in sec_ids, "Student must NOT see Secretary of foreign faculty"
+    print("✓ Student querying faculty leadership (Dean & Secretary) only sees their designated leadership.")
+
+    # 12f. ClassContent Scoping: Student only sees content for c_eng, NOT c_sob
+    cc_eng = ClassContent.objects.create(title='Eng Notes 1', course=c_eng, lecturer=lec_eng)
+    cc_sob = ClassContent.objects.create(title='Sob Notes 1', course=c_sob, lecturer=lec_sob)
+    view_cc = ClassContentViewSet.as_view({'get': 'list'})
+    req_cc = factory.get('/api/contents/')
+    force_authenticate(req_cc, user=st_scoped)
+    resp_cc = view_cc(req_cc)
+    assert resp_cc.status_code == 200
+    cc_ids = [c['id'] for c in resp_cc.data]
+    assert cc_eng.id in cc_ids, "Student must see ClassContent for assigned course"
+    assert cc_sob.id not in cc_ids, "Student must NOT see ClassContent for foreign course"
+    print("✓ Student ClassContentViewSet correctly scoped to assigned course.")
+
+    # 12g. Timetables Scoping: Class and Exam Timetables
+    ct_eng = ClassTimetable.objects.create(faculty=fac_eng, course=c_eng, course_unit=u_eng, lecturer=lec_eng, day_of_week='Monday', start_time='09:00', end_time='11:00', room='Room E101')
+    ct_sob = ClassTimetable.objects.create(faculty=fac_sob, course=c_sob, course_unit=u_sob, lecturer=lec_sob, day_of_week='Monday', start_time='09:00', end_time='11:00', room='Room S101')
+    view_ct = ClassTimetableViewSet.as_view({'get': 'list'})
+    req_ct = factory.get('/api/class-timetables/')
+    force_authenticate(req_ct, user=st_scoped)
+    resp_ct = view_ct(req_ct)
+    assert resp_ct.status_code == 200
+    ct_ids = [t['id'] for t in resp_ct.data]
+    assert ct_eng.id in ct_ids, "Student must see ClassTimetable for assigned course"
+    assert ct_sob.id not in ct_ids, "Student must NOT see ClassTimetable for foreign course"
+    print("✓ Student ClassTimetableViewSet correctly scoped to assigned course.")
+
+    et_eng = ExamTimetable.objects.create(faculty=fac_eng, course=c_eng, course_unit=u_eng, title='Eng Exam TT', exam_date='2026-12-01', start_time='09:00', end_time='12:00')
+    et_sob = ExamTimetable.objects.create(faculty=fac_sob, course=c_sob, course_unit=u_sob, title='Sob Exam TT', exam_date='2026-12-01', start_time='09:00', end_time='12:00')
+    view_et = ExamTimetableViewSet.as_view({'get': 'list'})
+    req_et = factory.get('/api/exam-timetables/')
+    force_authenticate(req_et, user=st_scoped)
+    resp_et = view_et(req_et)
+    assert resp_et.status_code == 200
+    et_ids = [t['id'] for t in resp_et.data]
+    assert et_eng.id in et_ids, "Student must see ExamTimetable for assigned course"
+    assert et_sob.id not in et_ids, "Student must NOT see ExamTimetable for foreign course"
+    print("✓ Student ExamTimetableViewSet correctly scoped to assigned course.")
+
+    # 12h. Tests and Exams Scoping & Query Param Filtering:
+    t_eng = Test.objects.create(
+        title='Eng Test 101', course=c_eng, lecturer=lec_eng,
+        year_of_study=1, semester=1, academic_year='2026/2027', is_published=True
+    )
+    t_sob = Test.objects.create(
+        title='Sob Test 101', course=c_sob, lecturer=lec_sob,
+        year_of_study=1, semester=1, academic_year='2026/2027', is_published=True
+    )
+    req_t_scope = factory.get('/api/tests/')
+    force_authenticate(req_t_scope, user=st_scoped)
+    resp_t_scope = view_test_list(req_t_scope)
+    assert resp_t_scope.status_code == 200
+    t_scope_ids = [t['id'] for t in resp_t_scope.data]
+    assert t_eng.id in t_scope_ids, "Student must see test for assigned course"
+    assert t_sob.id not in t_scope_ids, "Student must NOT see test for foreign course"
+
+    # Query param filtering on tests: filter by lecturer
+    req_t_filter_lec = factory.get(f'/api/tests/?lecturer={lec_eng.id}')
+    force_authenticate(req_t_filter_lec, user=st_scoped)
+    resp_t_filter_lec = view_test_list(req_t_filter_lec)
+    assert resp_t_filter_lec.status_code == 200
+    assert any(t['id'] == t_eng.id for t in resp_t_filter_lec.data)
+
+    req_t_filter_foreign = factory.get(f'/api/tests/?lecturer={lec_sob.id}')
+    force_authenticate(req_t_filter_foreign, user=st_scoped)
+    resp_t_filter_foreign = view_test_list(req_t_filter_foreign)
+    assert resp_t_filter_foreign.status_code == 200
+    assert len(resp_t_filter_foreign.data) == 0, "Student filtering tests by foreign lecturer must return 0 results"
+    print("✓ Student TestViewSet correctly scoped and filterable by lecturer/course without foreign leakage.")
+
+    e_eng = Exam.objects.create(
+        title='Eng Final Exam 101', course=c_eng, lecturer=lec_eng,
+        year_of_study=1, semester=1, academic_year='2026/2027', is_active=True
+    )
+    e_sob = Exam.objects.create(
+        title='Sob Final Exam 101', course=c_sob, lecturer=lec_sob,
+        year_of_study=1, semester=1, academic_year='2026/2027', is_active=True
+    )
+    req_e_scope = factory.get('/api/exams/')
+    force_authenticate(req_e_scope, user=st_scoped)
+    resp_e_scope = view_exam_list(req_e_scope)
+    assert resp_e_scope.status_code == 200
+    e_scope_ids = [e['id'] for e in resp_e_scope.data]
+    assert e_eng.id in e_scope_ids, "Student must see exam for assigned course"
+    assert e_sob.id not in e_scope_ids, "Student must NOT see exam for foreign course"
+
+    # Query param filtering on exams: search
+    req_e_search = factory.get('/api/exams/?search=Eng')
+    force_authenticate(req_e_search, user=st_scoped)
+    resp_e_search = view_exam_list(req_e_search)
+    assert resp_e_search.status_code == 200
+    assert any(e['id'] == e_eng.id for e in resp_e_search.data)
+
+    req_e_foreign_search = factory.get('/api/exams/?search=Sob')
+    force_authenticate(req_e_foreign_search, user=st_scoped)
+    resp_e_foreign_search = view_exam_list(req_e_foreign_search)
+    assert resp_e_foreign_search.status_code == 200
+    assert len(resp_e_foreign_search.data) == 0, "Student searching exams for foreign courses must return 0 results"
+    print("✓ Student ExamViewSet correctly scoped and searchable without foreign leakage.")
 
     print("\n==================================================")
     print("✅ ALL SYSTEM VERIFICATION CHECKS PASSED SUCCESSFULLY!")

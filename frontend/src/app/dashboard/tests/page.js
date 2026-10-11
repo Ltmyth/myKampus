@@ -62,6 +62,8 @@ export default function TestPortalPage() {
   const [selectedCourseFilter, setSelectedCourseFilter] = useState('');
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState('');
   const [selectedFacultyFilter, setSelectedFacultyFilter] = useState('All');
+  const [selectedSemesterFilter, setSelectedSemesterFilter] = useState('All');
+  const [selectedAcademicYearFilter, setSelectedAcademicYearFilter] = useState('All');
   // Bulk Actions & Expansion State for Tests
   const [selectedTestIds, setSelectedTestIds] = useState([]);
   const [expandedTestIds, setExpandedTestIds] = useState([]);
@@ -156,6 +158,8 @@ export default function TestPortalPage() {
   const [description, setDescription] = useState('');
   const [scheduledStart, setScheduledStart] = useState('');
   const [dueDate, setDueDate] = useState('');
+  const [testSemester, setTestSemester] = useState('0');
+  const [testAcademicYear, setTestAcademicYear] = useState('2026/2027');
 
   // Edit Test Modal State
   const [editingTestModal, setEditingTestModal] = useState(null);
@@ -250,6 +254,8 @@ export default function TestPortalPage() {
   // Filter assigned courses and course units based on user role
   const assignedCourses = isLecturer
     ? courses.filter(c => courseUnits.some(u => (u.course_code === c.code || u.course === c.id) && (u.lecturer_details?.some(l => l.id === user.id) || u.lecturers?.includes(user.id))))
+    : user?.role === 'student'
+    ? courses.filter(c => (user?.assigned_courses || []).includes(c.id) || (user?.assigned_course_codes || []).includes(c.code) || (!user?.assigned_courses?.length && (c.faculty === user?.faculty || c.faculty_code === user?.faculty_code)))
     : courses;
 
   const assignedCourseUnits = isLecturer
@@ -260,6 +266,8 @@ export default function TestPortalPage() {
 
   const scopedFaculties = isLecturer
     ? faculties.filter(f => (assignedCourses || []).some(c => c.faculty === f.id || c.faculty_code === f.code))
+    : user?.role === 'student'
+    ? faculties.filter(f => (user?.faculty && (f.id === user.faculty || String(f.id) === String(user.faculty))) || (user?.faculty_code && f.code === user.faculty_code) || (assignedCourses || []).some(c => c.faculty === f.id || c.faculty_code === f.code))
     : faculties;
 
   // Filtered Submissions Logic
@@ -292,6 +300,7 @@ export default function TestPortalPage() {
         const parentC = courses.find(c => c.code === u.course_code || c.id === u.course);
         if (parentC) setSelectedCourse(parentC.id);
         if (u.year_of_study) setYearOfStudy(u.year_of_study);
+        if (u.semester) setTestSemester(String(u.semester));
       }
     }
   };
@@ -398,6 +407,8 @@ export default function TestPortalPage() {
         year_of_study: parseInt(yearOfStudy),
         target_years: targetYears.length > 0 ? targetYears.map(y => parseInt(y)) : [parseInt(yearOfStudy || 1)],
         description,
+        semester: parseInt(testSemester || 0),
+        academic_year: testAcademicYear || '2026/2027',
         is_published: true,
         scheduled_start: getUgandanISOString(scheduledStart),
         due_date: getUgandanISOString(dueDate)
@@ -413,6 +424,8 @@ export default function TestPortalPage() {
       setDescription('');
       setScheduledStart('');
       setDueDate('');
+      setTestSemester('0');
+      setTestAcademicYear('2026/2027');
       loadPortalData();
       if (created && !Array.isArray(created)) setSelectedTest(created);
     } catch (err) {
@@ -458,6 +471,8 @@ export default function TestPortalPage() {
         formData.append('course_unit', txtCourseUnit);
         formData.append('category', txtCategory);
         formData.append('duration_minutes', txtDuration);
+        formData.append('semester', testSemester || '0');
+        formData.append('academic_year', testAcademicYear || '2026/2027');
         if (txtScheduledStart) formData.append('scheduled_start', txtScheduledStart);
         if (txtDueDate) formData.append('due_date', txtDueDate);
 
@@ -716,14 +731,28 @@ ANSWER: C`;
     if (user?.role === 'student') {
       const studentFacCode = user?.faculty_code;
       if (studentFacCode && fCode && fCode !== studentFacCode) return false;
+      const assignedIds = user?.assigned_courses || [];
+      const assignedCodes = user?.assigned_course_codes || [];
+      if (assignedIds.length > 0 || assignedCodes.length > 0) {
+        if (!assignedIds.includes(t.course) && !assignedCodes.includes(t.course_code)) return false;
+      }
     }
 
     const matchesSearch = t.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                          t.course_code.toLowerCase().includes(searchQuery.toLowerCase());
+                          t.course_code.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                          (t.lecturer_name && t.lecturer_name.toLowerCase().includes(searchQuery.toLowerCase()));
     const matchesCourse = selectedCourseFilter ? t.course === parseInt(selectedCourseFilter) : true;
     const matchesCategory = selectedCategoryFilter ? t.category === selectedCategoryFilter : true;
     const matchesFaculty = selectedFacultyFilter === 'All' ? true : fCode === selectedFacultyFilter;
-    return matchesSearch && matchesCourse && matchesCategory && matchesFaculty;
+    const matchesSemester = selectedSemesterFilter === 'All' ? true : (
+      t.semester === parseInt(selectedSemesterFilter) ||
+      t.course_unit_semester === parseInt(selectedSemesterFilter) ||
+      t.semester === 0
+    );
+    const matchesAcademicYear = selectedAcademicYearFilter === 'All' ? true : (
+      !t.academic_year || t.academic_year === 'All' || t.academic_year.toLowerCase() === selectedAcademicYearFilter.toLowerCase()
+    );
+    return matchesSearch && matchesCourse && matchesCategory && matchesFaculty && matchesSemester && matchesAcademicYear;
   });
 
   // Calculate Metrics
@@ -734,7 +763,7 @@ ANSWER: C`;
   const passRate = attempts.length > 0 ? ((attempts.filter(a => a.passed).length / attempts.length) * 100).toFixed(1) : '0';
 
   // Group Tests under Faculties for Staff
-  const activeFacultiesList = isLecturer ? scopedFaculties : faculties;
+  const activeFacultiesList = isLecturer || user?.role === 'student' ? scopedFaculties : faculties;
   
   const testFacultyGroups = activeFacultiesList.map(fac => {
     const facTests = filteredTests.filter(t => {
@@ -873,6 +902,29 @@ ANSWER: C`;
             <option value="unit_test">Unit Test</option>
             <option value="midterm">Midterm Test</option>
             <option value="assignment">Assignment Test</option>
+          </select>
+
+          {/* Semester filter */}
+          <select
+            value={selectedSemesterFilter}
+            onChange={(e) => setSelectedSemesterFilter(e.target.value)}
+            className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-700 focus:outline-none focus:ring-1 focus:ring-brand-light"
+          >
+            <option value="All">All Semesters</option>
+            <option value="1">Semester 1</option>
+            <option value="2">Semester 2</option>
+          </select>
+
+          {/* Academic Year filter */}
+          <select
+            value={selectedAcademicYearFilter}
+            onChange={(e) => setSelectedAcademicYearFilter(e.target.value)}
+            className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-700 focus:outline-none focus:ring-1 focus:ring-brand-light"
+          >
+            <option value="All">All Years</option>
+            <option value="2026/2027">2026/2027</option>
+            <option value="2025/2026">2025/2026</option>
+            <option value="2024/2025">2024/2025</option>
           </select>
         </div>
 
@@ -1027,10 +1079,18 @@ ANSWER: C`;
                             >
                               <td className="px-4 py-3">
                                 <div className="space-y-0.5">
-                                  <div className="flex items-center space-x-1.5">
+                                  <div className="flex flex-wrap items-center gap-1.5">
                                     <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase bg-emerald-100 text-emerald-800 border border-emerald-200">
                                       {testItem.category.replace('_', ' ')}
                                     </span>
+                                    <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-blue-50 text-blue-800 border border-blue-200">
+                                      {testItem.semester === 1 ? 'Sem 1' : testItem.semester === 2 ? 'Sem 2' : 'All Sems'}
+                                    </span>
+                                    {testItem.academic_year && testItem.academic_year !== 'All' && (
+                                      <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200">
+                                        {testItem.academic_year}
+                                      </span>
+                                    )}
                                     <span className="font-extrabold text-slate-900 leading-tight block">
                                       {testItem.title}
                                     </span>
@@ -1344,10 +1404,18 @@ ANSWER: C`;
                               )}
                               <td className="px-4 py-3">
                                 <div className="space-y-0.5">
-                                  <div className="flex items-center space-x-1.5">
+                                  <div className="flex flex-wrap items-center gap-1.5">
                                     <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase bg-emerald-100 text-emerald-800 border border-emerald-200">
                                       {testItem.category.replace('_', ' ')}
                                     </span>
+                                    <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-blue-50 text-blue-800 border border-blue-200">
+                                      {testItem.semester === 1 ? 'Sem 1' : testItem.semester === 2 ? 'Sem 2' : 'All Sems'}
+                                    </span>
+                                    {testItem.academic_year && testItem.academic_year !== 'All' && (
+                                      <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200">
+                                        {testItem.academic_year}
+                                      </span>
+                                    )}
                                     <span className="font-extrabold text-slate-900 leading-tight block">
                                       {testItem.title}
                                     </span>
@@ -1727,6 +1795,31 @@ ANSWER: C`;
                     value={allowedAttempts}
                     onChange={(e) => setAllowedAttempts(e.target.value)}
                     className="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Target Semester</label>
+                  <select
+                    value={testSemester}
+                    onChange={(e) => setTestSemester(e.target.value)}
+                    className="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs font-bold text-slate-800"
+                  >
+                    <option value="0">All Semesters (0)</option>
+                    <option value="1">Semester 1</option>
+                    <option value="2">Semester 2</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Academic Year</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. 2026/2027"
+                    value={testAcademicYear}
+                    onChange={(e) => setTestAcademicYear(e.target.value)}
+                    className="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs font-bold text-slate-800"
                   />
                 </div>
               </div>

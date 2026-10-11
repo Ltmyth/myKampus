@@ -63,6 +63,8 @@ export default function ExamsPage() {
   const [activeTab, setActiveTab] = useState('exams');
   const [selectedFacultyFilter, setSelectedFacultyFilter] = useState('All');
   const [selectedCourseFilter, setSelectedCourseFilter] = useState('All');
+  const [selectedSemesterFilter, setSelectedSemesterFilter] = useState('All');
+  const [selectedAcademicYearFilter, setSelectedAcademicYearFilter] = useState('All');
 
   // Bulk Actions & Expansion State for Exams
   const [selectedExamIds, setSelectedExamIds] = useState([]);
@@ -132,6 +134,8 @@ export default function ExamsPage() {
     }
   };
 
+  const [examSearchQuery, setExamSearchQuery] = useState('');
+
   // Submissions Tab Filter & Pagination States (Exams)
   const [selectedExamFilter, setSelectedExamFilter] = useState('All');
   const [selectedExamCourseSubFilter, setSelectedExamCourseSubFilter] = useState('All');
@@ -154,6 +158,8 @@ export default function ExamsPage() {
   const [examYearOfStudy, setExamYearOfStudy] = useState(0); // 0 = All Years, 1-4 = Year X
   const [scheduledStart, setScheduledStart] = useState('');
   const [dueDate, setDueDate] = useState('');
+  const [examSemester, setExamSemester] = useState('0');
+  const [examAcademicYear, setExamAcademicYear] = useState('2026/2027');
 
   // Manage Questions states (Lecturer/Staff)
   const [selectedExam, setSelectedExam] = useState(null);
@@ -261,6 +267,8 @@ export default function ExamsPage() {
   // Filter assigned courses and course units based on user role
   const assignedCourses = isLecturer
     ? courses.filter(c => courseUnits.some(u => (u.course_code === c.code || u.course === c.id) && (u.lecturer_details?.some(l => l.id === user.id) || u.lecturers?.includes(user.id))))
+    : user?.role === 'student'
+    ? courses.filter(c => (user?.assigned_courses || []).includes(c.id) || (user?.assigned_course_codes || []).includes(c.code) || (!user?.assigned_courses?.length && (c.faculty === user?.faculty || c.faculty_code === user?.faculty_code)))
     : courses;
 
   const assignedCourseUnits = isLecturer
@@ -271,6 +279,8 @@ export default function ExamsPage() {
 
   const scopedFaculties = isLecturer
     ? faculties.filter(f => (assignedCourses || []).some(c => c.faculty === f.id || c.faculty_code === f.code))
+    : user?.role === 'student'
+    ? faculties.filter(f => (user?.faculty && (f.id === user.faculty || String(f.id) === String(user.faculty))) || (user?.faculty_code && f.code === user.faculty_code) || (assignedCourses || []).some(c => c.faculty === f.id || c.faculty_code === f.code))
     : faculties;
 
   // Filtered Exam Submissions Logic
@@ -304,6 +314,7 @@ export default function ExamsPage() {
         const parentC = courses.find(c => c.code === u.course_code || c.id === u.course);
         if (parentC) setSelectedCourse(parentC.id);
         if (u.year_of_study) setExamYearOfStudy(u.year_of_study);
+        if (u.semester) setExamSemester(String(u.semester));
       }
     }
   };
@@ -496,6 +507,8 @@ export default function ExamsPage() {
         duration_minutes: parseInt(duration),
         year_of_study: parseInt(examYearOfStudy),
         target_years: targetYears.length > 0 ? targetYears.map(y => parseInt(y)) : [parseInt(examYearOfStudy || 1)],
+        semester: parseInt(examSemester || 0),
+        academic_year: examAcademicYear || '2026/2027',
         is_active: true,
         scheduled_start: getUgandanISOString(scheduledStart),
         due_date: getUgandanISOString(dueDate)
@@ -510,6 +523,8 @@ export default function ExamsPage() {
       setSelectedCourseUnit('');
       setScheduledStart('');
       setDueDate('');
+      setExamSemester('0');
+      setExamAcademicYear('2026/2027');
       loadExamData();
       if (created && !Array.isArray(created)) setSelectedExam(created);
     } catch (err) {
@@ -555,6 +570,8 @@ export default function ExamsPage() {
         formData.append('course_unit', examTxtCourseUnit);
         formData.append('exam_type', examTxtType);
         formData.append('duration_minutes', examTxtDuration);
+        formData.append('semester', examSemester || '0');
+        formData.append('academic_year', examAcademicYear || '2026/2027');
         if (examTxtScheduledStart) formData.append('scheduled_start', examTxtScheduledStart);
         if (examTxtDueDate) formData.append('due_date', examTxtDueDate);
 
@@ -763,16 +780,43 @@ ANSWER: C`;
     window.open(`${API_BASE_URL}/exams/${examId}/export_csv/?token=${token}`, '_blank');
   };
 
-  // Group Exams under Scoped Faculties for Staff
-  const activeFacultiesList = isLecturer ? scopedFaculties : faculties;
+  // Group Exams under Scoped Faculties for Staff & Students
+  const activeFacultiesList = isLecturer || user?.role === 'student' ? scopedFaculties : faculties;
   
   const examsFiltered = exams.filter(e => {
+    const fCode = e.faculty_code || (courses.find(c => c.id === e.course)?.faculty_code);
+    if (user?.role === 'student') {
+      const studentFacCode = user?.faculty_code;
+      if (studentFacCode && fCode && fCode !== studentFacCode) return false;
+      const assignedIds = user?.assigned_courses || [];
+      const assignedCodes = user?.assigned_course_codes || [];
+      if (assignedIds.length > 0 || assignedCodes.length > 0) {
+        if (!assignedIds.includes(e.course) && !assignedCodes.includes(e.course_code)) return false;
+      }
+    }
     if (selectedFacultyFilter !== 'All') {
-      const fCode = e.faculty_code || (courses.find(c => c.id === e.course)?.faculty_code);
       if (fCode !== selectedFacultyFilter) return false;
     }
     if (selectedCourseFilter !== 'All') {
-      if (e.course_code !== selectedCourseFilter) return false;
+      if (e.course_code !== selectedCourseFilter && String(e.course) !== String(selectedCourseFilter)) return false;
+    }
+    if (selectedSemesterFilter !== 'All') {
+      const semNum = parseInt(selectedSemesterFilter);
+      if (e.semester !== 0 && e.semester !== semNum && e.course_unit_semester !== semNum) {
+        return false;
+      }
+    }
+    if (selectedAcademicYearFilter !== 'All') {
+      if (e.academic_year && e.academic_year !== 'All' && e.academic_year.toLowerCase() !== selectedAcademicYearFilter.toLowerCase()) {
+        return false;
+      }
+    }
+    if (examSearchQuery && examSearchQuery.trim()) {
+      const q = examSearchQuery.toLowerCase().trim();
+      const matchTitle = e.title?.toLowerCase().includes(q);
+      const matchCourse = e.course_code?.toLowerCase().includes(q);
+      const matchLecturer = e.lecturer_name?.toLowerCase().includes(q);
+      if (!matchTitle && !matchCourse && !matchLecturer) return false;
     }
     return true;
   });
@@ -880,26 +924,39 @@ ANSWER: C`;
           )}
         </div>
 
-        {/* Staff Faculty & Course Filter */}
-        {isStaff && activeTab === 'exams' && (
+        {/* Exam Filters Toolbar (Available for both Staff & Students) */}
+        {activeTab === 'exams' && (
           <div className="flex flex-wrap items-center gap-2 bg-white px-3 py-1.5 rounded-xl border border-emerald-200/80 shadow-sm">
+            {/* Search */}
             <div className="flex items-center space-x-1.5">
-              <span className="text-[11px] font-extrabold text-slate-500 uppercase">Faculty:</span>
-              <select
-                value={['lecturer', 'student', 'faculty_admin', 'dean'].includes(user?.role) ? (user?.faculty_code || (typeof user?.faculty === 'object' ? user?.faculty?.code : (activeFacultiesList[0]?.code || selectedFacultyFilter))) : selectedFacultyFilter}
-                disabled={['lecturer', 'student', 'faculty_admin', 'dean'].includes(user?.role)}
-                onChange={(e) => setSelectedFacultyFilter(e.target.value)}
-                className="bg-slate-50 border border-slate-200 text-slate-800 text-xs font-bold rounded-lg px-2.5 py-1 focus:outline-none focus:ring-1 focus:ring-brand-light disabled:opacity-85"
-              >
-                <option value="All">All Faculties ({activeFacultiesList.length})</option>
-                {activeFacultiesList.map(f => (
-                  <option key={f.id} value={f.code}>[{f.code}] {f.name}</option>
-                ))}
-              </select>
-              {['lecturer', 'student', 'faculty_admin', 'dean'].includes(user?.role) && (
-                <span className="text-[10px] text-amber-700 font-bold">🔒 Locked to Faculty</span>
-              )}
+              <input
+                type="text"
+                placeholder="Search exams, courses, lecturers..."
+                value={examSearchQuery}
+                onChange={(e) => setExamSearchQuery(e.target.value)}
+                className="bg-slate-50 border border-slate-200 text-slate-800 text-xs rounded-lg px-2.5 py-1 focus:outline-none focus:ring-1 focus:ring-brand-light w-44"
+              />
             </div>
+
+            {isStaff && (
+              <div className="flex items-center space-x-1.5">
+                <span className="text-[11px] font-extrabold text-slate-500 uppercase">Faculty:</span>
+                <select
+                  value={['lecturer', 'student', 'faculty_admin', 'dean'].includes(user?.role) ? (user?.faculty_code || (typeof user?.faculty === 'object' ? user?.faculty?.code : (activeFacultiesList[0]?.code || selectedFacultyFilter))) : selectedFacultyFilter}
+                  disabled={['lecturer', 'student', 'faculty_admin', 'dean'].includes(user?.role)}
+                  onChange={(e) => setSelectedFacultyFilter(e.target.value)}
+                  className="bg-slate-50 border border-slate-200 text-slate-800 text-xs font-bold rounded-lg px-2.5 py-1 focus:outline-none focus:ring-1 focus:ring-brand-light disabled:opacity-85"
+                >
+                  <option value="All">All Faculties ({activeFacultiesList.length})</option>
+                  {activeFacultiesList.map(f => (
+                    <option key={f.id} value={f.code}>[{f.code}] {f.name}</option>
+                  ))}
+                </select>
+                {['lecturer', 'student', 'faculty_admin', 'dean'].includes(user?.role) && (
+                  <span className="text-[10px] text-amber-700 font-bold">🔒 Locked to Faculty</span>
+                )}
+              </div>
+            )}
 
             <div className="flex items-center space-x-1.5">
               <span className="text-[11px] font-extrabold text-slate-500 uppercase">Course:</span>
@@ -908,10 +965,37 @@ ANSWER: C`;
                 onChange={(e) => setSelectedCourseFilter(e.target.value)}
                 className="bg-slate-50 border border-slate-200 text-slate-800 text-xs font-bold rounded-lg px-2.5 py-1 focus:outline-none focus:ring-1 focus:ring-brand-light"
               >
-                <option value="All">All Courses</option>
+                <option value="All">All Courses ({assignedCourses.length})</option>
                 {assignedCourses.map(c => (
                   <option key={c.id} value={c.code}>[{c.code}] {c.name}</option>
                 ))}
+              </select>
+            </div>
+
+            <div className="flex items-center space-x-1.5">
+              <span className="text-[11px] font-extrabold text-slate-500 uppercase">Semester:</span>
+              <select
+                value={selectedSemesterFilter}
+                onChange={(e) => setSelectedSemesterFilter(e.target.value)}
+                className="bg-slate-50 border border-slate-200 text-slate-800 text-xs font-bold rounded-lg px-2.5 py-1 focus:outline-none focus:ring-1 focus:ring-brand-light"
+              >
+                <option value="All">All Semesters</option>
+                <option value="1">Semester 1</option>
+                <option value="2">Semester 2</option>
+              </select>
+            </div>
+
+            <div className="flex items-center space-x-1.5">
+              <span className="text-[11px] font-extrabold text-slate-500 uppercase">Year:</span>
+              <select
+                value={selectedAcademicYearFilter}
+                onChange={(e) => setSelectedAcademicYearFilter(e.target.value)}
+                className="bg-slate-50 border border-slate-200 text-slate-800 text-xs font-bold rounded-lg px-2.5 py-1 focus:outline-none focus:ring-1 focus:ring-brand-light"
+              >
+                <option value="All">All Years</option>
+                <option value="2026/2027">2026/2027</option>
+                <option value="2025/2026">2025/2026</option>
+                <option value="2024/2025">2024/2025</option>
               </select>
             </div>
           </div>
@@ -1369,10 +1453,18 @@ ANSWER: C`;
                                   )}
                                   <td className="px-4 py-3">
                                     <div className="space-y-0.5">
-                                      <div className="flex items-center space-x-1.5">
+                                      <div className="flex flex-wrap items-center gap-1.5">
                                         <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase bg-emerald-100 text-emerald-800 border border-emerald-200">
                                           {examItem.course_code}
                                         </span>
+                                        <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-50 text-purple-800 border border-purple-200">
+                                          {examItem.semester === 1 ? 'Sem 1' : examItem.semester === 2 ? 'Sem 2' : 'All Sems'}
+                                        </span>
+                                        {examItem.academic_year && examItem.academic_year !== 'All' && (
+                                          <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200">
+                                            {examItem.academic_year}
+                                          </span>
+                                        )}
                                         <span className="font-extrabold text-slate-900 leading-tight block">
                                           {examItem.title}
                                         </span>
@@ -1728,6 +1820,31 @@ ANSWER: C`;
                       className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
                       required
                     />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-slate-700 text-xs font-bold uppercase mb-1">Target Semester</label>
+                      <select
+                        value={examSemester}
+                        onChange={(e) => setExamSemester(e.target.value)}
+                        className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800"
+                      >
+                        <option value="0">All Semesters (0)</option>
+                        <option value="1">Semester 1</option>
+                        <option value="2">Semester 2</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-slate-700 text-xs font-bold uppercase mb-1">Academic Year</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. 2026/2027"
+                        value={examAcademicYear}
+                        onChange={(e) => setExamAcademicYear(e.target.value)}
+                        className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800"
+                      />
+                    </div>
                   </div>
 
                   <div className="space-y-1.5">

@@ -150,6 +150,9 @@ export default function AdminPage() {
   const [clearedFacultyData, setClearedFacultyData] = useState(null);
   const [loadingCleared, setLoadingCleared] = useState(false);
   const [selectedExamType, setSelectedExamType] = useState('ALL'); // 'ALL', 'EXAMS', 'TESTS'
+  const [selectedClearanceAcad, setSelectedClearanceAcad] = useState('2026/2027');
+  const [selectedClearanceSem, setSelectedClearanceSem] = useState('1'); // '1' or '2'
+  const [selectedFacultyClearanceLevel, setSelectedFacultyClearanceLevel] = useState('ALL'); // 'ALL', '100', '50', '0'
 
   // Universal Confirmation Modal State
   const [confirmModal, setConfirmModal] = useState({
@@ -274,10 +277,20 @@ export default function AdminPage() {
     }
   };
 
-  const fetchClearedFacultyData = async (examtype = selectedExamType) => {
+  const fetchClearedFacultyData = async (
+    examtype = selectedExamType,
+    acad = selectedClearanceAcad,
+    sem = selectedClearanceSem,
+    clearanceLevel = selectedFacultyClearanceLevel
+  ) => {
     setLoadingCleared(true);
     try {
-      const query = examtype && examtype !== 'ALL' ? `?examtype=${examtype}` : '';
+      const params = new URLSearchParams();
+      if (examtype && examtype !== 'ALL') params.append('examtype', examtype);
+      if (acad && acad !== 'ALL') params.append('acad', acad);
+      if (sem && sem !== 'ALL') params.append('sem', sem);
+      if (clearanceLevel && clearanceLevel !== 'ALL') params.append('clearance_level', clearanceLevel);
+      const query = params.toString() ? `?${params.toString()}` : '';
       const res = await api.get(`/admin/users/ciu_cleared_students/${query}`);
       setClearedFacultyData(res);
     } catch (err) {
@@ -295,7 +308,7 @@ export default function AdminPage() {
       const interval = setInterval(fetchLiveProctorFeeds, 10000);
       return () => clearInterval(interval);
     } else if (activeTab === 'ciu_cleared') {
-      fetchClearedFacultyData(selectedExamType);
+      fetchClearedFacultyData(selectedExamType, selectedClearanceAcad, selectedClearanceSem, selectedFacultyClearanceLevel);
     }
   }, [activeTab]);
 
@@ -781,15 +794,15 @@ export default function AdminPage() {
     }
   };
 
-  const handleSyncCIUClearance = async () => {
+  const handleSyncCIUClearance = async (acad = selectedClearanceAcad, sem = selectedClearanceSem) => {
     setErrorMsg('');
     setSuccessMsg('');
     setSubmitting(true);
     try {
-      const res = await api.post('/admin/users/sync_clearance/');
-      setSuccessMsg(res.detail || 'Successfully synced CIU Cleared Students API!');
+      const res = await api.post('/admin/users/sync_clearance/', { acad, sem });
+      setSuccessMsg(res.detail || `Successfully synced CIU Cleared Students API for ${acad} Semester ${sem}!`);
       loadAdminData();
-      if (activeTab === 'ciu_cleared') fetchClearedFacultyData();
+      if (activeTab === 'ciu_cleared') fetchClearedFacultyData(selectedExamType, acad, sem, selectedFacultyClearanceLevel);
     } catch (err) {
       setErrorMsg(err.message || 'Failed to sync CIU Cleared Students API.');
     } finally {
@@ -1198,9 +1211,21 @@ export default function AdminPage() {
     // 2. Role filter
     if (userRoleFilter !== 'ALL' && u.role !== userRoleFilter) return false;
 
-    // 3. Clearance filter (for students)
-    if (userClearanceFilter === 'cleared' && (u.role !== 'student' || u.tuition_paid_percentage < 100)) return false;
-    if (userClearanceFilter === 'barred' && u.role === 'student' && u.tuition_paid_percentage >= 100) return false;
+    // 3. Clearance filter (for students: 0%, 50%, 100%)
+    if (userClearanceFilter !== 'ALL') {
+      if (u.role !== 'student') {
+        if (userClearanceFilter !== '100' && userClearanceFilter !== 'cleared') return false;
+      } else {
+        const clevel = u.clearance_level !== undefined 
+          ? u.clearance_level 
+          : ((u.is_exam_cleared || (u.tuition_paid_percentage >= 100)) 
+              ? 100 
+              : ((u.is_test_cleared || (u.tuition_paid_percentage >= 50)) ? 50 : 0));
+        if ((userClearanceFilter === '100' || userClearanceFilter === 'cleared') && clevel !== 100) return false;
+        if (userClearanceFilter === '50' && clevel !== 50) return false;
+        if ((userClearanceFilter === '0' || userClearanceFilter === 'barred') && clevel !== 0) return false;
+      }
+    }
 
     // 4. Search filter (Name, Username, Email, Reg Number)
     if (userSearchTerm.trim()) {
@@ -1555,9 +1580,10 @@ export default function AdminPage() {
                     onChange={(e) => { setUserClearanceFilter(e.target.value); setCurrentPage(1); }}
                     className="w-full px-2.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:bg-white"
                   >
-                    <option value="ALL">All Clearance</option>
-                    <option value="cleared">100% Cleared</option>
-                    <option value="barred">0% Barred</option>
+                    <option value="ALL">All Clearance Levels</option>
+                    <option value="100">100% Cleared (Exams & Tests)</option>
+                    <option value="50">50% Cleared (Tests Only)</option>
+                    <option value="0">0% Barred (Uncleared)</option>
                   </select>
                 </div>
               </div>
@@ -1816,9 +1842,17 @@ export default function AdminPage() {
                           </td>
                           <td className="px-4 py-3 text-center">
                             {u.role === 'student' ? (
-                              <span className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold border shadow-2xs inline-flex items-center space-x-1 ${u.tuition_paid_percentage >= 100 ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : u.tuition_paid_percentage >= 50 ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-red-50 text-red-700 border-red-200'}`}>
-                                <span>{u.tuition_paid_percentage >= 100 ? '✅ 100% Cleared' : u.tuition_paid_percentage >= 50 ? `⚠️ ${u.tuition_paid_percentage}% Partial` : '🚫 0% Barred'}</span>
-                              </span>
+                              (() => {
+                                const clevel = u.clearance_level !== undefined ? u.clearance_level : (
+                                  (u.is_exam_cleared || u.tuition_paid_percentage >= 100) ? 100 :
+                                  (u.is_test_cleared || u.tuition_paid_percentage >= 50) ? 50 : 0
+                                );
+                                return (
+                                  <span className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold border shadow-2xs inline-flex items-center space-x-1 ${clevel === 100 ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : clevel === 50 ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-red-50 text-red-700 border-red-200'}`}>
+                                    <span>{clevel === 100 ? '✅ 100% Cleared' : clevel === 50 ? `📝 50% Cleared (${u.tuition_paid_percentage ?? 50}%)` : '🚫 0% Barred'}</span>
+                                  </span>
+                                );
+                              })()
                             ) : (
                               <span className="text-[10px] text-slate-400 font-extrabold bg-slate-100 px-2 py-0.5 rounded border border-slate-200">
                                 Staff Bypass
@@ -2710,64 +2744,130 @@ export default function AdminPage() {
                 </h3>
                 <p className="text-slate-500 text-xs">Students organized by Faculties with live external API tuition clearance validation.</p>
               </div>
-              <button
-                onClick={() => fetchClearedFacultyData(selectedExamType)}
-                disabled={loadingCleared}
-                className="px-3.5 py-1.5 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-xl shadow-sm transition-all flex items-center space-x-1.5 cursor-pointer disabled:opacity-50"
-              >
-                <span>{loadingCleared ? 'Refreshing...' : '🔄 Refresh Feed'}</span>
-              </button>
+              <div className="flex items-center space-x-2">
+                <button
+                  onClick={() => handleSyncCIUClearance(selectedClearanceAcad, selectedClearanceSem)}
+                  disabled={submitting}
+                  className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-sm transition-all flex items-center space-x-1.5 cursor-pointer disabled:opacity-50"
+                  title={`Synchronize live CIU API records for ${selectedClearanceAcad} Semester ${selectedClearanceSem}`}
+                >
+                  <span>⚡ Sync CIU API ({selectedClearanceAcad} Sem {selectedClearanceSem})</span>
+                </button>
+                <button
+                  onClick={() => fetchClearedFacultyData(selectedExamType, selectedClearanceAcad, selectedClearanceSem, selectedFacultyClearanceLevel)}
+                  disabled={loadingCleared}
+                  className="px-3.5 py-1.5 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-xl shadow-sm transition-all flex items-center space-x-1.5 cursor-pointer disabled:opacity-50"
+                >
+                  <span>{loadingCleared ? 'Refreshing...' : '🔄 Refresh Feed'}</span>
+                </button>
+              </div>
             </div>
 
-            {/* Segmented Exam Type / Stream Filter */}
+            {/* Segmented Exam Type / Stream Filter & Semester / Academic Year Filtering */}
             <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-emerald-100">
-              <div className="flex items-center space-x-1.5 bg-slate-100 p-1 rounded-xl">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSelectedExamType('ALL');
-                    fetchClearedFacultyData('ALL');
-                  }}
-                  className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
-                    selectedExamType === 'ALL'
-                      ? 'bg-white text-slate-900 shadow-xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  🌐 Combined Streams
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSelectedExamType('EXAMS');
-                    fetchClearedFacultyData('EXAMS');
-                  }}
-                  className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
-                    selectedExamType === 'EXAMS'
-                      ? 'bg-purple-600 text-white shadow-xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  🎓 EXAMS API (100% Tuition Cleared)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSelectedExamType('TESTS');
-                    fetchClearedFacultyData('TESTS');
-                  }}
-                  className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
-                    selectedExamType === 'TESTS'
-                      ? 'bg-emerald-600 text-white shadow-xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  📝 TESTS API (50% Tuition Cleared)
-                </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="flex items-center space-x-1 bg-slate-100 p-1 rounded-xl">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedExamType('ALL');
+                      fetchClearedFacultyData('ALL', selectedClearanceAcad, selectedClearanceSem, selectedFacultyClearanceLevel);
+                    }}
+                    className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
+                      selectedExamType === 'ALL'
+                        ? 'bg-white text-slate-900 shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    🌐 Combined
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedExamType('EXAMS');
+                      fetchClearedFacultyData('EXAMS', selectedClearanceAcad, selectedClearanceSem, selectedFacultyClearanceLevel);
+                    }}
+                    className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
+                      selectedExamType === 'EXAMS'
+                        ? 'bg-purple-600 text-white shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    🎓 EXAMS API (100%)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedExamType('TESTS');
+                      fetchClearedFacultyData('TESTS', selectedClearanceAcad, selectedClearanceSem, selectedFacultyClearanceLevel);
+                    }}
+                    className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
+                      selectedExamType === 'TESTS'
+                        ? 'bg-emerald-600 text-white shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    📝 TESTS API (50%)
+                  </button>
+                </div>
+
+                {/* Academic Year Filter */}
+                <div className="flex items-center space-x-1 bg-slate-50 border border-slate-200 px-2 py-1 rounded-xl">
+                  <span className="text-[10px] font-bold text-slate-500 uppercase">Year:</span>
+                  <select
+                    value={selectedClearanceAcad}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setSelectedClearanceAcad(val);
+                      fetchClearedFacultyData(selectedExamType, val, selectedClearanceSem, selectedFacultyClearanceLevel);
+                    }}
+                    className="bg-transparent text-xs font-bold text-slate-800 focus:outline-none"
+                  >
+                    <option value="2026/2027">2026/2027</option>
+                    <option value="2025/2026">2025/2026</option>
+                    <option value="2024/2025">2024/2025</option>
+                  </select>
+                </div>
+
+                {/* Semester 1 vs Semester 2 Filter */}
+                <div className="flex items-center space-x-1 bg-slate-50 border border-slate-200 px-2 py-1 rounded-xl">
+                  <span className="text-[10px] font-bold text-slate-500 uppercase">Semester:</span>
+                  <select
+                    value={selectedClearanceSem}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setSelectedClearanceSem(val);
+                      fetchClearedFacultyData(selectedExamType, selectedClearanceAcad, val, selectedFacultyClearanceLevel);
+                    }}
+                    className="bg-transparent text-xs font-bold text-slate-800 focus:outline-none"
+                  >
+                    <option value="1">Semester 1</option>
+                    <option value="2">Semester 2</option>
+                  </select>
+                </div>
+
+                {/* Clearance Level Filter (0%, 50%, 100%) */}
+                <div className="flex items-center space-x-1 bg-slate-50 border border-slate-200 px-2 py-1 rounded-xl">
+                  <span className="text-[10px] font-bold text-slate-500 uppercase">Level:</span>
+                  <select
+                    value={selectedFacultyClearanceLevel}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setSelectedFacultyClearanceLevel(val);
+                      fetchClearedFacultyData(selectedExamType, selectedClearanceAcad, selectedClearanceSem, val);
+                    }}
+                    className="bg-transparent text-xs font-bold text-slate-800 focus:outline-none"
+                  >
+                    <option value="ALL">All Levels</option>
+                    <option value="100">100% Cleared (Exams & Tests)</option>
+                    <option value="50">50% Cleared (Tests Only)</option>
+                    <option value="0">0% Barred (Uncleared)</option>
+                  </select>
+                </div>
               </div>
 
               <div className="text-[11px] text-slate-500 font-medium">
-                Active API Stream: <span className="font-bold text-slate-800">{selectedExamType === 'ALL' ? 'EXAMS (100%) + TESTS (50%)' : selectedExamType}</span>
+                Live Query: <span className="font-bold text-slate-800">{selectedClearanceAcad} • Semester {selectedClearanceSem}</span> ({selectedExamType === 'ALL' ? 'EXAMS & TESTS' : selectedExamType})
               </div>
             </div>
 
@@ -2776,7 +2876,7 @@ export default function AdminPage() {
               <div className="space-y-0.5">
                 <span className="font-bold block">CIU Dual Clearance Policy:</span>
                 <span className="text-slate-600">
-                  Continuous Assessment Tests consume the <strong>TESTS API</strong> stream (<code className="bg-blue-100/70 px-1 py-0.5 rounded text-[10px]">examtype=TESTS</code>) allowing students who have cleared at least 50% tuition to sit for tests. Final Exams strictly require 100% tuition clearance or an active accounts override.
+                  Continuous Assessment Tests consume the <strong>TESTS API</strong> stream (<code className="bg-blue-100/70 px-1 py-0.5 rounded text-[10px]">examtype=TESTS&acad={selectedClearanceAcad}&sem={selectedClearanceSem}</code>) allowing students with &ge; 50% tuition clearance to sit for tests. Final Exams strictly consume the <strong>EXAMS API</strong> stream (<code className="bg-blue-100/70 px-1 py-0.5 rounded text-[10px]">examtype=EXAMS&acad={selectedClearanceAcad}&sem={selectedClearanceSem}</code>) requiring 100% tuition clearance or an active accounts override.
                 </span>
               </div>
             </div>
@@ -2807,6 +2907,7 @@ export default function AdminPage() {
                           <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 uppercase font-semibold">
                             <th className="px-4 py-3">Student Name</th>
                             <th className="px-4 py-3">Registration Number</th>
+                            <th className="px-4 py-3 text-center">Clearance Level</th>
                             <th className="px-4 py-3 text-center">Exam Gate (100%)</th>
                             <th className="px-4 py-3 text-center">Test Gate (50%)</th>
                           </tr>
@@ -2816,6 +2917,11 @@ export default function AdminPage() {
                             <tr key={st.id} className="hover:bg-slate-50 transition-all">
                               <td className="px-4 py-3 font-bold text-slate-850">{st.full_name} ({st.username})</td>
                               <td className="px-4 py-3 font-mono font-bold text-brand-medium">{st.reg_number}</td>
+                              <td className="px-4 py-3 text-center">
+                                <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${st.clearance_level === 100 ? 'bg-emerald-50 text-emerald-800 border-emerald-300' : st.clearance_level === 50 ? 'bg-amber-50 text-amber-800 border-amber-300' : 'bg-red-50 text-red-800 border-red-300'}`}>
+                                  {st.clearance_level === 100 ? '🎓 100% Cleared' : st.clearance_level === 50 ? '📝 50% Cleared' : '🚫 0% Barred'}
+                                </span>
+                              </td>
                               <td className="px-4 py-3 text-center">
                                 <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${st.is_exam_cleared ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-red-50 text-red-700 border-red-200'}`}>
                                   {st.is_exam_cleared ? 'CLEARED' : 'BARRED'}

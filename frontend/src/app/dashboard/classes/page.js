@@ -58,10 +58,23 @@ export default function ClassesPage() {
   const isExecutiveReadOnly = ['dvc', 'vc', 'dean'].includes(user?.role);
   const isLecturer = ['lecturer', 'admin'].includes(user?.role) && !isExecutiveReadOnly;
 
-  // Filter assigned courses for Lecturers
+  // Filter assigned courses for Lecturers & Students
   const assignedCourses = user?.role === 'lecturer'
     ? courses.filter(c => courseUnits.some(u => u.course_code === c.code && u.lecturer_details?.some(l => l.id === user.id)))
+    : user?.role === 'student'
+    ? courses.filter(c => (user?.assigned_courses || []).includes(c.id) || (user?.assigned_course_codes || []).includes(c.code) || (!user?.assigned_courses?.length && (c.faculty === user?.faculty || c.faculty_code === user?.faculty_code)))
     : courses;
+
+  const filteredContents = user?.role === 'student'
+    ? contents.filter(item => {
+        const assignedIds = user?.assigned_courses || [];
+        const assignedCodes = user?.assigned_course_codes || [];
+        if (assignedIds.length > 0 || assignedCodes.length > 0) {
+          return assignedIds.includes(item.course) || assignedCodes.includes(item.course_code);
+        }
+        return true;
+      })
+    : contents;
 
   const handleUploadContent = async (e) => {
     e.preventDefault();
@@ -197,11 +210,11 @@ export default function ClassesPage() {
           <div className="green-card rounded-2xl p-6 space-y-4">
             <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">Lecture Resources & Files</h3>
             
-            {contents.length === 0 ? (
+            {filteredContents.length === 0 ? (
               <p className="text-slate-400 text-xs py-8 text-center">No reading resources posted yet.</p>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {contents.map((item) => (
+                {filteredContents.map((item) => (
                   <div key={item.id} className="p-4 bg-gradient-to-br from-white to-emerald-50/20 rounded-xl border border-emerald-200/80 flex flex-col justify-between space-y-3 hover:border-emerald-300 transition-all">
                     <div>
                       <div className="flex justify-between items-start">

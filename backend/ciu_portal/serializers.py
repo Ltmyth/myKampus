@@ -20,10 +20,11 @@ class UserSerializer(serializers.ModelSerializer):
     is_temp_cleared = serializers.SerializerMethodField()
     temp_clearance_info = serializers.SerializerMethodField()
     effective_tuition_percentage = serializers.SerializerMethodField()
+    clearance_level = serializers.SerializerMethodField()
 
     class Meta:
         model = User
-        fields = ('id', 'username', 'email', 'first_name', 'last_name', 'role', 'phone', 'gender', 'gender_display', 'tuition_paid_percentage', 'effective_tuition_percentage', 'faculty', 'faculty_name', 'faculty_code', 'assigned_courses', 'assigned_course_codes', 'reg_number', 'registration_number', 'year_of_study', 'semester', 'entry_year', 'intake', 'must_change_password', 'is_active', 'is_test_cleared', 'is_exam_cleared', 'is_temp_cleared', 'clearance_source', 'clearance_mode', 'temp_clearance_info')
+        fields = ('id', 'username', 'email', 'first_name', 'last_name', 'role', 'phone', 'gender', 'gender_display', 'tuition_paid_percentage', 'effective_tuition_percentage', 'faculty', 'faculty_name', 'faculty_code', 'assigned_courses', 'assigned_course_codes', 'reg_number', 'registration_number', 'year_of_study', 'semester', 'academic_year', 'entry_year', 'intake', 'must_change_password', 'is_active', 'is_test_cleared', 'is_exam_cleared', 'is_temp_cleared', 'clearance_source', 'clearance_mode', 'temp_clearance_info', 'clearance_level')
         read_only_fields = ('role', 'registration_number', 'is_active')
 
     def validate_gender(self, value):
@@ -66,7 +67,9 @@ class UserSerializer(serializers.ModelSerializer):
                 }
             else:
                 from .clearance import check_student_clearance
-                obj._cached_clearance = check_student_clearance(obj)
+                acad = getattr(obj, 'academic_year', '2026/2027') or '2026/2027'
+                sem = str(getattr(obj, 'semester', 1) or 1)
+                obj._cached_clearance = check_student_clearance(obj, acad=acad, sem=sem)
         return obj._cached_clearance
 
     def get_is_test_cleared(self, obj):
@@ -90,6 +93,17 @@ class UserSerializer(serializers.ModelSerializer):
     def get_effective_tuition_percentage(self, obj):
         return self._get_clearance(obj).get('tuition_paid_percentage', float(obj.tuition_paid_percentage or 0.0))
 
+    def get_clearance_level(self, obj):
+        if obj.role != 'student':
+            return 100
+        clr = self._get_clearance(obj)
+        pct = clr.get('tuition_paid_percentage', float(obj.tuition_paid_percentage or 0.0))
+        if clr.get('is_exam_cleared') or pct >= 100.0:
+            return 100
+        elif clr.get('is_test_cleared') or pct >= 50.0:
+            return 50
+        return 0
+
 class AdminUserSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, required=False, allow_blank=True, allow_null=True)
     faculty_name = serializers.CharField(source='faculty.name', read_only=True, allow_null=True)
@@ -104,10 +118,11 @@ class AdminUserSerializer(serializers.ModelSerializer):
     is_temp_cleared = serializers.SerializerMethodField()
     temp_clearance_info = serializers.SerializerMethodField()
     effective_tuition_percentage = serializers.SerializerMethodField()
+    clearance_level = serializers.SerializerMethodField()
 
     class Meta:
         model = User
-        fields = ('id', 'username', 'email', 'password', 'first_name', 'last_name', 'role', 'phone', 'gender', 'gender_display', 'tuition_paid_percentage', 'effective_tuition_percentage', 'faculty', 'faculty_name', 'faculty_code', 'assigned_courses', 'assigned_course_codes', 'reg_number', 'registration_number', 'year_of_study', 'semester', 'entry_year', 'intake', 'must_change_password', 'is_active', 'is_test_cleared', 'is_exam_cleared', 'is_temp_cleared', 'clearance_source', 'clearance_mode', 'temp_clearance_info')
+        fields = ('id', 'username', 'email', 'password', 'first_name', 'last_name', 'role', 'phone', 'gender', 'gender_display', 'tuition_paid_percentage', 'effective_tuition_percentage', 'faculty', 'faculty_name', 'faculty_code', 'assigned_courses', 'assigned_course_codes', 'reg_number', 'registration_number', 'year_of_study', 'semester', 'academic_year', 'entry_year', 'intake', 'must_change_password', 'is_active', 'is_test_cleared', 'is_exam_cleared', 'is_temp_cleared', 'clearance_source', 'clearance_mode', 'temp_clearance_info', 'clearance_level')
 
     def validate_phone(self, value):
         if value:
@@ -174,7 +189,9 @@ class AdminUserSerializer(serializers.ModelSerializer):
                 }
             else:
                 from .clearance import check_student_clearance
-                obj._cached_clearance = check_student_clearance(obj)
+                acad = getattr(obj, 'academic_year', '2026/2027') or '2026/2027'
+                sem = str(getattr(obj, 'semester', 1) or 1)
+                obj._cached_clearance = check_student_clearance(obj, acad=acad, sem=sem)
         return obj._cached_clearance
 
     def get_is_test_cleared(self, obj):
@@ -197,6 +214,17 @@ class AdminUserSerializer(serializers.ModelSerializer):
 
     def get_effective_tuition_percentage(self, obj):
         return self._get_clearance(obj).get('tuition_paid_percentage', float(obj.tuition_paid_percentage or 0.0))
+
+    def get_clearance_level(self, obj):
+        if obj.role != 'student':
+            return 100
+        clr = self._get_clearance(obj)
+        pct = clr.get('tuition_paid_percentage', float(obj.tuition_paid_percentage or 0.0))
+        if clr.get('is_exam_cleared') or pct >= 100.0:
+            return 100
+        elif clr.get('is_test_cleared') or pct >= 50.0:
+            return 50
+        return 0
 
 
 class UserCreateSerializer(serializers.ModelSerializer):
@@ -337,6 +365,7 @@ class ExamSerializer(serializers.ModelSerializer):
     course_unit_name = serializers.CharField(source='course_unit.name', read_only=True, allow_null=True)
     course_unit_code = serializers.CharField(source='course_unit.code', read_only=True, allow_null=True)
     course_unit_year = serializers.IntegerField(source='course_unit.year_of_study', read_only=True, allow_null=True)
+    course_unit_semester = serializers.IntegerField(source='course_unit.semester', read_only=True, allow_null=True)
     lecturer_name = serializers.CharField(source='lecturer.get_full_name', read_only=True)
     questions_count = serializers.IntegerField(source='questions.count', read_only=True)
 
@@ -398,6 +427,7 @@ class TestSerializer(serializers.ModelSerializer):
     course_unit_name = serializers.CharField(source='course_unit.name', read_only=True, allow_null=True)
     course_unit_code = serializers.CharField(source='course_unit.code', read_only=True, allow_null=True)
     course_unit_year = serializers.IntegerField(source='course_unit.year_of_study', read_only=True, allow_null=True)
+    course_unit_semester = serializers.IntegerField(source='course_unit.semester', read_only=True, allow_null=True)
     lecturer_name = serializers.CharField(source='lecturer.get_full_name', read_only=True)
     questions_count = serializers.IntegerField(source='questions.count', read_only=True)
     attempts_count = serializers.IntegerField(source='attempts.count', read_only=True)

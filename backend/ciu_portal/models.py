@@ -40,6 +40,7 @@ class User(AbstractUser):
         (2, 'Semester 2'),
     )
     semester = models.IntegerField(choices=SEMESTER_CHOICES, default=1, help_text="Current Semester of Study for students (1 or 2)")
+    academic_year = models.CharField(max_length=20, default='2026/2027', blank=True, null=True, db_index=True, help_text="Current Academic Year (e.g. 2026/2027)")
     entry_year = models.IntegerField(default=2026, blank=True, null=True, help_text="Admission / Entry Year (e.g. 2026)")
     INTAKE_CHOICES = (
         ('January Intake', 'January Intake'),
@@ -164,6 +165,13 @@ class Exam(models.Model):
         (4, 'Year 4'),
     )
     year_of_study = models.IntegerField(choices=YEAR_SCOPING_CHOICES, default=0, help_text="Target academic year of study (0 for All Years, 1-4 for specific year)")
+    SEMESTER_SCOPING_CHOICES = (
+        (0, 'All Semesters'),
+        (1, 'Semester 1'),
+        (2, 'Semester 2'),
+    )
+    semester = models.IntegerField(choices=SEMESTER_SCOPING_CHOICES, default=0, db_index=True, help_text="Target semester of study (0 for All Semesters, 1 or 2)")
+    academic_year = models.CharField(max_length=20, default='2026/2027', blank=True, null=True, db_index=True, help_text="Target academic year (e.g. 2026/2027)")
     due_date = models.DateTimeField(null=True, blank=True)
     is_active = models.BooleanField(default=False, db_index=True)
     is_published = models.BooleanField(default=False, db_index=True)
@@ -229,6 +237,13 @@ class Test(models.Model):
     is_published = models.BooleanField(default=False, db_index=True)
     is_results_released = models.BooleanField(default=True, help_text="Whether test results & scorecards are released to students")
     year_of_study = models.IntegerField(choices=((0, 'All Years'), (1, 'Year 1'), (2, 'Year 2'), (3, 'Year 3'), (4, 'Year 4')), default=0, help_text="Target academic year of study")
+    SEMESTER_SCOPING_CHOICES = (
+        (0, 'All Semesters'),
+        (1, 'Semester 1'),
+        (2, 'Semester 2'),
+    )
+    semester = models.IntegerField(choices=SEMESTER_SCOPING_CHOICES, default=0, db_index=True, help_text="Target semester of study (0 for All Semesters, 1 or 2)")
+    academic_year = models.CharField(max_length=20, default='2026/2027', blank=True, null=True, db_index=True, help_text="Target academic year (e.g. 2026/2027)")
     due_date = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
