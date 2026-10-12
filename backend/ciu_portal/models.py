@@ -153,6 +153,8 @@ class Application(models.Model):
 class Exam(models.Model):
     course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='exams')
     course_unit = models.ForeignKey(CourseUnit, on_delete=models.CASCADE, null=True, blank=True, related_name='exams')
+    additional_courses = models.ManyToManyField(Course, blank=True, related_name='shared_exams', help_text="Additional courses this exam is set for")
+    additional_course_units = models.ManyToManyField(CourseUnit, blank=True, related_name='shared_exams', help_text="Additional course units this exam is set for")
     lecturer = models.ForeignKey(User, on_delete=models.CASCADE, limit_choices_to={'role': 'lecturer'}, related_name='created_exams')
     title = models.CharField(max_length=150)
     duration_minutes = models.IntegerField(default=60)
@@ -212,6 +214,29 @@ class ExamAttempt(models.Model):
     is_late = models.BooleanField(default=False, help_text="Indicates whether attempt or submission occurred after regular stop time")
     late_submission_reason = models.TextField(blank=True, null=True, help_text="Student comments explaining reason for late submission")
 
+    SUBMISSION_TYPE_CHOICES = (
+        ('manual', 'Manual Submission'),
+        ('system', 'System Auto-Submit'),
+        ('security logs', 'Security Logs Triggered'),
+    )
+    submission_type = models.CharField(
+        max_length=30,
+        choices=SUBMISSION_TYPE_CHOICES,
+        default='manual',
+        blank=True,
+        help_text="Type of submission: manual, system, or security logs"
+    )
+
+    def get_submission_type_display_safe(self):
+        if self.submission_type in ['manual', 'system', 'security logs']:
+            return dict(self.SUBMISSION_TYPE_CHOICES).get(self.submission_type, self.submission_type.title())
+        if self.auto_submitted_reason:
+            reason_lower = self.auto_submitted_reason.lower()
+            if any(k in reason_lower for k in ['tab switch', 'security', 'lockdown', 'blur']):
+                return 'Security Logs Triggered'
+            return 'System Auto-Submit'
+        return 'Manual Submission'
+
     def __str__(self):
         return f"{self.student.username} - {self.exam.title} (Score: {self.score}%)"
 
@@ -225,6 +250,8 @@ class Test(models.Model):
     )
     course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='tests')
     course_unit = models.ForeignKey(CourseUnit, on_delete=models.CASCADE, null=True, blank=True, related_name='tests')
+    additional_courses = models.ManyToManyField(Course, blank=True, related_name='shared_tests', help_text="Additional courses this test is set for")
+    additional_course_units = models.ManyToManyField(CourseUnit, blank=True, related_name='shared_tests', help_text="Additional course units this test is set for")
     lecturer = models.ForeignKey(User, on_delete=models.CASCADE, limit_choices_to={'role': 'lecturer'}, related_name='created_tests')
     title = models.CharField(max_length=150)
     description = models.TextField(blank=True)
@@ -284,6 +311,29 @@ class TestAttempt(models.Model):
     feedback = models.TextField(blank=True, null=True)
     is_late = models.BooleanField(default=False, help_text="Indicates whether attempt or submission occurred after regular stop time")
     late_submission_reason = models.TextField(blank=True, null=True, help_text="Student comments explaining reason for late submission")
+
+    SUBMISSION_TYPE_CHOICES = (
+        ('manual', 'Manual Submission'),
+        ('system', 'System Auto-Submit'),
+        ('security logs', 'Security Logs Triggered'),
+    )
+    submission_type = models.CharField(
+        max_length=30,
+        choices=SUBMISSION_TYPE_CHOICES,
+        default='manual',
+        blank=True,
+        help_text="Type of submission: manual, system, or security logs"
+    )
+
+    def get_submission_type_display_safe(self):
+        if self.submission_type in ['manual', 'system', 'security logs']:
+            return dict(self.SUBMISSION_TYPE_CHOICES).get(self.submission_type, self.submission_type.title())
+        if self.auto_submitted_reason:
+            reason_lower = self.auto_submitted_reason.lower()
+            if any(k in reason_lower for k in ['tab switch', 'security', 'lockdown', 'blur']):
+                return 'Security Logs Triggered'
+            return 'System Auto-Submit'
+        return 'Manual Submission'
 
     def __str__(self):
         return f"{self.student.username} - Attempt #{self.attempt_number} for {self.test.title} (Score: {self.score}%)"

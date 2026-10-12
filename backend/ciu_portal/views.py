@@ -17,6 +17,7 @@ from .models import (
     TemporaryClearance, QuestionBank, QuestionBankItem, ProctorSnapshot
 )
 from .serializers import (
+    resolve_user_faculty,
     UserSerializer, UserCreateSerializer, AdminUserSerializer, FacultySerializer,
     InvitationSerializer, CourseSerializer, CourseUnitSerializer, ApplicationSerializer, ApplicationReviewSerializer,
     ExamSerializer, QuestionLecturerSerializer, QuestionStudentSerializer, ExamAttemptSerializer,
@@ -587,13 +588,33 @@ class AdminUserViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsAdmin | IsAccountsPersonnel])
     def sync_clearance(self, request):
-        acad = request.data.get('acad') or request.query_params.get('acad') or '2026/2027'
-        sem = request.data.get('sem') or request.query_params.get('sem') or '1'
+        # Strictly lock academic year to current year (2026/2027)
+        acad = '2026/2027'
+        sem_raw = str(request.data.get('sem') or request.query_params.get('sem') or 'both').strip().lower()
 
-        exams_list = fetch_external_cleared_students(examtype="EXAMS", acad=acad, sem=sem, force_refresh=True)
-        tests_list = fetch_external_cleared_students(examtype="TESTS", acad=acad, sem=sem, force_refresh=True)
+        if sem_raw in ['both', 'all', '1,2', '1 and 2']:
+            exams_s1 = fetch_external_cleared_students(examtype="EXAMS", acad=acad, sem="1", force_refresh=True) or []
+            exams_s2 = fetch_external_cleared_students(examtype="EXAMS", acad=acad, sem="2", force_refresh=True) or []
+            exams_list = (exams_s1 if isinstance(exams_s1, list) else []) + (exams_s2 if isinstance(exams_s2, list) else [])
+
+            tests_s1 = fetch_external_cleared_students(examtype="TESTS", acad=acad, sem="1", force_refresh=True) or []
+            tests_s2 = fetch_external_cleared_students(examtype="TESTS", acad=acad, sem="2", force_refresh=True) or []
+            tests_list = (tests_s1 if isinstance(tests_s1, list) else []) + (tests_s2 if isinstance(tests_s2, list) else [])
+            sem_label = "Both Semesters (1 & 2)"
+            eval_sem = "both"
+        elif '2' in sem_raw:
+            exams_list = fetch_external_cleared_students(examtype="EXAMS", acad=acad, sem="2", force_refresh=True)
+            tests_list = fetch_external_cleared_students(examtype="TESTS", acad=acad, sem="2", force_refresh=True)
+            sem_label = "Semester 2"
+            eval_sem = "2"
+        else:
+            exams_list = fetch_external_cleared_students(examtype="EXAMS", acad=acad, sem="1", force_refresh=True)
+            tests_list = fetch_external_cleared_students(examtype="TESTS", acad=acad, sem="1", force_refresh=True)
+            sem_label = "Semester 1"
+            eval_sem = "1"
+
         if exams_list is None and tests_list is None:
-            return Response({'detail': 'Failed to connect to CIU Cleared Students API endpoint.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({'detail': f'Failed to connect to CIU Cleared Students API endpoint for Academic Year {acad} ({sem_label}).'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
         preloaded = {
             'exams': exams_list or [],
@@ -608,7 +629,7 @@ class AdminUserViewSet(viewsets.ModelViewSet):
         manual_cleared_count = 0
         students = User.objects.filter(role='student')
         for student in students:
-            clearance = check_student_clearance(student, preloaded_api_data=preloaded, acad=acad, sem=sem)
+            clearance = check_student_clearance(student, preloaded_api_data=preloaded, acad=acad, sem=eval_sem)
             if clearance['is_temp_cleared']:
                 active_temp_count += 1
             elif clearance.get('is_api_exam_cleared'):
@@ -624,10 +645,13 @@ class AdminUserViewSet(viewsets.ModelViewSet):
             else:
                 barred_count += 1
 
-        msg = f"Successfully synced live CIU EXAMS & TESTS APIs! {updated_exams_count} cleared for 100% (Exams & Tests), {updated_tests_count} cleared for 50% (Tests only), {active_temp_count} temporary overrides, {manual_cleared_count} manual clearances preserved."
+        msg = f"Successfully synced live CIU EXAMS (100%) & TESTS (50%) APIs for Academic Year {acad} ({sem_label})! {updated_exams_count} cleared for 100% (Exams & Tests), {updated_tests_count} cleared for 50% (Tests only), {active_temp_count} temporary overrides, {manual_cleared_count} manual clearances preserved."
         log_system_event(request.user, "STUDENT_CLEARANCE_SYNC_SUCCESS", level="AUDIT", details=msg)
         return Response({
             'detail': msg,
+            'academic_year': acad,
+            'semester': sem_raw,
+            'semester_label': sem_label,
             'total_students': students.count(),
             'api_exams_cleared': updated_exams_count,
             'api_tests_cleared': updated_tests_count,
@@ -1785,9 +1809,17 @@ class AdminUserViewSet(viewsets.ModelViewSet):
         acad = request.query_params.get('acad', '2026/2027').strip()
         sem = request.query_params.get('sem', '1').strip()
 
-        cleared_api_records = fetch_external_cleared_students(examtype=examtype, acad=acad, sem=sem) or []
         other_type = 'TESTS' if examtype == 'EXAMS' else 'EXAMS'
-        other_api_records = fetch_external_cleared_students(examtype=other_type, acad=acad, sem=sem) or []
+        if sem in ['both', 'ALL', 'all']:
+            r1 = fetch_external_cleared_students(examtype=examtype, acad=acad, sem='1') or []
+            r2 = fetch_external_cleared_students(examtype=examtype, acad=acad, sem='2') or []
+            cleared_api_records = (r1 if isinstance(r1, list) else []) + (r2 if isinstance(r2, list) else [])
+            o1 = fetch_external_cleared_students(examtype=other_type, acad=acad, sem='1') or []
+            o2 = fetch_external_cleared_students(examtype=other_type, acad=acad, sem='2') or []
+            other_api_records = (o1 if isinstance(o1, list) else []) + (o2 if isinstance(o2, list) else [])
+        else:
+            cleared_api_records = fetch_external_cleared_students(examtype=examtype, acad=acad, sem=sem) or []
+            other_api_records = fetch_external_cleared_students(examtype=other_type, acad=acad, sem=sem) or []
 
         exams_count = len(cleared_api_records) if examtype == 'EXAMS' else len(other_api_records)
         tests_count = len(cleared_api_records) if examtype == 'TESTS' else len(other_api_records)
@@ -2112,7 +2144,7 @@ class CourseViewSet(viewsets.ModelViewSet):
             qs = Course.objects.filter(faculty__in=assigned_facs)
         elif user.role == 'lecturer':
             qs = Course.objects.filter(
-                models.Q(units__lecturers=user) | models.Q(faculty=user.faculty)
+                models.Q(units__lecturers=user) | models.Q(id__in=user.assigned_courses.values_list('id', flat=True))
             ).distinct()
         elif user.role == 'student':
             assigned_courses_qs = Course.objects.filter(
@@ -2377,9 +2409,7 @@ class CourseUnitViewSet(viewsets.ModelViewSet):
                 student_courses = Course.objects.none()
             qs = CourseUnit.objects.filter(course__in=student_courses)
         elif user.role == 'lecturer':
-            qs = CourseUnit.objects.filter(
-                models.Q(lecturers=user) | models.Q(course__units__lecturers=user)
-            ).distinct()
+            qs = CourseUnit.objects.filter(lecturers=user).distinct()
         else:
             qs = CourseUnit.objects.all()
 
@@ -2917,6 +2947,7 @@ class ExamViewSet(viewsets.ModelViewSet):
 
         acad_param = self.request.query_params.get('academic_year') or self.request.query_params.get('acad')
         sem_param = self.request.query_params.get('semester') or self.request.query_params.get('sem')
+        status_param = self.request.query_params.get('status')
 
         if user.role in ['dean', 'faculty_admin', 'faculty_secretary']:
             assigned_facs = get_user_assigned_faculties(user)
@@ -2935,20 +2966,28 @@ class ExamViewSet(viewsets.ModelViewSet):
             student_sem = getattr(user, 'semester', 1) or 1
             student_acad = getattr(user, 'academic_year', '2026/2027') or '2026/2027'
             qs = Exam.objects.filter(
-                models.Q(is_active=True) | models.Q(is_published=True),
-                course__in=student_courses
+                models.Q(is_active=True) | models.Q(is_published=True)
             ).filter(
-                models.Q(year_of_study=student_year) | models.Q(year_of_study=0) | models.Q(course_unit__year_of_study=student_year)
+                models.Q(course__in=student_courses) |
+                models.Q(additional_courses__in=student_courses) |
+                models.Q(additional_course_units__course__in=student_courses)
             ).filter(
-                models.Q(semester=student_sem) | models.Q(semester=0) | models.Q(course_unit__semester=student_sem)
+                models.Q(year_of_study=student_year) | models.Q(year_of_study=0) |
+                models.Q(course_unit__year_of_study=student_year) |
+                models.Q(additional_course_units__year_of_study=student_year)
+            ).filter(
+                models.Q(semester=student_sem) | models.Q(semester=0) |
+                models.Q(course_unit__semester=student_sem) |
+                models.Q(additional_course_units__semester=student_sem)
             ).filter(
                 models.Q(academic_year__iexact=student_acad) | models.Q(academic_year__isnull=True) | models.Q(academic_year__iexact='All') | models.Q(academic_year='')
-            ).order_by('-created_at')
+            ).distinct().order_by('-created_at')
         elif user.role == 'lecturer':
             qs = Exam.objects.filter(
                 models.Q(lecturer=user) |
                 models.Q(course__units__lecturers=user) |
-                models.Q(course_unit__lecturers=user)
+                models.Q(course_unit__lecturers=user) |
+                models.Q(additional_course_units__lecturers=user)
             ).distinct().order_by('-created_at')
         else:
             qs = Exam.objects.all().order_by('-created_at')
@@ -2961,6 +3000,19 @@ class ExamViewSet(viewsets.ModelViewSet):
                 qs = qs.filter(models.Q(semester=s_int) | models.Q(semester=0))
             except (ValueError, TypeError):
                 pass
+
+        if status_param and str(status_param).strip() and str(status_param).strip() != 'All':
+            s_clean = str(status_param).strip().lower()
+            now = timezone.now()
+            if s_clean in ['in progress', 'inprogress', 'active']:
+                qs = qs.filter(
+                    models.Q(scheduled_start__lte=now) | models.Q(scheduled_start__isnull=True),
+                    models.Q(due_date__gte=now) | models.Q(due_date__isnull=True)
+                )
+            elif s_clean in ['ended', 'completed', 'past']:
+                qs = qs.filter(due_date__lt=now)
+            elif s_clean in ['scheduled', 'upcoming']:
+                qs = qs.filter(scheduled_start__gt=now)
 
         course_param = self.request.query_params.get('course') or self.request.query_params.get('course_id')
         if course_param and str(course_param).strip() and str(course_param).strip() != 'All':
@@ -3009,8 +3061,17 @@ class ExamViewSet(viewsets.ModelViewSet):
         course_unit = serializer.validated_data.get('course_unit')
         year_of_study = serializer.validated_data.get('year_of_study', 0)
         semester = serializer.validated_data.get('semester', 0)
-        target_course_ids = self.request.data.get('target_course_ids', [])
-        target_years = self.request.data.get('target_years', [])
+        scheduled_start = serializer.validated_data.get('scheduled_start')
+        due_date = serializer.validated_data.get('due_date')
+        now = timezone.now()
+        min_allowed = now - timezone.timedelta(minutes=5)
+
+        if scheduled_start and scheduled_start < min_allowed:
+            raise serializers.ValidationError({"scheduled_start": "Exam start date and time cannot be in the past. Please select the current or a future Ugandan time (EAT)."})
+        if due_date and due_date < min_allowed:
+            raise serializers.ValidationError({"due_date": "Exam stop date and time cannot be in the past. Please select the current or a future Ugandan time (EAT)."})
+        if scheduled_start and due_date and due_date <= scheduled_start:
+            raise serializers.ValidationError({"due_date": "Exam stop time must be strictly after the start time."})
 
         # Only System Admin or Platform Coordinator can set an exam for All Course Units & All Years (Year 0)
         if user.role not in ['admin', 'platform_coordinator'] and year_of_study == 0 and not course_unit:
@@ -3031,31 +3092,15 @@ class ExamViewSet(viewsets.ModelViewSet):
                 is_assigned = True
             if not is_assigned:
                 raise serializers.ValidationError({"detail": "Permission Denied: You can only set exams for your assigned course units."})
+            
+            # Validate additional course units
+            add_units = serializer.validated_data.get('additional_course_units', [])
+            for u in add_units:
+                if not u.lecturers.filter(id=user.id).exists():
+                    raise serializers.ValidationError({"additional_course_units": f"Permission Denied: Course unit {u.code} is not assigned to you."})
+
         exam = serializer.save(lecturer=user)
         log_system_event(user, f"Exam Created: {exam.title} ({exam.course.code})", level="INFO")
-
-        # Handle multi-course / multi-program and multi-year exam scoping
-        if (target_course_ids and len(target_course_ids) > 1) or (target_years and len(target_years) > 1):
-            courses_to_create = Course.objects.filter(id__in=target_course_ids) if target_course_ids else [exam.course]
-            years_to_create = target_years if target_years else [exam.year_of_study]
-
-            for c in courses_to_create:
-                for y in years_to_create:
-                    if c.id == exam.course.id and int(y) == exam.year_of_study:
-                        continue
-                    Exam.objects.create(
-                        course=c,
-                        course_unit=exam.course_unit,
-                        lecturer=user,
-                        title=exam.title,
-                        duration_minutes=exam.duration_minutes,
-                        scheduled_start=exam.scheduled_start,
-                        year_of_study=int(y),
-                        due_date=exam.due_date,
-                        is_active=exam.is_active,
-                        is_approved_by_dean=exam.is_approved_by_dean,
-                        is_results_released=exam.is_results_released
-                    )
 
     def perform_update(self, serializer):
         user = self.request.user
@@ -3066,7 +3111,20 @@ class ExamViewSet(viewsets.ModelViewSet):
                 raise serializers.ValidationError({"detail": "Permission Denied: You can only update your own created exams."})
             if serializer.instance.is_approved_by_dean:
                 raise serializers.ValidationError({"detail": "Permission Denied: Approved exams cannot be modified by the lecturer."})
-        serializer.save()
+        
+        scheduled_start = serializer.validated_data.get('scheduled_start')
+        due_date = serializer.validated_data.get('due_date')
+        now = timezone.now()
+        min_allowed = now - timezone.timedelta(minutes=5)
+        if 'scheduled_start' in serializer.validated_data and scheduled_start and scheduled_start < min_allowed:
+            raise serializers.ValidationError({"scheduled_start": "Exam start date and time cannot be set to a past time."})
+        if 'due_date' in serializer.validated_data and due_date and due_date < min_allowed:
+            raise serializers.ValidationError({"due_date": "Exam stop date and time cannot be set to a past time."})
+        if scheduled_start and due_date and due_date <= scheduled_start:
+            raise serializers.ValidationError({"due_date": "Exam stop time must be strictly after the start time."})
+
+        exam = serializer.save()
+        log_system_event(user, f"Exam Updated: {exam.title} ({exam.course.code})", level="INFO")
 
     def perform_destroy(self, instance):
         user = self.request.user
@@ -3078,6 +3136,156 @@ class ExamViewSet(viewsets.ModelViewSet):
             if instance.is_approved_by_dean:
                 raise serializers.ValidationError({"detail": "Permission Denied: Approved exams cannot be deleted by the lecturer."})
         instance.delete()
+
+    @action(detail=True, methods=['get'], permission_classes=[permissions.IsAuthenticated])
+    def live_students(self, request, pk=None):
+        exam = self.get_object()
+        user = request.user
+
+        is_staff = user.role in ['admin', 'platform_coordinator', 'dean', 'faculty_admin', 'faculty_secretary', 'registrar', 'dvc', 'vc']
+        is_lecturer = user.role == 'lecturer'
+        
+        if not (is_staff or is_lecturer):
+            return Response({'detail': 'Permission Denied: Only authorized staff and lecturers can monitor student exam status.'}, status=status.HTTP_403_FORBIDDEN)
+        
+        lecturer_assigned_units = CourseUnit.objects.none()
+        if is_lecturer and not is_staff:
+            lecturer_assigned_units = CourseUnit.objects.filter(lecturers=user).filter(
+                models.Q(id=exam.course_unit_id) | models.Q(id__in=exam.additional_course_units.values_list('id', flat=True)) | models.Q(course_id=exam.course_id)
+            )
+            is_exam_owner = exam.lecturer_id == user.id
+            if not is_exam_owner and not lecturer_assigned_units.exists():
+                return Response({'detail': 'Permission Denied: You can only view student statuses for your assigned course units.'}, status=status.HTTP_403_FORBIDDEN)
+
+        courses = [exam.course] + list(exam.additional_courses.all())
+        course_ids = [c.id for c in courses if c]
+
+        students_qs = User.objects.filter(role='student', is_active=True).filter(
+            models.Q(assigned_courses__in=course_ids) |
+            models.Q(exam_attempts__exam=exam)
+        ).distinct()
+
+        if exam.year_of_study and exam.year_of_study != 0:
+            students_qs = students_qs.filter(models.Q(year_of_study=exam.year_of_study) | models.Q(exam_attempts__exam=exam)).distinct()
+
+        attempts = {att.student_id: att for att in ExamAttempt.objects.filter(exam=exam).select_related('student')}
+
+        now = timezone.now()
+        if exam.scheduled_start and now < exam.scheduled_start:
+            exam_status = 'Scheduled'
+        elif exam.due_date and now > exam.due_date:
+            exam_status = 'Ended'
+        else:
+            exam_status = 'In Progress'
+
+        status_filter = (request.query_params.get('status') or '').strip().capitalize()
+        search_filter = (request.query_params.get('search') or '').strip().lower()
+        unit_filter = (request.query_params.get('course_unit') or request.query_params.get('unit') or '').strip()
+        faculty_filter = (request.query_params.get('faculty') or '').strip()
+
+        students_list = []
+        counts = {'total': 0, 'started': 0, 'submitted': 0, 'pending': 0}
+        by_faculty = {}
+        by_course_unit = {}
+
+        for student in students_qs:
+            att = attempts.get(student.id)
+            if att and att.completed_at:
+                s_status = 'Submitted'
+                started_at = att.started_at
+                completed_at = att.completed_at
+                score = att.score
+                tab_switches = att.tab_switches_count
+                auto_reason = att.auto_submitted_reason
+                is_late = att.is_late
+            elif att and not att.completed_at:
+                s_status = 'Started'
+                started_at = att.started_at
+                completed_at = None
+                score = None
+                tab_switches = att.tab_switches_count
+                auto_reason = None
+                is_late = att.is_late
+            else:
+                s_status = 'Pending'
+                started_at = None
+                completed_at = None
+                score = None
+                tab_switches = 0
+                auto_reason = None
+                is_late = False
+
+            counts['total'] += 1
+            if s_status == 'Started':
+                counts['started'] += 1
+            elif s_status == 'Submitted':
+                counts['submitted'] += 1
+            else:
+                counts['pending'] += 1
+
+            fac = resolve_user_faculty(student)
+            fac_name = fac.name if fac else (student.faculty.name if student.faculty else 'General Faculty')
+            fac_code = fac.code if fac else (student.faculty.code if student.faculty else 'GEN')
+            by_faculty[fac_name] = by_faculty.get(fac_name, 0) + 1
+
+            unit_name = exam.course_unit.name if exam.course_unit else (exam.course.name if exam.course else 'Core Unit')
+            by_course_unit[unit_name] = by_course_unit.get(unit_name, 0) + 1
+
+            if status_filter and status_filter != 'All' and s_status.lower() != status_filter.lower():
+                continue
+            if unit_filter and unit_filter != 'All':
+                if unit_filter.isdigit() and exam.course_unit_id != int(unit_filter):
+                    continue
+                elif not unit_filter.isdigit() and unit_filter.lower() not in unit_name.lower():
+                    continue
+            if faculty_filter and faculty_filter != 'All':
+                if faculty_filter.isdigit() and fac and fac.id != int(faculty_filter):
+                    continue
+                elif not faculty_filter.isdigit() and faculty_filter.lower() not in fac_name.lower() and faculty_filter.lower() not in fac_code.lower():
+                    continue
+            if search_filter:
+                full_name = (student.get_full_name() or '').lower()
+                uname = student.username.lower()
+                reg_num = (student.reg_number or student.registration_number or '').lower()
+                if search_filter not in full_name and search_filter not in uname and search_filter not in reg_num:
+                    continue
+
+            students_list.append({
+                'id': student.id,
+                'username': student.username,
+                'name': student.get_full_name() or student.username,
+                'reg_number': student.reg_number or student.registration_number or 'N/A',
+                'faculty_name': fac_name,
+                'faculty_code': fac_code,
+                'course_name': exam.course.name if exam.course else '',
+                'course_code': exam.course.code if exam.course else '',
+                'course_unit_name': unit_name,
+                'year_of_study': student.year_of_study,
+                'semester': student.semester,
+                'status': s_status,
+                'started_at': started_at,
+                'completed_at': completed_at,
+                'submission_type': att.submission_type if att else 'manual',
+                'submission_type_display': att.get_submission_type_display_safe() if att else 'Manual Submission',
+                'score': score,
+                'tab_switches_count': tab_switches,
+                'auto_submitted_reason': auto_reason,
+                'is_late': is_late
+            })
+
+        return Response({
+            'exam_id': exam.id,
+            'title': exam.title,
+            'course_code': exam.course.code if exam.course else '',
+            'scheduled_start': exam.scheduled_start,
+            'due_date': exam.due_date,
+            'duration_minutes': exam.duration_minutes,
+            'exam_status': exam_status,
+            'counts': counts,
+            'by_faculty': by_faculty,
+            'by_course_unit': by_course_unit,
+            'students': students_list
+        })
 
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsAdmin | IsFacultyAdmin])
     def approve_exam(self, request, pk=None):
@@ -3336,17 +3544,20 @@ class ExamViewSet(viewsets.ModelViewSet):
         response['Content-Disposition'] = f'attachment; filename="Exam_Results_{exam.course.code}_{exam.id}.csv"'
 
         writer = csv.writer(response)
-        writer.writerow(['Student Username', 'Full Name', 'Email', 'Exam Title', 'Course Code', 'Score (%)', 'Submitted At', 'Tab Switches', 'Is Late', 'Late Reason', 'Status'])
+        writer.writerow(['Student Username', 'Full Name', 'Reg Number', 'Email', 'Exam Title', 'Course Code', 'Score (%)', 'Start Time (EAT)', 'Submitted At (EAT)', 'Submission Type', 'Tab Switches', 'Is Late', 'Late Reason', 'Status'])
 
         for att in attempts:
             writer.writerow([
                 att.student.username,
                 att.student.get_full_name(),
+                att.student.reg_number or att.student.registration_number or 'N/A',
                 att.student.email,
                 exam.title,
                 exam.course.code,
                 att.score,
+                att.started_at.strftime('%Y-%m-%d %H:%M:%S') if att.started_at else 'N/A',
                 att.completed_at.strftime('%Y-%m-%d %H:%M:%S') if att.completed_at else 'In Progress',
+                att.get_submission_type_display_safe(),
                 att.tab_switches_count,
                 'YES' if att.is_late else 'NO',
                 att.late_submission_reason or '',
@@ -3453,6 +3664,19 @@ class ExamAttemptViewSet(viewsets.ReadOnlyModelViewSet):
         if now > allotted_stop or (scheduled_stop and now > scheduled_stop):
             is_late = True
 
+        # Determine submission type (manual, system, or security logs)
+        sub_type_param = (request.data.get('submission_type') or '').strip().lower()
+        if sub_type_param in ['manual', 'system', 'security logs']:
+            submission_type = sub_type_param
+        elif auto_submitted_reason:
+            reason_lower = auto_submitted_reason.lower()
+            if any(k in reason_lower for k in ['tab switch', 'security', 'lockdown', 'blur']):
+                submission_type = 'security logs'
+            else:
+                submission_type = 'system'
+        else:
+            submission_type = 'manual'
+
         exam_questions = attempt.exam.questions.all()
         correct_count = 0
         total_questions = exam_questions.count()
@@ -3468,15 +3692,34 @@ class ExamAttemptViewSet(viewsets.ReadOnlyModelViewSet):
         attempt.score = round(score_percent, 2)
         attempt.tab_switches_count = tab_switches
         attempt.auto_submitted_reason = auto_submitted_reason
+        attempt.submission_type = submission_type
+        attempt.completed_at = now
         attempt.is_late = is_late
         if late_submission_reason:
             attempt.late_submission_reason = late_submission_reason
         elif is_late and not attempt.late_submission_reason:
             attempt.late_submission_reason = auto_submitted_reason or 'Late submission after regular stop time.'
-        attempt.completed_at = now
         attempt.save()
 
-        log_system_event(request.user, f"Exam Submitted: {attempt.exam.title} (Score: {attempt.score}%, Late: {attempt.is_late})", level="INFO")
+        action_name = f"EXAM_SUBMISSION_{submission_type.upper().replace(' ', '_')}"
+        stu_name = request.user.get_full_name() or request.user.username
+        stu_reg = request.user.reg_number or request.user.registration_number or 'N/A'
+        lec_name = (attempt.exam.lecturer.get_full_name() or attempt.exam.lecturer.username) if attempt.exam.lecturer else 'N/A'
+        start_eat = attempt.started_at.strftime('%Y-%m-%d %H:%M:%S EAT') if attempt.started_at else 'N/A'
+        sub_eat = now.strftime('%Y-%m-%d %H:%M:%S EAT')
+        log_details = (
+            f"Exam Submission [{attempt.get_submission_type_display_safe()}]: {attempt.exam.title} ({attempt.exam.course.code}) | "
+            f"Student: {stu_name} (Reg: {stu_reg}) | "
+            f"Year: {request.user.year_of_study} | Sem: {request.user.semester} | "
+            f"Lecturer: {lec_name} | "
+            f"Start Time: {start_eat} | "
+            f"Submission Time: {sub_eat} | "
+            f"Submission Type: {attempt.get_submission_type_display_safe()} | "
+            f"Score: {attempt.score}% | Late: {attempt.is_late} | Tab Switches: {tab_switches}"
+        )
+        if auto_submitted_reason:
+            log_details += f" | Reason: {auto_submitted_reason}"
+        log_system_event(request.user, action_name, level="AUDIT", details=log_details)
         return Response(ExamAttemptSerializer(attempt, context={'request': request}).data)
 
     @action(detail=True, methods=['get'], permission_classes=[permissions.IsAuthenticated])
@@ -3515,6 +3758,7 @@ class TestViewSet(viewsets.ModelViewSet):
 
         acad_param = self.request.query_params.get('academic_year') or self.request.query_params.get('acad')
         sem_param = self.request.query_params.get('semester') or self.request.query_params.get('sem')
+        status_param = self.request.query_params.get('status')
 
         if user.role in ['dean', 'faculty_admin', 'faculty_secretary']:
             assigned_facs = get_user_assigned_faculties(user)
@@ -3533,20 +3777,28 @@ class TestViewSet(viewsets.ModelViewSet):
             student_sem = getattr(user, 'semester', 1) or 1
             student_acad = getattr(user, 'academic_year', '2026/2027') or '2026/2027'
             qs = Test.objects.filter(
-                is_published=True,
-                course__in=student_courses
+                is_published=True
             ).filter(
-                models.Q(year_of_study=student_year) | models.Q(year_of_study=0) | models.Q(course_unit__year_of_study=student_year)
+                models.Q(course__in=student_courses) |
+                models.Q(additional_courses__in=student_courses) |
+                models.Q(additional_course_units__course__in=student_courses)
             ).filter(
-                models.Q(semester=student_sem) | models.Q(semester=0) | models.Q(course_unit__semester=student_sem)
+                models.Q(year_of_study=student_year) | models.Q(year_of_study=0) |
+                models.Q(course_unit__year_of_study=student_year) |
+                models.Q(additional_course_units__year_of_study=student_year)
+            ).filter(
+                models.Q(semester=student_sem) | models.Q(semester=0) |
+                models.Q(course_unit__semester=student_sem) |
+                models.Q(additional_course_units__semester=student_sem)
             ).filter(
                 models.Q(academic_year__iexact=student_acad) | models.Q(academic_year__isnull=True) | models.Q(academic_year__iexact='All') | models.Q(academic_year='')
-            ).order_by('-created_at')
+            ).distinct().order_by('-created_at')
         elif user.role == 'lecturer':
             qs = Test.objects.filter(
                 models.Q(lecturer=user) |
                 models.Q(course__units__lecturers=user) |
-                models.Q(course_unit__lecturers=user)
+                models.Q(course_unit__lecturers=user) |
+                models.Q(additional_course_units__lecturers=user)
             ).distinct().order_by('-created_at')
         else:
             qs = Test.objects.all().order_by('-created_at')
@@ -3559,6 +3811,19 @@ class TestViewSet(viewsets.ModelViewSet):
                 qs = qs.filter(models.Q(semester=s_int) | models.Q(semester=0))
             except (ValueError, TypeError):
                 pass
+
+        if status_param and str(status_param).strip() and str(status_param).strip() != 'All':
+            s_clean = str(status_param).strip().lower()
+            now = timezone.now()
+            if s_clean in ['in progress', 'inprogress', 'active']:
+                qs = qs.filter(
+                    models.Q(scheduled_start__lte=now) | models.Q(scheduled_start__isnull=True),
+                    models.Q(due_date__gte=now) | models.Q(due_date__isnull=True)
+                )
+            elif s_clean in ['ended', 'completed', 'past']:
+                qs = qs.filter(due_date__lt=now)
+            elif s_clean in ['scheduled', 'upcoming']:
+                qs = qs.filter(scheduled_start__gt=now)
 
         course_param = self.request.query_params.get('course') or self.request.query_params.get('course_id')
         if course_param and str(course_param).strip() and str(course_param).strip() != 'All':
@@ -3611,8 +3876,17 @@ class TestViewSet(viewsets.ModelViewSet):
         course_unit = serializer.validated_data.get('course_unit')
         year_of_study = serializer.validated_data.get('year_of_study', 0)
         semester = serializer.validated_data.get('semester', 0)
-        target_course_ids = self.request.data.get('target_course_ids', [])
-        target_years = self.request.data.get('target_years', [])
+        scheduled_start = serializer.validated_data.get('scheduled_start')
+        due_date = serializer.validated_data.get('due_date')
+        now = timezone.now()
+        min_allowed = now - timezone.timedelta(minutes=5)
+
+        if scheduled_start and scheduled_start < min_allowed:
+            raise serializers.ValidationError({"scheduled_start": "Test start date and time cannot be in the past. Please select the current or a future Ugandan time (EAT)."})
+        if due_date and due_date < min_allowed:
+            raise serializers.ValidationError({"due_date": "Test stop date and time cannot be in the past. Please select the current or a future Ugandan time (EAT)."})
+        if scheduled_start and due_date and due_date <= scheduled_start:
+            raise serializers.ValidationError({"due_date": "Test stop time must be strictly after the start time."})
 
         # Only System Admin or Platform Coordinator can set a test for All Course Units & All Years (Year 0)
         if user.role not in ['admin', 'platform_coordinator'] and year_of_study == 0 and not course_unit:
@@ -3633,35 +3907,15 @@ class TestViewSet(viewsets.ModelViewSet):
                 is_assigned = True
             if not is_assigned:
                 raise serializers.ValidationError({"detail": "Permission Denied: You can only set tests for your assigned course units."})
+            
+            # Validate additional course units
+            add_units = serializer.validated_data.get('additional_course_units', [])
+            for u in add_units:
+                if not u.lecturers.filter(id=user.id).exists():
+                    raise serializers.ValidationError({"additional_course_units": f"Permission Denied: Course unit {u.code} is not assigned to you."})
+
         test = serializer.save(lecturer=user)
         log_system_event(user, f"Test Created: {test.title} ({test.course.code})", level="INFO")
-
-        # Handle multi-course / multi-program and multi-year test scoping
-        if (target_course_ids and len(target_course_ids) > 1) or (target_years and len(target_years) > 1):
-            courses_to_create = Course.objects.filter(id__in=target_course_ids) if target_course_ids else [test.course]
-            years_to_create = target_years if target_years else [test.year_of_study]
-
-            for c in courses_to_create:
-                for y in years_to_create:
-                    if c.id == test.course.id and int(y) == test.year_of_study:
-                        continue
-                    Test.objects.create(
-                        course=c,
-                        course_unit=test.course_unit,
-                        lecturer=user,
-                        title=test.title,
-                        description=test.description,
-                        category=test.category,
-                        duration_minutes=test.duration_minutes,
-                        scheduled_start=test.scheduled_start,
-                        total_marks=test.total_marks,
-                        pass_percentage=test.pass_percentage,
-                        allowed_attempts=test.allowed_attempts,
-                        is_published=test.is_published,
-                        is_results_released=test.is_results_released,
-                        year_of_study=int(y),
-                        due_date=test.due_date
-                    )
 
     def perform_update(self, serializer):
         user = self.request.user
@@ -3670,7 +3924,20 @@ class TestViewSet(viewsets.ModelViewSet):
         if user.role == 'lecturer':
             if serializer.instance.lecturer != user:
                 raise serializers.ValidationError({"detail": "Permission Denied: You can only update your own created tests."})
-        serializer.save()
+        
+        scheduled_start = serializer.validated_data.get('scheduled_start')
+        due_date = serializer.validated_data.get('due_date')
+        now = timezone.now()
+        min_allowed = now - timezone.timedelta(minutes=5)
+        if 'scheduled_start' in serializer.validated_data and scheduled_start and scheduled_start < min_allowed:
+            raise serializers.ValidationError({"scheduled_start": "Test start date and time cannot be set to a past time."})
+        if 'due_date' in serializer.validated_data and due_date and due_date < min_allowed:
+            raise serializers.ValidationError({"due_date": "Test stop date and time cannot be set to a past time."})
+        if scheduled_start and due_date and due_date <= scheduled_start:
+            raise serializers.ValidationError({"due_date": "Test stop time must be strictly after the start time."})
+
+        test = serializer.save()
+        log_system_event(user, f"Test Updated: {test.title} ({test.course.code})", level="INFO")
 
     def perform_destroy(self, instance):
         user = self.request.user
@@ -3680,6 +3947,156 @@ class TestViewSet(viewsets.ModelViewSet):
             if instance.lecturer != user:
                 raise serializers.ValidationError({"detail": "Permission Denied: You can only delete your own created tests."})
         instance.delete()
+
+    @action(detail=True, methods=['get'], permission_classes=[permissions.IsAuthenticated])
+    def live_students(self, request, pk=None):
+        test = self.get_object()
+        user = request.user
+
+        is_staff = user.role in ['admin', 'platform_coordinator', 'dean', 'faculty_admin', 'faculty_secretary', 'registrar', 'dvc', 'vc']
+        is_lecturer = user.role == 'lecturer'
+        
+        if not (is_staff or is_lecturer):
+            return Response({'detail': 'Permission Denied: Only authorized staff and lecturers can monitor student test status.'}, status=status.HTTP_403_FORBIDDEN)
+        
+        lecturer_assigned_units = CourseUnit.objects.none()
+        if is_lecturer and not is_staff:
+            lecturer_assigned_units = CourseUnit.objects.filter(lecturers=user).filter(
+                models.Q(id=test.course_unit_id) | models.Q(id__in=test.additional_course_units.values_list('id', flat=True)) | models.Q(course_id=test.course_id)
+            )
+            is_test_owner = test.lecturer_id == user.id
+            if not is_test_owner and not lecturer_assigned_units.exists():
+                return Response({'detail': 'Permission Denied: You can only view student statuses for your assigned course units.'}, status=status.HTTP_403_FORBIDDEN)
+
+        courses = [test.course] + list(test.additional_courses.all())
+        course_ids = [c.id for c in courses if c]
+
+        students_qs = User.objects.filter(role='student', is_active=True).filter(
+            models.Q(assigned_courses__in=course_ids) |
+            models.Q(test_attempts__test=test)
+        ).distinct()
+
+        if test.year_of_study and test.year_of_study != 0:
+            students_qs = students_qs.filter(models.Q(year_of_study=test.year_of_study) | models.Q(test_attempts__test=test)).distinct()
+
+        attempts = {att.student_id: att for att in TestAttempt.objects.filter(test=test).select_related('student')}
+
+        now = timezone.now()
+        if test.scheduled_start and now < test.scheduled_start:
+            test_status = 'Scheduled'
+        elif test.due_date and now > test.due_date:
+            test_status = 'Ended'
+        else:
+            test_status = 'In Progress'
+
+        status_filter = (request.query_params.get('status') or '').strip().capitalize()
+        search_filter = (request.query_params.get('search') or '').strip().lower()
+        unit_filter = (request.query_params.get('course_unit') or request.query_params.get('unit') or '').strip()
+        faculty_filter = (request.query_params.get('faculty') or '').strip()
+
+        students_list = []
+        counts = {'total': 0, 'started': 0, 'submitted': 0, 'pending': 0}
+        by_faculty = {}
+        by_course_unit = {}
+
+        for student in students_qs:
+            att = attempts.get(student.id)
+            if att and att.completed_at:
+                s_status = 'Submitted'
+                started_at = att.started_at
+                completed_at = att.completed_at
+                score = att.score
+                tab_switches = att.tab_switches_count
+                auto_reason = att.auto_submitted_reason
+                is_late = att.is_late
+            elif att and not att.completed_at:
+                s_status = 'Started'
+                started_at = att.started_at
+                completed_at = None
+                score = None
+                tab_switches = att.tab_switches_count
+                auto_reason = None
+                is_late = att.is_late
+            else:
+                s_status = 'Pending'
+                started_at = None
+                completed_at = None
+                score = None
+                tab_switches = 0
+                auto_reason = None
+                is_late = False
+
+            counts['total'] += 1
+            if s_status == 'Started':
+                counts['started'] += 1
+            elif s_status == 'Submitted':
+                counts['submitted'] += 1
+            else:
+                counts['pending'] += 1
+
+            fac = resolve_user_faculty(student)
+            fac_name = fac.name if fac else (student.faculty.name if student.faculty else 'General Faculty')
+            fac_code = fac.code if fac else (student.faculty.code if student.faculty else 'GEN')
+            by_faculty[fac_name] = by_faculty.get(fac_name, 0) + 1
+
+            unit_name = test.course_unit.name if test.course_unit else (test.course.name if test.course else 'Core Unit')
+            by_course_unit[unit_name] = by_course_unit.get(unit_name, 0) + 1
+
+            if status_filter and status_filter != 'All' and s_status.lower() != status_filter.lower():
+                continue
+            if unit_filter and unit_filter != 'All':
+                if unit_filter.isdigit() and test.course_unit_id != int(unit_filter):
+                    continue
+                elif not unit_filter.isdigit() and unit_filter.lower() not in unit_name.lower():
+                    continue
+            if faculty_filter and faculty_filter != 'All':
+                if faculty_filter.isdigit() and fac and fac.id != int(faculty_filter):
+                    continue
+                elif not faculty_filter.isdigit() and faculty_filter.lower() not in fac_name.lower() and faculty_filter.lower() not in fac_code.lower():
+                    continue
+            if search_filter:
+                full_name = (student.get_full_name() or '').lower()
+                uname = student.username.lower()
+                reg_num = (student.reg_number or student.registration_number or '').lower()
+                if search_filter not in full_name and search_filter not in uname and search_filter not in reg_num:
+                    continue
+
+            students_list.append({
+                'id': student.id,
+                'username': student.username,
+                'name': student.get_full_name() or student.username,
+                'reg_number': student.reg_number or student.registration_number or 'N/A',
+                'faculty_name': fac_name,
+                'faculty_code': fac_code,
+                'course_name': test.course.name if test.course else '',
+                'course_code': test.course.code if test.course else '',
+                'course_unit_name': unit_name,
+                'year_of_study': student.year_of_study,
+                'semester': student.semester,
+                'status': s_status,
+                'started_at': started_at,
+                'completed_at': completed_at,
+                'submission_type': att.submission_type if att else 'manual',
+                'submission_type_display': att.get_submission_type_display_safe() if att else 'Manual Submission',
+                'score': score,
+                'tab_switches_count': tab_switches,
+                'auto_submitted_reason': auto_reason,
+                'is_late': is_late
+            })
+
+        return Response({
+            'test_id': test.id,
+            'title': test.title,
+            'course_code': test.course.code if test.course else '',
+            'scheduled_start': test.scheduled_start,
+            'due_date': test.due_date,
+            'duration_minutes': test.duration_minutes,
+            'test_status': test_status,
+            'counts': counts,
+            'by_faculty': by_faculty,
+            'by_course_unit': by_course_unit,
+            'students': students_list
+        })
 
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsLecturer | IsAdmin | IsPlatformCoordinator])
     def publish(self, request, pk=None):
@@ -3996,19 +4413,22 @@ class TestViewSet(viewsets.ModelViewSet):
         response['Content-Disposition'] = f'attachment; filename="Test_Results_{test_obj.course.code}_{test_obj.id}.csv"'
 
         writer = csv.writer(response)
-        writer.writerow(['Student Username', 'Full Name', 'Email', 'Test Title', 'Category', 'Course Code', 'Score (%)', 'Passed Status', 'Submitted At', 'Tab Switches', 'Attempt #', 'Is Late', 'Late Reason'])
+        writer.writerow(['Student Username', 'Full Name', 'Reg Number', 'Email', 'Test Title', 'Category', 'Course Code', 'Score (%)', 'Passed Status', 'Start Time (EAT)', 'Submitted At (EAT)', 'Submission Type', 'Tab Switches', 'Attempt #', 'Is Late', 'Late Reason'])
 
         for att in attempts:
             writer.writerow([
                 att.student.username,
                 att.student.get_full_name(),
+                att.student.reg_number or att.student.registration_number or 'N/A',
                 att.student.email,
                 test_obj.title,
                 test_obj.category,
                 test_obj.course.code,
                 att.score,
                 'PASSED' if att.passed else 'FAILED',
+                att.started_at.strftime('%Y-%m-%d %H:%M:%S') if att.started_at else 'N/A',
                 att.completed_at.strftime('%Y-%m-%d %H:%M:%S') if att.completed_at else 'In Progress',
+                att.get_submission_type_display_safe(),
                 att.tab_switches_count,
                 att.attempt_number,
                 'YES' if att.is_late else 'NO',
@@ -4115,6 +4535,19 @@ class TestAttemptViewSet(viewsets.ReadOnlyModelViewSet):
         if now > allotted_stop or (scheduled_stop and now > scheduled_stop):
             is_late = True
 
+        # Determine submission type (manual, system, or security logs)
+        sub_type_param = (request.data.get('submission_type') or '').strip().lower()
+        if sub_type_param in ['manual', 'system', 'security logs']:
+            submission_type = sub_type_param
+        elif auto_submitted_reason:
+            reason_lower = auto_submitted_reason.lower()
+            if any(k in reason_lower for k in ['tab switch', 'security', 'lockdown', 'blur']):
+                submission_type = 'security logs'
+            else:
+                submission_type = 'system'
+        else:
+            submission_type = 'manual'
+
         test_questions = attempt.test.questions.all()
         total_points = 0.0
         earned_points = 0.0
@@ -4138,15 +4571,34 @@ class TestAttemptViewSet(viewsets.ReadOnlyModelViewSet):
         attempt.passed = passed
         attempt.tab_switches_count = tab_switches
         attempt.auto_submitted_reason = auto_submitted_reason
+        attempt.submission_type = submission_type
+        attempt.completed_at = now
         attempt.is_late = is_late
         if late_submission_reason:
             attempt.late_submission_reason = late_submission_reason
         elif is_late and not attempt.late_submission_reason:
             attempt.late_submission_reason = auto_submitted_reason or 'Late submission after regular stop time.'
-        attempt.completed_at = now
         attempt.save()
 
-        log_system_event(request.user, f"Test Submitted: {attempt.test.title} (Score: {attempt.score}%, Passed: {passed}, Late: {attempt.is_late})", level="INFO")
+        action_name = f"TEST_SUBMISSION_{submission_type.upper().replace(' ', '_')}"
+        stu_name = request.user.get_full_name() or request.user.username
+        stu_reg = request.user.reg_number or request.user.registration_number or 'N/A'
+        lec_name = (attempt.test.lecturer.get_full_name() or attempt.test.lecturer.username) if attempt.test.lecturer else 'N/A'
+        start_eat = attempt.started_at.strftime('%Y-%m-%d %H:%M:%S EAT') if attempt.started_at else 'N/A'
+        sub_eat = now.strftime('%Y-%m-%d %H:%M:%S EAT')
+        log_details = (
+            f"Test Submission [{attempt.get_submission_type_display_safe()}]: {attempt.test.title} ({attempt.test.course.code}) | "
+            f"Student: {stu_name} (Reg: {stu_reg}) | "
+            f"Year: {request.user.year_of_study} | Sem: {request.user.semester} | "
+            f"Lecturer: {lec_name} | "
+            f"Start Time: {start_eat} | "
+            f"Submission Time: {sub_eat} | "
+            f"Submission Type: {attempt.get_submission_type_display_safe()} | "
+            f"Score: {attempt.score}% | Passed: {passed} | Late: {attempt.is_late} | Tab Switches: {tab_switches}"
+        )
+        if auto_submitted_reason:
+            log_details += f" | Reason: {auto_submitted_reason}"
+        log_system_event(request.user, action_name, level="AUDIT", details=log_details)
         return Response(TestAttemptSerializer(attempt).data)
 
     @action(detail=True, methods=['get'], permission_classes=[permissions.IsAuthenticated])

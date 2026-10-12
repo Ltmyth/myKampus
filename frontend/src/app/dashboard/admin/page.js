@@ -794,15 +794,15 @@ export default function AdminPage() {
     }
   };
 
-  const handleSyncCIUClearance = async (acad = selectedClearanceAcad, sem = selectedClearanceSem) => {
+  const handleSyncCIUClearance = async (acad = '2026/2027', sem = selectedClearanceSem) => {
     setErrorMsg('');
     setSuccessMsg('');
     setSubmitting(true);
     try {
-      const res = await api.post('/admin/users/sync_clearance/', { acad, sem });
-      setSuccessMsg(res.detail || `Successfully synced CIU Cleared Students API for ${acad} Semester ${sem}!`);
+      const res = await api.post('/admin/users/sync_clearance/', { acad: '2026/2027', sem });
+      setSuccessMsg(res.detail || `Successfully synced CIU Cleared Students API for 2026/2027 (${sem === 'both' ? 'Semesters 1 & 2' : `Semester ${sem}`})!`);
       loadAdminData();
-      if (activeTab === 'ciu_cleared') fetchClearedFacultyData(selectedExamType, acad, sem, selectedFacultyClearanceLevel);
+      if (activeTab === 'ciu_cleared') fetchClearedFacultyData(selectedExamType, '2026/2027', sem, selectedFacultyClearanceLevel);
     } catch (err) {
       setErrorMsg(err.message || 'Failed to sync CIU Cleared Students API.');
     } finally {
@@ -2746,15 +2746,15 @@ export default function AdminPage() {
               </div>
               <div className="flex items-center space-x-2">
                 <button
-                  onClick={() => handleSyncCIUClearance(selectedClearanceAcad, selectedClearanceSem)}
+                  onClick={() => handleSyncCIUClearance('2026/2027', selectedClearanceSem)}
                   disabled={submitting}
                   className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-sm transition-all flex items-center space-x-1.5 cursor-pointer disabled:opacity-50"
-                  title={`Synchronize live CIU API records for ${selectedClearanceAcad} Semester ${selectedClearanceSem}`}
+                  title={`Synchronize live CIU API records for 2026/2027 (${selectedClearanceSem === 'both' ? 'Semesters 1 & 2' : `Semester ${selectedClearanceSem}`})`}
                 >
-                  <span>⚡ Sync CIU API ({selectedClearanceAcad} Sem {selectedClearanceSem})</span>
+                  <span>⚡ Sync CIU API (2026/2027 • {selectedClearanceSem === 'both' ? 'Both Sem 1 & 2' : `Sem ${selectedClearanceSem}`})</span>
                 </button>
                 <button
-                  onClick={() => fetchClearedFacultyData(selectedExamType, selectedClearanceAcad, selectedClearanceSem, selectedFacultyClearanceLevel)}
+                  onClick={() => fetchClearedFacultyData(selectedExamType, '2026/2027', selectedClearanceSem, selectedFacultyClearanceLevel)}
                   disabled={loadingCleared}
                   className="px-3.5 py-1.5 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-xl shadow-sm transition-all flex items-center space-x-1.5 cursor-pointer disabled:opacity-50"
                 >
@@ -2771,7 +2771,7 @@ export default function AdminPage() {
                     type="button"
                     onClick={() => {
                       setSelectedExamType('ALL');
-                      fetchClearedFacultyData('ALL', selectedClearanceAcad, selectedClearanceSem, selectedFacultyClearanceLevel);
+                      fetchClearedFacultyData('ALL', '2026/2027', selectedClearanceSem, selectedFacultyClearanceLevel);
                     }}
                     className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
                       selectedExamType === 'ALL'
@@ -2785,7 +2785,7 @@ export default function AdminPage() {
                     type="button"
                     onClick={() => {
                       setSelectedExamType('EXAMS');
-                      fetchClearedFacultyData('EXAMS', selectedClearanceAcad, selectedClearanceSem, selectedFacultyClearanceLevel);
+                      fetchClearedFacultyData('EXAMS', '2026/2027', selectedClearanceSem, selectedFacultyClearanceLevel);
                     }}
                     className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
                       selectedExamType === 'EXAMS'
@@ -2799,7 +2799,7 @@ export default function AdminPage() {
                     type="button"
                     onClick={() => {
                       setSelectedExamType('TESTS');
-                      fetchClearedFacultyData('TESTS', selectedClearanceAcad, selectedClearanceSem, selectedFacultyClearanceLevel);
+                      fetchClearedFacultyData('TESTS', '2026/2027', selectedClearanceSem, selectedFacultyClearanceLevel);
                     }}
                     className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
                       selectedExamType === 'TESTS'
@@ -2811,25 +2811,13 @@ export default function AdminPage() {
                   </button>
                 </div>
 
-                {/* Academic Year Filter */}
-                <div className="flex items-center space-x-1 bg-slate-50 border border-slate-200 px-2 py-1 rounded-xl">
-                  <span className="text-[10px] font-bold text-slate-500 uppercase">Year:</span>
-                  <select
-                    value={selectedClearanceAcad}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      setSelectedClearanceAcad(val);
-                      fetchClearedFacultyData(selectedExamType, val, selectedClearanceSem, selectedFacultyClearanceLevel);
-                    }}
-                    className="bg-transparent text-xs font-bold text-slate-800 focus:outline-none"
-                  >
-                    <option value="2026/2027">2026/2027</option>
-                    <option value="2025/2026">2025/2026</option>
-                    <option value="2024/2025">2024/2025</option>
-                  </select>
+                {/* Academic Year Filter (Strictly Locked to Current Year 2026/2027) */}
+                <div className="flex items-center space-x-1.5 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-xl">
+                  <span className="text-[10px] font-extrabold text-emerald-800 uppercase tracking-wide">Year:</span>
+                  <span className="text-xs font-bold text-emerald-950">2026/2027 (Current)</span>
                 </div>
 
-                {/* Semester 1 vs Semester 2 Filter */}
+                {/* Semester Filter (Sem 1, Sem 2, or Both Semesters) */}
                 <div className="flex items-center space-x-1 bg-slate-50 border border-slate-200 px-2 py-1 rounded-xl">
                   <span className="text-[10px] font-bold text-slate-500 uppercase">Semester:</span>
                   <select
@@ -2837,12 +2825,13 @@ export default function AdminPage() {
                     onChange={(e) => {
                       const val = e.target.value;
                       setSelectedClearanceSem(val);
-                      fetchClearedFacultyData(selectedExamType, selectedClearanceAcad, val, selectedFacultyClearanceLevel);
+                      fetchClearedFacultyData(selectedExamType, '2026/2027', val, selectedFacultyClearanceLevel);
                     }}
-                    className="bg-transparent text-xs font-bold text-slate-800 focus:outline-none"
+                    className="bg-transparent text-xs font-bold text-slate-800 focus:outline-none cursor-pointer"
                   >
                     <option value="1">Semester 1</option>
                     <option value="2">Semester 2</option>
+                    <option value="both">Both Semesters (1 & 2)</option>
                   </select>
                 </div>
 

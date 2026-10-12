@@ -63,6 +63,8 @@ export default function ExamsPage() {
   const [activeTab, setActiveTab] = useState('exams');
   const [selectedFacultyFilter, setSelectedFacultyFilter] = useState('All');
   const [selectedCourseFilter, setSelectedCourseFilter] = useState('All');
+  const [selectedCourseUnitFilter, setSelectedCourseUnitFilter] = useState('All');
+  const [selectedExamStatusFilter, setSelectedExamStatusFilter] = useState('All');
   const [selectedSemesterFilter, setSelectedSemesterFilter] = useState('All');
   const [selectedAcademicYearFilter, setSelectedAcademicYearFilter] = useState('All');
 
@@ -139,7 +141,7 @@ export default function ExamsPage() {
   // Submissions Tab Filter & Pagination States (Exams)
   const [selectedExamFilter, setSelectedExamFilter] = useState('All');
   const [selectedExamCourseSubFilter, setSelectedExamCourseSubFilter] = useState('All');
-  const [selectedExamStatusFilter, setSelectedExamStatusFilter] = useState('All');
+  const [selectedSubStatusFilter, setSelectedSubStatusFilter] = useState('All');
   const [examSubmissionSearch, setExamSubmissionSearch] = useState('');
   const [examSubPage, setExamSubPage] = useState(1);
   const [examSubPageSize, setExamSubPageSize] = useState(10);
@@ -154,12 +156,56 @@ export default function ExamsPage() {
   const [targetCourseIds, setTargetCourseIds] = useState([]);
   const [targetYears, setTargetYears] = useState([]);
   const [selectedCourseUnit, setSelectedCourseUnit] = useState('');
+  const [targetCourseUnitIds, setTargetCourseUnitIds] = useState([]);
   const [duration, setDuration] = useState(60);
   const [examYearOfStudy, setExamYearOfStudy] = useState(0); // 0 = All Years, 1-4 = Year X
   const [scheduledStart, setScheduledStart] = useState('');
   const [dueDate, setDueDate] = useState('');
   const [examSemester, setExamSemester] = useState('0');
   const [examAcademicYear, setExamAcademicYear] = useState('2026/2027');
+
+  // Edit Exam Modal State
+  const [editingExamModal, setEditingExamModal] = useState(null);
+  const [editExamTitle, setEditExamTitle] = useState('');
+  const [editExamDuration, setEditExamDuration] = useState(60);
+  const [editExamScheduledStart, setEditExamScheduledStart] = useState('');
+  const [editExamDueDate, setEditExamDueDate] = useState('');
+  const [editAdditionalCourseUnits, setEditAdditionalCourseUnits] = useState([]);
+  const [editExamIsActive, setEditExamIsActive] = useState(true);
+
+  // Live Attempting Students Modal State
+  const [liveStudentsModal, setLiveStudentsModal] = useState({
+    isOpen: false,
+    exam: null,
+    loading: false,
+    data: null,
+    statusFilter: 'All',
+    search: '',
+    groupBy: 'none'
+  });
+
+  const openLiveStudentsModal = async (examItem) => {
+    setLiveStudentsModal({
+      isOpen: true,
+      exam: examItem,
+      loading: true,
+      data: null,
+      statusFilter: 'All',
+      search: '',
+      groupBy: 'none'
+    });
+    try {
+      const data = await api.get(`/exams/${examItem.id}/live_students/`);
+      setLiveStudentsModal(prev => ({ ...prev, loading: false, data }));
+    } catch (err) {
+      setErrorMsg(err.response?.data?.detail || err.message || 'Failed to load live student data.');
+      setLiveStudentsModal(prev => ({ ...prev, loading: false }));
+    }
+  };
+
+  const closeLiveStudentsModal = () => {
+    setLiveStudentsModal(prev => ({ ...prev, isOpen: false, exam: null, data: null }));
+  };
 
   // Manage Questions states (Lecturer/Staff)
   const [selectedExam, setSelectedExam] = useState(null);
@@ -288,8 +334,8 @@ export default function ExamsPage() {
     if (selectedExamFilter !== 'All' && String(att.exam) !== String(selectedExamFilter)) return false;
     if (selectedExamCourseSubFilter !== 'All' && String(att.exam_course_id || att.course) !== String(selectedExamCourseSubFilter) && att.exam_course_code !== selectedExamCourseSubFilter) return false;
     const isPassed = (att.score || 0) >= 50.0;
-    if (selectedExamStatusFilter === 'passed' && !isPassed) return false;
-    if (selectedExamStatusFilter === 'failed' && isPassed) return false;
+    if (selectedSubStatusFilter === 'passed' && !isPassed) return false;
+    if (selectedSubStatusFilter === 'failed' && isPassed) return false;
     if (examSubmissionSearch) {
       const q = examSubmissionSearch.toLowerCase();
       const sName = (att.student_name || '').toLowerCase();
@@ -331,14 +377,6 @@ export default function ExamsPage() {
       setErrorMsg(err.message || 'Failed to toggle proctoring.');
     }
   };
-
-  // Edit Exam Modal State
-  const [editingExamModal, setEditingExamModal] = useState(null);
-  const [editExamTitle, setEditExamTitle] = useState('');
-  const [editExamDuration, setEditExamDuration] = useState(60);
-  const [editExamScheduledStart, setEditExamScheduledStart] = useState('');
-  const [editExamDueDate, setEditExamDueDate] = useState('');
-  const [editExamIsActive, setEditExamIsActive] = useState(true);
 
   const handleDeleteExam = (examItem) => {
     if (isExecutiveReadOnly) return;
@@ -382,6 +420,7 @@ export default function ExamsPage() {
     setEditExamScheduledStart(toUgandanDatetimeLocal(exam.scheduled_start));
     setEditExamDueDate(toUgandanDatetimeLocal(exam.due_date));
     setEditExamIsActive(exam.is_active);
+    setEditAdditionalCourseUnits(exam.additional_course_units || []);
   };
 
   const handleSaveEditExam = async (e) => {
@@ -390,6 +429,20 @@ export default function ExamsPage() {
     if (isLecturer && editingExamModal.is_approved_by_dean) {
       setErrorMsg('Permission Denied: Approved exams cannot be edited by the lecturer.');
       return;
+    }
+    if (editExamScheduledStart && new Date(editExamScheduledStart).getTime() < Date.now() - 60000) {
+      setErrorMsg('Validation Error: Exam start date & time cannot be in the past. Ugandan time (EAT) is strictly enforced.');
+      return;
+    }
+    if (editExamDueDate) {
+      if (new Date(editExamDueDate).getTime() < Date.now() - 60000) {
+        setErrorMsg('Validation Error: Exam stop date & time cannot be in the past. Ugandan time (EAT) is strictly enforced.');
+        return;
+      }
+      if (editExamScheduledStart && new Date(editExamDueDate).getTime() <= new Date(editExamScheduledStart).getTime()) {
+        setErrorMsg('Validation Error: Stop date & time must be strictly after the start date & time.');
+        return;
+      }
     }
     setErrorMsg('');
     setSuccessMsg('');
@@ -401,7 +454,8 @@ export default function ExamsPage() {
         duration_minutes: parseInt(editExamDuration),
         is_active: editExamIsActive,
         scheduled_start: getUgandanISOString(editExamScheduledStart),
-        due_date: getUgandanISOString(editExamDueDate)
+        due_date: getUgandanISOString(editExamDueDate),
+        additional_course_units: editAdditionalCourseUnits.map(id => parseInt(id))
       };
 
       await api.patch(`/exams/${editingExamModal.id}/`, payload);
@@ -494,6 +548,20 @@ export default function ExamsPage() {
       setErrorMsg('Only System Administrators can set exams for All Course Units & All Years (Year 0). Please select an assigned course unit.');
       return;
     }
+    if (scheduledStart && new Date(scheduledStart).getTime() < Date.now() - 60000) {
+      setErrorMsg('Validation Error: Exam start date & time cannot be in the past. Ugandan time (EAT) is strictly enforced.');
+      return;
+    }
+    if (dueDate) {
+      if (new Date(dueDate).getTime() < Date.now() - 60000) {
+        setErrorMsg('Validation Error: Exam stop date & time cannot be in the past. Ugandan time (EAT) is strictly enforced.');
+        return;
+      }
+      if (scheduledStart && new Date(dueDate).getTime() <= new Date(scheduledStart).getTime()) {
+        setErrorMsg('Validation Error: Stop date & time must be strictly after the start date & time.');
+        return;
+      }
+    }
     setErrorMsg('');
     setSuccessMsg('');
     setSubmitting(true);
@@ -504,6 +572,7 @@ export default function ExamsPage() {
         course: selectedCourse ? parseInt(selectedCourse) : (finalCourseIds[0] || null),
         target_course_ids: finalCourseIds.map(id => parseInt(id)),
         course_unit: selectedCourseUnit ? parseInt(selectedCourseUnit) : null,
+        additional_course_units: targetCourseUnitIds.map(id => parseInt(id)),
         duration_minutes: parseInt(duration),
         year_of_study: parseInt(examYearOfStudy),
         target_years: targetYears.length > 0 ? targetYears.map(y => parseInt(y)) : [parseInt(examYearOfStudy || 1)],
@@ -521,6 +590,7 @@ export default function ExamsPage() {
       setTargetCourseIds([]);
       setTargetYears([]);
       setSelectedCourseUnit('');
+      setTargetCourseUnitIds([]);
       setScheduledStart('');
       setDueDate('');
       setExamSemester('0');
@@ -687,6 +757,32 @@ ANSWER: C`;
     }
   };
 
+  const renderSubmissionTypeBadge = (type, reason) => {
+    const t = (type || '').toLowerCase();
+    if (t === 'security logs' || (reason && (reason.toLowerCase().includes('security') || reason.toLowerCase().includes('tab switch') || reason.toLowerCase().includes('lockdown')))) {
+      return (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-red-100 text-red-800 border border-red-300">
+          <span>🛡️</span>
+          <span>Security Logs</span>
+        </span>
+      );
+    }
+    if (t === 'system' || (reason && (reason.toLowerCase().includes('duration') || reason.toLowerCase().includes('timeout') || reason.toLowerCase().includes('window closed')))) {
+      return (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-100 text-amber-800 border border-amber-300">
+          <span>⏱️</span>
+          <span>System Auto</span>
+        </span>
+      );
+    }
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-300">
+        <span>✅</span>
+        <span>Manual</span>
+      </span>
+    );
+  };
+
   const handleCreateExamTimetable = async (e) => {
     e.preventDefault();
     if (isExecutiveReadOnly) return;
@@ -791,14 +887,32 @@ ANSWER: C`;
       const assignedIds = user?.assigned_courses || [];
       const assignedCodes = user?.assigned_course_codes || [];
       if (assignedIds.length > 0 || assignedCodes.length > 0) {
-        if (!assignedIds.includes(e.course) && !assignedCodes.includes(e.course_code)) return false;
+        const matchesPrimaryOrExtra = assignedIds.includes(e.course) ||
+          assignedCodes.includes(e.course_code) ||
+          (e.additional_courses && e.additional_courses.some(id => assignedIds.includes(id)));
+        if (!matchesPrimaryOrExtra) return false;
       }
     }
     if (selectedFacultyFilter !== 'All') {
       if (fCode !== selectedFacultyFilter) return false;
     }
     if (selectedCourseFilter !== 'All') {
-      if (e.course_code !== selectedCourseFilter && String(e.course) !== String(selectedCourseFilter)) return false;
+      const matchesCourse = e.course_code === selectedCourseFilter ||
+        String(e.course) === String(selectedCourseFilter) ||
+        (e.additional_courses && e.additional_courses.includes(parseInt(selectedCourseFilter)));
+      if (!matchesCourse) return false;
+    }
+    if (selectedCourseUnitFilter !== 'All') {
+      const uId = parseInt(selectedCourseUnitFilter);
+      const matchesUnit = e.course_unit === uId || (e.additional_course_units && e.additional_course_units.includes(uId));
+      if (!matchesUnit) return false;
+    }
+    if (selectedExamStatusFilter !== 'All') {
+      const s = e.status || (
+        e.due_date && new Date(e.due_date).getTime() < Date.now() ? 'Ended' :
+        e.scheduled_start && new Date(e.scheduled_start).getTime() > Date.now() ? 'Scheduled' : 'In Progress'
+      );
+      if (s.toLowerCase() !== selectedExamStatusFilter.toLowerCase()) return false;
     }
     if (selectedSemesterFilter !== 'All') {
       const semNum = parseInt(selectedSemesterFilter);
@@ -958,6 +1072,21 @@ ANSWER: C`;
               </div>
             )}
 
+            {/* Exam Status Filter */}
+            <div className="flex items-center space-x-1.5">
+              <span className="text-[11px] font-extrabold text-slate-500 uppercase">Status:</span>
+              <select
+                value={selectedExamStatusFilter}
+                onChange={(e) => setSelectedExamStatusFilter(e.target.value)}
+                className="bg-slate-50 border border-slate-200 text-slate-800 text-xs font-bold rounded-lg px-2.5 py-1 focus:outline-none focus:ring-1 focus:ring-brand-light"
+              >
+                <option value="All">All Statuses</option>
+                <option value="In Progress">🟢 In Progress</option>
+                <option value="Scheduled">⏳ Scheduled</option>
+                <option value="Ended">🔴 Ended</option>
+              </select>
+            </div>
+
             <div className="flex items-center space-x-1.5">
               <span className="text-[11px] font-extrabold text-slate-500 uppercase">Course:</span>
               <select
@@ -968,6 +1097,21 @@ ANSWER: C`;
                 <option value="All">All Courses ({assignedCourses.length})</option>
                 {assignedCourses.map(c => (
                   <option key={c.id} value={c.code}>[{c.code}] {c.name}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Course Unit Filter */}
+            <div className="flex items-center space-x-1.5">
+              <span className="text-[11px] font-extrabold text-slate-500 uppercase">Unit:</span>
+              <select
+                value={selectedCourseUnitFilter}
+                onChange={(e) => setSelectedCourseUnitFilter(e.target.value)}
+                className="bg-slate-50 border border-slate-200 text-slate-800 text-xs font-bold rounded-lg px-2.5 py-1 focus:outline-none focus:ring-1 focus:ring-brand-light"
+              >
+                <option value="All">All Units ({assignedCourseUnits.length})</option>
+                {assignedCourseUnits.map(u => (
+                  <option key={u.id} value={u.id}>[{u.code}] {u.name}</option>
                 ))}
               </select>
             </div>
@@ -1152,13 +1296,13 @@ ANSWER: C`;
                                           </span>
                                         </td>
                                         <td className="px-3 py-3 text-[11px]">
-                                          <div className="space-y-0.5">
-                                            <span className="block font-medium text-slate-800">
-                                              📅 {formatUgandanTime(examItem.scheduled_start)}
+                                          <div className="space-y-1">
+                                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded font-mono font-bold text-[10px] bg-emerald-50 text-emerald-800 border border-emerald-300">
+                                              🟢 Start: {formatUgandanTime(examItem.scheduled_start)}
                                             </span>
                                             {examItem.due_date && (
-                                              <span className="block text-amber-700 font-medium text-[10px]">
-                                                ⏳ Due: {formatUgandanTime(examItem.due_date)}
+                                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded font-mono font-bold text-[10px] bg-red-50 text-red-800 border border-red-300">
+                                                🔴 Stop: {formatUgandanTime(examItem.due_date)}
                                               </span>
                                             )}
                                           </div>
@@ -1483,13 +1627,13 @@ ANSWER: C`;
                                     </span>
                                   </td>
                                   <td className="px-3 py-3 text-[11px]">
-                                    <div className="space-y-0.5">
-                                      <span className="block font-medium text-slate-800">
-                                        📅 {formatUgandanTime(examItem.scheduled_start)}
+                                    <div className="space-y-1">
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded font-mono font-bold text-[10px] bg-emerald-50 text-emerald-800 border border-emerald-300">
+                                        🟢 Start: {formatUgandanTime(examItem.scheduled_start)}
                                       </span>
                                       {examItem.due_date && (
-                                        <span className="block text-amber-700 font-medium text-[10px]">
-                                          ⏳ Due: {formatUgandanTime(examItem.due_date)}
+                                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded font-mono font-bold text-[10px] bg-red-50 text-red-800 border border-red-300">
+                                          🔴 Stop: {formatUgandanTime(examItem.due_date)}
                                         </span>
                                       )}
                                     </div>
@@ -1516,6 +1660,15 @@ ANSWER: C`;
                                   </td>
                                   <td className="px-3 py-3 text-center">
                                     <div className="space-y-1">
+                                      <span className={`px-2 py-0.5 rounded text-[10px] font-black border block ${
+                                        (examItem.status === 'In Progress' || (!examItem.status && (!examItem.due_date || new Date(examItem.due_date) > new Date())))
+                                          ? 'bg-emerald-100 text-emerald-900 border-emerald-300'
+                                          : examItem.status === 'Scheduled'
+                                          ? 'bg-amber-100 text-amber-900 border-amber-300'
+                                          : 'bg-red-100 text-red-900 border-red-300'
+                                      }`}>
+                                        {examItem.status || 'Active'}
+                                      </span>
                                       {isApproved ? (
                                         <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-300 block">
                                           ✅ Approved
@@ -1532,6 +1685,14 @@ ANSWER: C`;
                                   </td>
                                   <td className="px-4 py-3 text-center">
                                     <div className="flex items-center justify-center space-x-1">
+                                      <button
+                                        type="button"
+                                        onClick={() => openLiveStudentsModal(examItem)}
+                                        className="px-2 py-1 bg-cyan-50 hover:bg-cyan-100 text-cyan-800 border border-cyan-300 text-[10px] font-bold rounded-lg transition-all cursor-pointer flex items-center space-x-1"
+                                        title="View attempting candidates live status (Started, Pending, Submitted)"
+                                      >
+                                        <span>👥 Candidates</span>
+                                      </button>
                                       <button
                                         type="button"
                                         onClick={() => toggleExpandExam(examItem.id)}
@@ -1741,6 +1902,34 @@ ANSWER: C`;
                     </select>
                   </div>
 
+                  {assignedCourseUnits.length > 1 && (
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
+                        Additional Assigned Units (Cross-Unit Setting)
+                      </label>
+                      <div className="max-h-28 overflow-y-auto border border-slate-200 rounded-lg p-2 bg-slate-50 space-y-1 text-xs">
+                        {assignedCourseUnits.filter(u => String(u.id) !== String(selectedCourseUnit)).map((u) => (
+                          <label key={u.id} className="flex items-center space-x-2 font-medium text-slate-800 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={targetCourseUnitIds.includes(u.id) || targetCourseUnitIds.includes(String(u.id))}
+                              onChange={(e) => {
+                                const uId = u.id;
+                                if (e.target.checked) {
+                                  setTargetCourseUnitIds(prev => [...prev.filter(id => id !== uId), uId]);
+                                } else {
+                                  setTargetCourseUnitIds(prev => prev.filter(id => id !== uId));
+                                }
+                              }}
+                              className="rounded text-brand-light focus:ring-brand-light"
+                            />
+                            <span>[{u.code}] {u.name}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   <div>
                     <label className="block text-slate-700 text-xs font-bold uppercase mb-1">Target Course Program(s) *</label>
                     <div className="max-h-36 overflow-y-auto border border-slate-200 rounded-lg p-2 bg-slate-50 space-y-1 text-xs">
@@ -1856,22 +2045,30 @@ ANSWER: C`;
                     </div>
 
                     <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <label className="block text-[10px] text-slate-500 font-semibold mb-0.5">Start Date & Time (EAT)</label>
+                      <div className="p-2 rounded-xl border-2 border-emerald-400 bg-emerald-50/30">
+                        <label className="block text-[10px] text-emerald-800 font-extrabold mb-1 flex items-center space-x-1">
+                          <span>🟢</span>
+                          <span>Start Date & Time (EAT)</span>
+                        </label>
                         <input
                           type="datetime-local"
+                          min={getUgandanNowDatetimeLocal()}
                           value={scheduledStart}
                           onChange={(e) => setScheduledStart(e.target.value)}
-                          className="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs font-semibold text-slate-800"
+                          className="w-full px-2 py-1.5 bg-white border border-emerald-300 rounded text-xs font-bold text-emerald-950 focus:ring-1 focus:ring-emerald-500"
                         />
                       </div>
-                      <div>
-                        <label className="block text-[10px] text-slate-500 font-semibold mb-0.5">Due Date & Time (EAT)</label>
+                      <div className="p-2 rounded-xl border-2 border-red-400 bg-red-50/30">
+                        <label className="block text-[10px] text-red-800 font-extrabold mb-1 flex items-center space-x-1">
+                          <span>🔴</span>
+                          <span>Stop Date & Time (EAT)</span>
+                        </label>
                         <input
                           type="datetime-local"
+                          min={scheduledStart || getUgandanNowDatetimeLocal()}
                           value={dueDate}
                           onChange={(e) => setDueDate(e.target.value)}
-                          className="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs font-semibold text-slate-800"
+                          className="w-full px-2 py-1.5 bg-white border border-red-300 rounded text-xs font-bold text-red-950 focus:ring-1 focus:ring-red-500"
                         />
                       </div>
                     </div>
@@ -2140,12 +2337,12 @@ ANSWER: C`;
                 Student Examination Attempts Audit ({filteredExamSubmissions.length})
               </h3>
               
-              {(selectedExamFilter !== 'All' || selectedExamCourseSubFilter !== 'All' || selectedExamStatusFilter !== 'All' || examSubmissionSearch) && (
+              {(selectedExamFilter !== 'All' || selectedExamCourseSubFilter !== 'All' || selectedSubStatusFilter !== 'All' || examSubmissionSearch) && (
                 <button
                   onClick={() => {
                     setSelectedExamFilter('All');
                     setSelectedExamCourseSubFilter('All');
-                    setSelectedExamStatusFilter('All');
+                    setSelectedSubStatusFilter('All');
                     setExamSubmissionSearch('');
                   }}
                   className="text-xs font-bold text-red-600 hover:text-red-700 bg-red-50 border border-red-200 px-3 py-1 rounded-lg transition-all"
@@ -2188,8 +2385,8 @@ ANSWER: C`;
               <div>
                 <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Grade Status</label>
                 <select
-                  value={selectedExamStatusFilter}
-                  onChange={(e) => setSelectedExamStatusFilter(e.target.value)}
+                  value={selectedSubStatusFilter}
+                  onChange={(e) => setSelectedSubStatusFilter(e.target.value)}
                   className="w-full bg-slate-50 border border-slate-200 text-slate-800 font-bold rounded-lg px-2.5 py-1.5 focus:ring-1 focus:ring-brand-light"
                 >
                   <option value="All">All Statuses (Passed & Failed)</option>
@@ -2228,10 +2425,12 @@ ANSWER: C`;
                           <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 uppercase font-bold text-[11px]">
                             <th className="px-4 py-3">Student Name & Reg No</th>
                             <th className="px-4 py-3">Exam Paper Title</th>
-                            <th className="px-4 py-3 text-center">Score %</th>
-                            <th className="px-4 py-3 text-center">Status</th>
-                            <th className="px-4 py-3 text-center">Proctoring Logs</th>
-                            <th className="px-4 py-3">Submitted At (EAT)</th>
+                            <th className="px-3 py-3 text-center">Score %</th>
+                            <th className="px-3 py-3 text-center">Status</th>
+                            <th className="px-3 py-3">Student Started (EAT)</th>
+                            <th className="px-3 py-3">Submitted At (EAT)</th>
+                            <th className="px-3 py-3 text-center">Submission Type</th>
+                            <th className="px-3 py-3 text-center">Proctoring Logs</th>
                             <th className="px-4 py-3 text-right">Scorecard Action</th>
                           </tr>
                         </thead>
@@ -2242,32 +2441,49 @@ ANSWER: C`;
                               <tr key={att.id} className="hover:bg-slate-50/80 transition-all">
                                 <td className="px-4 py-3">
                                   <p className="font-extrabold text-slate-850">{att.student_name || att.student_username}</p>
-                                  <span className="text-[10px] text-slate-500 font-mono font-bold">{att.student_reg_number || `@${att.student_username}`}</span>
+                                  <div className="flex items-center space-x-1.5 mt-0.5">
+                                    <span className="text-[10px] text-slate-500 font-mono font-bold">{att.student_reg_number || `@${att.student_username}`}</span>
+                                    {att.year_of_study && (
+                                      <span className="text-[9px] bg-slate-100 px-1 py-0.5 rounded text-slate-600 font-bold border border-slate-200">
+                                        Yr {att.year_of_study}
+                                      </span>
+                                    )}
+                                  </div>
                                 </td>
                                 <td className="px-4 py-3">
                                   <p className="font-bold text-slate-800">{att.exam_title}</p>
                                   <span className="text-[10px] font-bold text-brand-medium">Course: {att.exam_course_code}</span>
                                 </td>
-                                <td className="px-4 py-3 text-center font-black text-sm text-slate-850">
+                                <td className="px-3 py-3 text-center font-black text-sm text-slate-850">
                                   {att.score !== null && att.score !== undefined ? `${att.score}%` : 'N/A'}
                                 </td>
-                                <td className="px-4 py-3 text-center">
+                                <td className="px-3 py-3 text-center">
                                   <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider border ${isPassed ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-red-50 text-red-700 border-red-200'}`}>
                                     {isPassed ? 'PASSED' : 'FAILED'}
                                   </span>
                                 </td>
-                                <td className="px-4 py-3 text-center">
-                                  <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${att.tab_switches_count > 0 ? 'bg-amber-50 text-amber-800 border border-amber-200' : 'bg-slate-100 text-slate-600'}`}>
-                                    {att.tab_switches_count > 0 ? `⚠️ ${att.tab_switches_count} Tab Switches` : 'Clean'}
+                                <td className="px-3 py-3 text-slate-600 font-medium text-[11px] whitespace-nowrap">
+                                  <span className="inline-flex items-center gap-1 font-mono text-[10.5px]">
+                                    🟢 {formatUgandanTime(att.started_at || att.start_time)}
                                   </span>
                                 </td>
-                                <td className="px-4 py-3 text-slate-600 font-medium text-[11px]">
-                                  {formatUgandanTime(att.completed_at || att.started_at)}
+                                <td className="px-3 py-3 text-slate-600 font-medium text-[11px] whitespace-nowrap">
+                                  <span className="inline-flex items-center gap-1 font-mono text-[10.5px]">
+                                    🔴 {att.completed_at || att.submission_time ? formatUgandanTime(att.completed_at || att.submission_time) : <span className="text-amber-600 font-bold">In Progress</span>}
+                                  </span>
+                                </td>
+                                <td className="px-3 py-3 text-center whitespace-nowrap">
+                                  {renderSubmissionTypeBadge(att.submission_type, att.auto_submitted_reason)}
+                                </td>
+                                <td className="px-3 py-3 text-center">
+                                  <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${att.tab_switches_count > 0 ? 'bg-amber-50 text-amber-800 border border-amber-200' : 'bg-slate-100 text-slate-600'}`}>
+                                    {att.tab_switches_count > 0 ? `⚠️ ${att.tab_switches_count} Switches` : 'Clean'}
+                                  </span>
                                 </td>
                                 <td className="px-4 py-3 text-right">
                                   <button
                                     onClick={() => router.push(`/dashboard/exams/${att.exam}/results?attemptId=${att.id}`)}
-                                    className="px-3 py-1.5 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-lg shadow-sm transition-all"
+                                    className="px-3 py-1.5 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-lg shadow-sm transition-all cursor-pointer whitespace-nowrap"
                                   >
                                     📋 View Scorecard
                                   </button>
@@ -2502,25 +2718,61 @@ ANSWER: C`;
               </div>
 
               <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="block text-slate-700 font-bold uppercase mb-1">Scheduled Start (EAT)</label>
+                <div className="p-2 rounded-xl border-2 border-emerald-400 bg-emerald-50/30">
+                  <label className="block text-[10px] text-emerald-800 font-extrabold mb-1 flex items-center space-x-1">
+                    <span>🟢</span>
+                    <span>Start Date & Time (EAT)</span>
+                  </label>
                   <input
                     type="datetime-local"
+                    min={getUgandanNowDatetimeLocal()}
                     value={editExamScheduledStart}
                     onChange={(e) => setEditExamScheduledStart(e.target.value)}
-                    className="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs font-semibold text-slate-800"
+                    className="w-full px-2 py-1.5 bg-white border border-emerald-300 rounded text-xs font-bold text-emerald-950 focus:ring-1 focus:ring-emerald-500"
                   />
                 </div>
-                <div>
-                  <label className="block text-slate-700 font-bold uppercase mb-1">Due Date (EAT)</label>
+                <div className="p-2 rounded-xl border-2 border-red-400 bg-red-50/30">
+                  <label className="block text-[10px] text-red-800 font-extrabold mb-1 flex items-center space-x-1">
+                    <span>🔴</span>
+                    <span>Stop Date & Time (EAT)</span>
+                  </label>
                   <input
                     type="datetime-local"
+                    min={editExamScheduledStart || getUgandanNowDatetimeLocal()}
                     value={editExamDueDate}
                     onChange={(e) => setEditExamDueDate(e.target.value)}
-                    className="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs font-semibold text-slate-800"
+                    className="w-full px-2 py-1.5 bg-white border border-red-300 rounded text-xs font-bold text-red-950 focus:ring-1 focus:ring-red-500"
                   />
                 </div>
               </div>
+
+              {assignedCourseUnits.length > 1 && (
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
+                    Additional Assigned Units (Cross-Unit Setting)
+                  </label>
+                  <div className="max-h-24 overflow-y-auto border border-slate-200 rounded-lg p-2 bg-slate-50 space-y-1 text-xs">
+                    {assignedCourseUnits.filter(u => String(u.id) !== String(editingExamModal.course_unit)).map((u) => (
+                      <label key={u.id} className="flex items-center space-x-2 font-medium text-slate-800 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={editAdditionalCourseUnits.includes(u.id) || editAdditionalCourseUnits.includes(String(u.id))}
+                          onChange={(e) => {
+                            const uId = u.id;
+                            if (e.target.checked) {
+                              setEditAdditionalCourseUnits(prev => [...prev.filter(id => id !== uId), uId]);
+                            } else {
+                              setEditAdditionalCourseUnits(prev => prev.filter(id => id !== uId));
+                            }
+                          }}
+                          className="rounded text-brand-light focus:ring-brand-light"
+                        />
+                        <span>[{u.code}] {u.name}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               <div className="flex space-x-2 pt-2">
                 <button type="submit" disabled={submitting} className="flex-1 py-2 bg-brand-light hover:bg-brand-medium text-white text-xs font-extrabold uppercase rounded-lg shadow-sm">
@@ -2604,6 +2856,39 @@ ANSWER: C`;
                 <div>
                   <span className="text-white/60 text-[10px] uppercase font-bold block">Target Year</span>
                   <span className="font-extrabold text-amber-300">{examScorecardPreviewData.year_of_study === 0 ? 'All Years' : `Year ${examScorecardPreviewData.year_of_study}`}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Simulated Candidate Identity & Audit Banner Preview */}
+            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-xs space-y-3">
+              <div className="flex items-center justify-between border-b border-slate-200/80 pb-2">
+                <div className="flex items-center space-x-2">
+                  <span className="text-[10px] font-black uppercase text-brand-dark bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-full">
+                    Scorecard Layout Preview: Candidate Header & Audit Verification
+                  </span>
+                </div>
+                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-300">
+                  <span>✅</span>
+                  <span>Manual Submission</span>
+                </span>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-[11px]">
+                <div>
+                  <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Candidate Full Name</span>
+                  <span className="font-extrabold text-slate-850 block">Sarah Namubiru (Sample)</span>
+                </div>
+                <div>
+                  <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Registration Number</span>
+                  <span className="font-mono font-bold text-brand-dark block">CIU/2026/BIT/042</span>
+                </div>
+                <div>
+                  <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Student Started (EAT)</span>
+                  <span className="font-mono text-slate-700 block">🟢 13 Oct 2026, 09:00 EAT</span>
+                </div>
+                <div>
+                  <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Submitted At (EAT)</span>
+                  <span className="font-mono text-slate-700 block">🔴 13 Oct 2026, 11:30 EAT</span>
                 </div>
               </div>
             </div>
@@ -3053,6 +3338,262 @@ ANSWER: C`;
                 </div>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: LIVE ATTEMPTING STUDENTS MONITOR */}
+      {liveStudentsModal.isOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fade-in">
+          <div className="bg-white rounded-3xl max-w-4xl w-full max-h-[90vh] flex flex-col shadow-2xl border border-slate-200 overflow-hidden">
+            
+            {/* Modal Header */}
+            <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/70">
+              <div className="space-y-1">
+                <div className="flex items-center space-x-2">
+                  <span className="text-xl">👥</span>
+                  <h3 className="text-base font-extrabold text-slate-900">
+                    Candidate Monitoring: {liveStudentsModal.exam?.title}
+                  </h3>
+                  <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase border ${
+                    (liveStudentsModal.data?.exam_status || liveStudentsModal.data?.test_status) === 'In Progress'
+                      ? 'bg-emerald-100 text-emerald-900 border-emerald-300'
+                      : (liveStudentsModal.data?.exam_status || liveStudentsModal.data?.test_status) === 'Scheduled'
+                      ? 'bg-amber-100 text-amber-900 border-amber-300'
+                      : 'bg-red-100 text-red-900 border-red-300'
+                  }`}>
+                    {liveStudentsModal.data?.exam_status || liveStudentsModal.data?.test_status || 'Assessment'}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500 font-medium">
+                  Course: <strong className="text-slate-700">[{liveStudentsModal.exam?.course_code}]</strong> {liveStudentsModal.exam?.course_name || ''} · Lecturer: {liveStudentsModal.exam?.lecturer_name || 'Assigned Lecturer'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closeLiveStudentsModal}
+                className="w-8 h-8 rounded-full bg-slate-200 hover:bg-slate-300 text-slate-700 flex items-center justify-center text-sm font-bold transition-all cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Metrics & Filter Bar */}
+            <div className="p-5 border-b border-slate-100 space-y-4">
+              {/* Counts */}
+              <div className="grid grid-cols-4 gap-3 text-center">
+                <div className="bg-slate-100/70 p-3 rounded-2xl border border-slate-200">
+                  <span className="text-[10px] font-bold text-slate-500 uppercase block">Total Candidates</span>
+                  <span className="text-lg font-black text-slate-900">{liveStudentsModal.data?.counts?.total ?? '...'}</span>
+                </div>
+                <div className="bg-blue-50 p-3 rounded-2xl border border-blue-200">
+                  <span className="text-[10px] font-bold text-blue-700 uppercase block">🟢 Started / Taking</span>
+                  <span className="text-lg font-black text-blue-900">{liveStudentsModal.data?.counts?.started ?? '...'}</span>
+                </div>
+                <div className="bg-emerald-50 p-3 rounded-2xl border border-emerald-200">
+                  <span className="text-[10px] font-bold text-emerald-700 uppercase block">✅ Submitted</span>
+                  <span className="text-lg font-black text-emerald-900">{liveStudentsModal.data?.counts?.submitted ?? '...'}</span>
+                </div>
+                <div className="bg-amber-50 p-3 rounded-2xl border border-amber-200">
+                  <span className="text-[10px] font-bold text-amber-700 uppercase block">⏳ Pending</span>
+                  <span className="text-lg font-black text-amber-900">{liveStudentsModal.data?.counts?.pending ?? '...'}</span>
+                </div>
+              </div>
+
+              {/* Filters */}
+              <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+                <div className="flex items-center space-x-2">
+                  <span className="text-xs font-bold text-slate-500">Status:</span>
+                  {['All', 'Started', 'Pending', 'Submitted'].map(st => (
+                    <button
+                      key={st}
+                      type="button"
+                      onClick={() => setLiveStudentsModal(prev => ({ ...prev, statusFilter: st }))}
+                      className={`px-3 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                        liveStudentsModal.statusFilter === st
+                          ? 'bg-brand-dark text-white shadow-xs'
+                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      {st}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="flex items-center space-x-3">
+                  <div className="flex items-center space-x-1">
+                    <span className="text-xs font-bold text-slate-500">Group By:</span>
+                    <select
+                      value={liveStudentsModal.groupBy}
+                      onChange={(e) => setLiveStudentsModal(prev => ({ ...prev, groupBy: e.target.value }))}
+                      className="px-2.5 py-1 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none"
+                    >
+                      <option value="none">None</option>
+                      <option value="faculty">Faculty</option>
+                      <option value="course_unit">Course Unit</option>
+                    </select>
+                  </div>
+
+                  <input
+                    type="text"
+                    placeholder="Search candidate name or reg no..."
+                    value={liveStudentsModal.search}
+                    onChange={(e) => setLiveStudentsModal(prev => ({ ...prev, search: e.target.value }))}
+                    className="px-3 py-1 bg-slate-50 border border-slate-200 rounded-xl text-xs w-56 focus:outline-none focus:ring-1 focus:ring-brand-light"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Students List / Grouped View */}
+            <div className="p-5 overflow-y-auto flex-1 space-y-4 custom-scrollbar">
+              {liveStudentsModal.loading ? (
+                <div className="flex items-center justify-center py-12">
+                  <div className="w-8 h-8 border-4 border-brand-light/20 border-t-brand-light rounded-full animate-spin"></div>
+                </div>
+              ) : (
+                (() => {
+                  let filtered = (liveStudentsModal.data?.students || []).filter(s => {
+                    if (liveStudentsModal.statusFilter !== 'All' && s.status !== liveStudentsModal.statusFilter) return false;
+                    if (liveStudentsModal.search) {
+                      const q = liveStudentsModal.search.toLowerCase();
+                      const matchName = (s.name || s.student_name || '').toLowerCase().includes(q);
+                      const matchReg = (s.reg_number || '').toLowerCase().includes(q);
+                      if (!matchName && !matchReg) return false;
+                    }
+                    return true;
+                  });
+
+                  if (filtered.length === 0) {
+                    return (
+                      <div className="text-center py-12 text-slate-500 font-semibold text-xs">
+                        No candidate records found matching current status filter.
+                      </div>
+                    );
+                  }
+
+                  // Render table
+                  const renderTable = (items) => (
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead>
+                        <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 uppercase font-semibold">
+                          <th className="px-3 py-2.5">Candidate Details</th>
+                          <th className="px-3 py-2.5">Faculty & Unit</th>
+                          <th className="px-3 py-2.5 text-center">Status</th>
+                          <th className="px-3 py-2.5">Start Time (EAT)</th>
+                          <th className="px-3 py-2.5">Submission (EAT)</th>
+                          <th className="px-3 py-2.5 text-center">Score</th>
+                          <th className="px-3 py-2.5 text-center">Tab Switches</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {items.map(std => (
+                          <tr key={std.id || std.student_id} className="hover:bg-slate-50/70 transition-all">
+                            <td className="px-3 py-2.5">
+                              <span className="font-bold text-slate-900 block">{std.name || std.student_name}</span>
+                              <span className="font-mono text-[11px] text-slate-500 font-bold block">{std.reg_number || 'No Reg No'}</span>
+                            </td>
+                            <td className="px-3 py-2.5">
+                              <span className="text-slate-800 font-semibold block">{std.faculty_name || std.faculty || 'General'}</span>
+                              <span className="text-[10px] text-slate-500 block">{std.course_unit_name || std.course_unit || 'Assigned Unit'}</span>
+                            </td>
+                            <td className="px-3 py-2.5 text-center">
+                              <span className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase border ${
+                                std.status === 'Submitted'
+                                  ? 'bg-emerald-100 text-emerald-900 border-emerald-300'
+                                  : std.status === 'Started'
+                                  ? 'bg-blue-100 text-blue-900 border-blue-300 animate-pulse'
+                                  : 'bg-amber-100 text-amber-900 border-amber-300'
+                              }`}>
+                                {std.status}
+                              </span>
+                            </td>
+                            <td className="px-3 py-2.5 text-[11px] font-mono text-slate-700">
+                              {std.started_at ? formatUgandanTime(std.started_at) : '—'}
+                            </td>
+                            <td className="px-3 py-2.5 text-[11px] font-mono text-slate-700">
+                              {std.completed_at ? (
+                                <div>
+                                  <span>{formatUgandanTime(std.completed_at)}</span>
+                                  <div className="mt-0.5">
+                                    {renderSubmissionTypeBadge(std.submission_type, std.auto_submitted_reason || std.auto_reason)}
+                                  </div>
+                                </div>
+                              ) : '—'}
+                            </td>
+                            <td className="px-3 py-2.5 text-center font-bold">
+                              {std.score !== null && std.score !== undefined ? `${std.score}%` : '—'}
+                            </td>
+                            <td className="px-3 py-2.5 text-center">
+                              <span className={`font-mono font-bold text-xs ${(std.tab_switches_count || std.tab_switches) > 0 ? 'text-red-600' : 'text-slate-600'}`}>
+                                {std.tab_switches_count ?? std.tab_switches ?? 0}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  );
+
+                  if (liveStudentsModal.groupBy === 'faculty') {
+                    const groups = {};
+                    filtered.forEach(s => {
+                      const f = s.faculty_name || s.faculty || 'General Faculty';
+                      if (!groups[f]) groups[f] = [];
+                      groups[f].push(s);
+                    });
+                    return Object.entries(groups).map(([facName, sList]) => (
+                      <div key={facName} className="border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
+                        <div className="bg-slate-100 px-4 py-2 font-extrabold text-xs text-slate-800 flex items-center justify-between">
+                          <span>🏛️ {facName}</span>
+                          <span className="bg-white px-2 py-0.5 rounded text-[10px] text-slate-700 border border-slate-200">{sList.length} Students</span>
+                        </div>
+                        {renderTable(sList)}
+                      </div>
+                    ));
+                  }
+
+                  if (liveStudentsModal.groupBy === 'course_unit') {
+                    const groups = {};
+                    filtered.forEach(s => {
+                      const u = s.course_unit_name || s.course_unit || 'Default Unit';
+                      if (!groups[u]) groups[u] = [];
+                      groups[u].push(s);
+                    });
+                    return Object.entries(groups).map(([uName, sList]) => (
+                      <div key={uName} className="border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
+                        <div className="bg-slate-100 px-4 py-2 font-extrabold text-xs text-slate-800 flex items-center justify-between">
+                          <span>📚 {uName}</span>
+                          <span className="bg-white px-2 py-0.5 rounded text-[10px] text-slate-700 border border-slate-200">{sList.length} Students</span>
+                        </div>
+                        {renderTable(sList)}
+                      </div>
+                    ));
+                  }
+
+                  return (
+                    <div className="border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
+                      {renderTable(filtered)}
+                    </div>
+                  );
+                })()
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 border-t border-slate-100 flex items-center justify-between bg-slate-50/50">
+              <span className="text-[11px] text-slate-500 font-medium">
+                🕒 All start and completion timestamps rendered strictly in Ugandan Time (EAT, UTC+3)
+              </span>
+              <button
+                type="button"
+                onClick={closeLiveStudentsModal}
+                className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-xl shadow cursor-pointer"
+              >
+                Close Monitor
+              </button>
+            </div>
+
           </div>
         </div>
       )}

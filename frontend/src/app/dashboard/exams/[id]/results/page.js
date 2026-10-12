@@ -72,74 +72,195 @@ export default function ExamResultsPage() {
     return (
       <div className="flex flex-col items-center justify-center min-h-[400px] space-y-4">
         <div className="w-10 h-10 border-4 border-brand-light/20 border-t-brand-light rounded-full animate-spin"></div>
-        <p className="text-slate-500 font-semibold text-sm">Grading answers and loading scorecard...</p>
+        <p className="text-slate-500 font-semibold text-sm">Grading answers and loading examination scorecard...</p>
       </div>
     );
   }
 
   if (errorMsg) {
     return (
-      <div className="p-6 bg-red-50 border border-red-200 text-red-700 text-sm font-semibold rounded-xl">
-        {errorMsg}
+      <div className="max-w-lg mx-auto py-20 text-center space-y-4">
+        <div className="p-6 bg-red-50 border-l-4 border-red-600 text-red-800 text-sm font-semibold rounded-2xl">
+          {errorMsg}
+        </div>
+        <button
+          onClick={() => router.push('/dashboard/exams')}
+          className="px-5 py-2.5 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-xl transition-all shadow-sm cursor-pointer"
+        >
+          Return to Exams Portal
+        </button>
       </div>
     );
   }
 
-  const passed = attempt.score >= 50.0;
+  const passed = (attempt?.score || 0) >= 50.0;
+  const studentDisplayName = attempt.student_name || (user?.id === attempt.student ? (user.first_name ? `${user.first_name} ${user.last_name || ''}`.trim() : user.username) : attempt.student_username || 'Student');
+  const studentRegNo = attempt.student_reg_number || attempt.registration_number || (user?.id === attempt.student ? user.reg_number : '') || 'N/A';
+  const studentEmail = attempt.student_email || (user?.id === attempt.student ? user.email : '') || 'N/A';
+  const facultyName = attempt.student_faculty || 'Clarke International University';
+  const academicYear = attempt.academic_year || '2026/2027';
+  const yearOfStudy = attempt.year_of_study || (user?.id === attempt.student ? user.year_of_study : 1) || 1;
+  const semesterVal = attempt.semester || (user?.id === attempt.student ? user.semester : 1) || 1;
+
+  // Calculate duration elapsed
+  const startTimeObj = attempt.started_at ? new Date(attempt.started_at) : null;
+  const compTimeObj = attempt.completed_at ? new Date(attempt.completed_at) : null;
+  let elapsedMinutes = null;
+  if (startTimeObj && compTimeObj && compTimeObj >= startTimeObj) {
+    elapsedMinutes = Math.round((compTimeObj - startTimeObj) / 60000);
+  }
 
   return (
-    <div className="space-y-8 max-w-4xl mx-auto animate-fade-in">
+    <div className="space-y-6 max-w-4xl mx-auto animate-fade-in">
       
-      {/* Top Banner Overview */}
-      <div className="bg-white rounded-3xl p-6 md:p-8 shadow-sm border border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-6">
-        <div className="space-y-2">
-          <span className="text-[10px] font-bold bg-slate-100 text-slate-500 border border-slate-200 px-2.5 py-0.5 rounded-full uppercase tracking-wider">
-            Exam Graded Sheet
-          </span>
-          <h2 className="text-xl md:text-2xl font-extrabold text-slate-800">{attempt.exam_title} ({attempt.exam_course_code})</h2>
-          {attempt.student_name && (user?.username !== attempt.student_name) && (
-            <p className="text-xs text-brand-medium font-bold uppercase tracking-wider">
-              Student: <span className="text-slate-850 font-bold">{attempt.student_name}</span>
-            </p>
-          )}
-          <p className="text-xs text-slate-500 font-medium">Completed at: {new Date(attempt.completed_at).toLocaleString()}</p>
-          {attempt.is_late && (
-            <div className="pt-2 space-y-1">
-              <span className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-amber-50 text-amber-800 border border-amber-300 font-extrabold text-[10.5px]">
-                <span>⚠️ Late Submission</span>
-              </span>
-              {attempt.late_submission_reason && (
-                <p className="text-[11px] text-amber-900 bg-amber-50/70 p-2.5 rounded-xl border border-amber-200 mt-1 italic">
-                  <strong>Student Comment:</strong> "{attempt.late_submission_reason}"
-                </p>
-              )}
+      {/* 1. Official Candidate Profile & Scorecard Header Banner */}
+      <div className="bg-white rounded-3xl p-6 sm:p-7 border border-slate-200 shadow-sm space-y-5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-4">
+          <div className="flex items-center space-x-3">
+            <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-brand-dark to-brand-light text-white flex items-center justify-center text-xl font-black shadow-sm">
+              🎓
             </div>
-          )}
+            <div>
+              <span className="text-[10px] font-black uppercase tracking-wider text-brand-dark bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-full">
+                Clarke International University · Official Examination Scorecard
+              </span>
+              <h1 className="text-lg sm:text-xl font-black text-slate-900 mt-1">
+                {attempt.exam_title}
+              </h1>
+              <p className="text-xs text-slate-500 font-medium">
+                Course: <strong className="text-slate-700">[{attempt.exam_course_code}] {attempt.exam_course_name}</strong> · Lecturer: {attempt.lecturer_name || 'N/A'}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center space-x-2 self-start sm:self-center">
+            {renderSubmissionTypeBadge(attempt.submission_type, attempt.auto_submitted_reason)}
+          </div>
         </div>
 
-        {/* Score indicator */}
-        <div className="flex items-center space-x-4 self-start md:self-center">
-          <div className="text-right">
-            <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Percentage Grade</span>
-            <span className={`text-3xl md:text-4xl font-black ${passed ? 'text-brand-light' : 'text-red-650'}`}>
-              {attempt.score}%
+        {/* Student Personal & Academic Details Grid */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 p-4 rounded-2xl border border-slate-200/80 text-xs">
+          <div>
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Candidate Full Name</span>
+            <span className="font-extrabold text-slate-900 block truncate">{studentDisplayName}</span>
+          </div>
+          <div>
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Registration Number</span>
+            <span className="font-mono font-bold text-brand-dark block">{studentRegNo}</span>
+          </div>
+          <div>
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Academic Scope</span>
+            <span className="font-bold text-slate-800 block">Year {yearOfStudy} · Sem {semesterVal}</span>
+          </div>
+          <div>
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Academic Year</span>
+            <span className="font-bold text-emerald-800 block">{academicYear}</span>
+          </div>
+          <div>
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Faculty / School</span>
+            <span className="font-semibold text-slate-700 block truncate">{facultyName}</span>
+          </div>
+          <div>
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Student Email</span>
+            <span className="font-mono text-[11px] text-slate-600 block truncate">{studentEmail}</span>
+          </div>
+          <div>
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Examination Status</span>
+            <span className={`font-extrabold block ${passed ? 'text-emerald-700' : 'text-red-700'}`}>
+              {passed ? 'PASSED (≥ 50%)' : 'FAILED (< 50%)'}
             </span>
           </div>
-          <div className={`px-4 py-2 rounded-2xl border font-bold text-sm tracking-wide uppercase ${passed ? 'bg-emerald-50 text-emerald-700 border-emerald-100' : 'bg-red-50 text-red-750 border-red-150'}`}>
-            {passed ? 'Passed' : 'Failed'}
+          <div>
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Grade Outcome</span>
+            <span className="font-extrabold text-slate-900 block">{attempt.score}% Final</span>
           </div>
         </div>
       </div>
 
-      {/* Questions list analysis */}
+      {/* 2. Assessment Score & Timing Banner */}
+      <div className={`rounded-3xl p-8 border shadow-sm text-center relative overflow-hidden ${passed ? 'bg-gradient-to-br from-emerald-900 to-brand-dark text-white border-brand-light/30' : 'bg-gradient-to-br from-red-950 to-slate-900 text-white border-red-900/30'}`}>
+        
+        <span className={`inline-block px-3.5 py-1 rounded-full text-xs font-black tracking-wider uppercase border mb-3 ${passed ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' : 'bg-red-500/20 text-red-300 border-red-500/30'}`}>
+          {passed ? '🎉 EXAMINATION PASSED' : '⚠️ EXAMINATION FAILED'}
+        </span>
+
+        {/* Big Score Display */}
+        <div className="my-4">
+          <span className="text-6xl sm:text-7xl font-black tracking-tight">{attempt.score}%</span>
+          <p className="text-xs text-white/70 font-semibold mt-1.5">
+            Pass Mark Target: 50.0% · Official Evaluation: {passed ? 'Academic Clearance Satisfied' : 'Supplementary Recommended'}
+          </p>
+        </div>
+
+        {/* Timing & Security Audit Grid */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-black/25 p-4 rounded-2xl border border-white/10 max-w-3xl mx-auto text-xs text-left">
+          <div>
+            <span className="text-white/60 text-[10px] uppercase font-bold block">🟢 Student Started (EAT)</span>
+            <span className="font-mono font-bold text-white text-[11px] block mt-0.5">
+              {formatUgandanTime(attempt.started_at || attempt.start_time)}
+            </span>
+          </div>
+          <div>
+            <span className="text-white/60 text-[10px] uppercase font-bold block">🔴 Submitted At (EAT)</span>
+            <span className="font-mono font-bold text-white text-[11px] block mt-0.5">
+              {formatUgandanTime(attempt.completed_at || attempt.submission_time)}
+            </span>
+          </div>
+          <div>
+            <span className="text-white/60 text-[10px] uppercase font-bold block">⏱️ Duration / Time Taken</span>
+            <span className="font-bold text-white block mt-0.5">
+              {elapsedMinutes !== null ? `${elapsedMinutes}m elapsed` : 'N/A'} ({attempt.duration_minutes || 60}m cap)
+            </span>
+          </div>
+          <div>
+            <span className="text-white/60 text-[10px] uppercase font-bold block">🛡️ Submission Mode</span>
+            <span className="font-extrabold text-amber-200 block mt-0.5 truncate">
+              {attempt.submission_type_display || (attempt.submission_type ? attempt.submission_type.toUpperCase() : 'MANUAL')}
+            </span>
+          </div>
+        </div>
+
+        {/* Proctoring & AI Surveillance Audit */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-3xl mx-auto mt-3 text-left text-xs">
+          <div className="bg-black/20 p-3 rounded-xl border border-white/10 flex items-center justify-between">
+            <span className="text-white/70 text-[11px] font-medium">Proctoring Tab Switch Count:</span>
+            <span className={`px-2 py-0.5 rounded font-mono font-bold text-[11px] ${attempt.tab_switches_count > 0 ? 'bg-amber-400 text-amber-950' : 'bg-emerald-400/20 text-emerald-300'}`}>
+              {attempt.tab_switches_count > 0 ? `⚠️ ${attempt.tab_switches_count} switch(es)` : '✓ Clean (0 switches)'}
+            </span>
+          </div>
+          <div className="bg-black/20 p-3 rounded-xl border border-white/10 flex items-center justify-between">
+            <span className="text-white/70 text-[11px] font-medium">Security Trigger:</span>
+            <span className="font-bold text-white/90 text-[11px] truncate max-w-[180px]" title={attempt.auto_submitted_reason || 'Clean submission'}>
+              {attempt.auto_submitted_reason || 'Normal Completion'}
+            </span>
+          </div>
+        </div>
+
+        {/* Late Submission Flag & Student Comments */}
+        {attempt.is_late && (
+          <div className="mt-4 p-3.5 bg-amber-500/20 border border-amber-400/40 rounded-2xl max-w-3xl mx-auto text-left text-xs text-amber-200">
+            <span className="px-2 py-0.5 rounded bg-amber-400 text-amber-950 font-extrabold text-[10px] uppercase">
+              ⚠️ Late Submission
+            </span>
+            {attempt.late_submission_reason && (
+              <p className="mt-1.5 text-white/90 italic">
+                <strong className="text-amber-300">Student Justification:</strong> &quot;{attempt.late_submission_reason}&quot;
+              </p>
+            )}
+          </div>
+        )}
+
+      </div>
+
+      {/* 3. Questionnaire Breakdown & Performance */}
       <div className="bg-white rounded-3xl p-6 md:p-8 shadow-sm border border-slate-100 space-y-6">
         <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider border-b border-slate-100 pb-3">
-          Questionnaire Breakdown & Performance
+          Questionnaire Breakdown &amp; Performance
         </h3>
 
         <div className="space-y-6 divide-y divide-slate-150">
           {questions.map((q, idx) => {
-            const studentAns = attempt.answers[q.id.toString()];
+            const studentAns = attempt.answers?.[q.id.toString()];
             const correctAns = q.correct_option;
             const isCorrect = studentAns && studentAns.toUpperCase() === correctAns.toUpperCase();
 
@@ -210,10 +331,10 @@ export default function ExamResultsPage() {
         </div>
       </div>
 
-      <div className="text-center">
+      <div className="text-center pt-2">
         <button
           onClick={() => router.push('/dashboard/exams')}
-          className="px-6 py-2.5 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-xl shadow-md transition-all active:scale-[0.98]"
+          className="px-6 py-2.5 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-xl shadow-md transition-all active:scale-[0.98] cursor-pointer"
         >
           Return to Exams Portal
         </button>
@@ -231,4 +352,50 @@ function formatExamAnswerText(q, key) {
   if (k === 'C' && q.option_c) return `Option C: ${q.option_c}`;
   if (k === 'D' && q.option_d) return `Option D: ${q.option_d}`;
   return k;
+}
+
+function formatUgandanTime(dateStr) {
+  if (!dateStr) return 'N/A';
+  try {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return dateStr;
+    return d.toLocaleString('en-UG', {
+      timeZone: 'Africa/Kampala',
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: true
+    }) + ' EAT';
+  } catch {
+    return dateStr;
+  }
+}
+
+function renderSubmissionTypeBadge(type, reason) {
+  const t = (type || '').toLowerCase();
+  if (t === 'security logs' || (reason && (reason.toLowerCase().includes('security') || reason.toLowerCase().includes('tab switch') || reason.toLowerCase().includes('lockdown')))) {
+    return (
+      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black bg-red-100 text-red-800 border border-red-300">
+        <span>🛡️</span>
+        <span>Security Logs Triggered</span>
+      </span>
+    );
+  }
+  if (t === 'system' || (reason && (reason.toLowerCase().includes('duration') || reason.toLowerCase().includes('timeout') || reason.toLowerCase().includes('window closed')))) {
+    return (
+      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black bg-amber-100 text-amber-800 border border-amber-300">
+        <span>⏱️</span>
+        <span>System Auto-Submit</span>
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black bg-emerald-100 text-emerald-800 border border-emerald-300">
+      <span>✅</span>
+      <span>Manual Submission</span>
+    </span>
+  );
 }

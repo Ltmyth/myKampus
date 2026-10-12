@@ -1,3 +1,4 @@
+from django.utils import timezone
 from rest_framework import serializers
 from .models import (
     User, Faculty, Invitation, Course, CourseUnit, Application, Exam, Question, ExamAttempt, 
@@ -7,9 +8,31 @@ from .models import (
 )
 
 
+def resolve_user_faculty(user):
+    if not user:
+        return None
+    if getattr(user, 'faculty_id', None):
+        return user.faculty
+    if getattr(user, 'role', '') == 'student':
+        course = user.assigned_courses.select_related('faculty').filter(faculty__isnull=False).first()
+        if course and course.faculty:
+            return course.faculty
+        app = user.course_applications.filter(status='approved').select_related('course__faculty').first()
+        if app and app.course and app.course.faculty:
+            return app.course.faculty
+    elif getattr(user, 'role', '') == 'lecturer':
+        unit = user.assigned_course_units.select_related('course__faculty').filter(course__faculty__isnull=False).first()
+        if unit and unit.course and unit.course.faculty:
+            return unit.course.faculty
+        course = user.assigned_courses.select_related('faculty').filter(faculty__isnull=False).first()
+        if course and course.faculty:
+            return course.faculty
+    return None
+
+
 class UserSerializer(serializers.ModelSerializer):
-    faculty_name = serializers.CharField(source='faculty.name', read_only=True, allow_null=True)
-    faculty_code = serializers.CharField(source='faculty.code', read_only=True, allow_null=True)
+    faculty_name = serializers.SerializerMethodField()
+    faculty_code = serializers.SerializerMethodField()
     registration_number = serializers.ReadOnlyField()
     assigned_course_codes = serializers.SerializerMethodField()
     gender_display = serializers.CharField(source='get_gender_display', read_only=True)
@@ -26,6 +49,14 @@ class UserSerializer(serializers.ModelSerializer):
         model = User
         fields = ('id', 'username', 'email', 'first_name', 'last_name', 'role', 'phone', 'gender', 'gender_display', 'tuition_paid_percentage', 'effective_tuition_percentage', 'faculty', 'faculty_name', 'faculty_code', 'assigned_courses', 'assigned_course_codes', 'reg_number', 'registration_number', 'year_of_study', 'semester', 'academic_year', 'entry_year', 'intake', 'must_change_password', 'is_active', 'is_test_cleared', 'is_exam_cleared', 'is_temp_cleared', 'clearance_source', 'clearance_mode', 'temp_clearance_info', 'clearance_level')
         read_only_fields = ('role', 'registration_number', 'is_active')
+
+    def get_faculty_name(self, obj):
+        fac = resolve_user_faculty(obj)
+        return fac.name if fac else None
+
+    def get_faculty_code(self, obj):
+        fac = resolve_user_faculty(obj)
+        return fac.code if fac else None
 
     def validate_gender(self, value):
         if not value:
@@ -47,6 +78,10 @@ class UserSerializer(serializers.ModelSerializer):
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
+        if not data.get('faculty'):
+            fac = resolve_user_faculty(instance)
+            if fac:
+                data['faculty'] = fac.id
         if instance.role == 'lecturer':
             unit_course_ids = list(instance.assigned_course_units.filter(course__isnull=False).values_list('course_id', flat=True).distinct())
             existing = set(data.get('assigned_courses') or [])
@@ -106,8 +141,8 @@ class UserSerializer(serializers.ModelSerializer):
 
 class AdminUserSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, required=False, allow_blank=True, allow_null=True)
-    faculty_name = serializers.CharField(source='faculty.name', read_only=True, allow_null=True)
-    faculty_code = serializers.CharField(source='faculty.code', read_only=True, allow_null=True)
+    faculty_name = serializers.SerializerMethodField()
+    faculty_code = serializers.SerializerMethodField()
     gender_display = serializers.CharField(source='get_gender_display', read_only=True)
     registration_number = serializers.ReadOnlyField()
     assigned_course_codes = serializers.SerializerMethodField()
@@ -123,6 +158,14 @@ class AdminUserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = ('id', 'username', 'email', 'password', 'first_name', 'last_name', 'role', 'phone', 'gender', 'gender_display', 'tuition_paid_percentage', 'effective_tuition_percentage', 'faculty', 'faculty_name', 'faculty_code', 'assigned_courses', 'assigned_course_codes', 'reg_number', 'registration_number', 'year_of_study', 'semester', 'academic_year', 'entry_year', 'intake', 'must_change_password', 'is_active', 'is_test_cleared', 'is_exam_cleared', 'is_temp_cleared', 'clearance_source', 'clearance_mode', 'temp_clearance_info', 'clearance_level')
+
+    def get_faculty_name(self, obj):
+        fac = resolve_user_faculty(obj)
+        return fac.name if fac else None
+
+    def get_faculty_code(self, obj):
+        fac = resolve_user_faculty(obj)
+        return fac.code if fac else None
 
     def validate_phone(self, value):
         if value:
@@ -169,6 +212,10 @@ class AdminUserSerializer(serializers.ModelSerializer):
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
+        if not data.get('faculty'):
+            fac = resolve_user_faculty(instance)
+            if fac:
+                data['faculty'] = fac.id
         if instance.role == 'lecturer':
             unit_course_ids = list(instance.assigned_course_units.filter(course__isnull=False).values_list('course_id', flat=True).distinct())
             existing = set(data.get('assigned_courses') or [])
@@ -359,25 +406,79 @@ class QuestionStudentSerializer(serializers.ModelSerializer):
 class ExamSerializer(serializers.ModelSerializer):
     course_name = serializers.CharField(source='course.name', read_only=True)
     course_code = serializers.CharField(source='course.code', read_only=True)
-    faculty_id = serializers.IntegerField(source='course.faculty.id', read_only=True, allow_null=True)
-    faculty_name = serializers.CharField(source='course.faculty.name', read_only=True, allow_null=True)
-    faculty_code = serializers.CharField(source='course.faculty.code', read_only=True, allow_null=True)
+    faculty_id = serializers.SerializerMethodField()
+    faculty_name = serializers.SerializerMethodField()
+    faculty_code = serializers.SerializerMethodField()
     course_unit_name = serializers.CharField(source='course_unit.name', read_only=True, allow_null=True)
     course_unit_code = serializers.CharField(source='course_unit.code', read_only=True, allow_null=True)
     course_unit_year = serializers.IntegerField(source='course_unit.year_of_study', read_only=True, allow_null=True)
     course_unit_semester = serializers.IntegerField(source='course_unit.semester', read_only=True, allow_null=True)
     lecturer_name = serializers.CharField(source='lecturer.get_full_name', read_only=True)
     questions_count = serializers.IntegerField(source='questions.count', read_only=True)
+    additional_courses = serializers.PrimaryKeyRelatedField(many=True, queryset=Course.objects.all(), required=False)
+    additional_course_units = serializers.PrimaryKeyRelatedField(many=True, queryset=CourseUnit.objects.all(), required=False)
+    additional_course_details = serializers.SerializerMethodField()
+    additional_course_unit_details = serializers.SerializerMethodField()
+    status = serializers.SerializerMethodField()
 
     class Meta:
         model = Exam
         fields = '__all__'
         read_only_fields = ('lecturer', 'is_approved_by_dean', 'is_results_released')
 
+    def get_status(self, obj):
+        now = timezone.now()
+        if obj.due_date and now > obj.due_date:
+            return 'Ended'
+        if obj.scheduled_start and now < obj.scheduled_start:
+            return 'Scheduled'
+        return 'In Progress'
+
+    def get_faculty_id(self, obj):
+        if obj.course and obj.course.faculty_id:
+            return obj.course.faculty_id
+        if obj.course_unit and obj.course_unit.course and obj.course_unit.course.faculty_id:
+            return obj.course_unit.course.faculty_id
+        return None
+
+    def get_faculty_name(self, obj):
+        if obj.course and obj.course.faculty:
+            return obj.course.faculty.name
+        if obj.course_unit and obj.course_unit.course and obj.course_unit.course.faculty:
+            return obj.course_unit.course.faculty.name
+        return None
+
+    def get_faculty_code(self, obj):
+        if obj.course and obj.course.faculty:
+            return obj.course.faculty.code
+        if obj.course_unit and obj.course_unit.course and obj.course_unit.course.faculty:
+            return obj.course_unit.course.faculty.code
+        return None
+
+    def get_additional_course_details(self, obj):
+        return [{'id': c.id, 'name': c.name, 'code': c.code} for c in obj.additional_courses.all()]
+
+    def get_additional_course_unit_details(self, obj):
+        return [{'id': u.id, 'name': u.name, 'code': u.code, 'course_id': u.course_id, 'course_code': u.course.code if u.course else ''} for u in obj.additional_course_units.select_related('course').all()]
+
 class ExamAttemptSerializer(serializers.ModelSerializer):
-    student_name = serializers.CharField(source='student.get_full_name', read_only=True)
+    student_name = serializers.SerializerMethodField()
     student_username = serializers.CharField(source='student.username', read_only=True)
-    student_reg_number = serializers.CharField(source='student.reg_number', read_only=True, allow_null=True)
+    student_email = serializers.CharField(source='student.email', read_only=True)
+    student_reg_number = serializers.SerializerMethodField()
+    registration_number = serializers.SerializerMethodField()
+    student_faculty = serializers.SerializerMethodField()
+    student_faculty_code = serializers.SerializerMethodField()
+    student_phone = serializers.CharField(source='student.phone', read_only=True)
+    student_gender = serializers.CharField(source='student.gender', read_only=True)
+    academic_year = serializers.SerializerMethodField()
+    semester = serializers.SerializerMethodField()
+    year_of_study = serializers.SerializerMethodField()
+    year = serializers.SerializerMethodField()
+    lecturer_name = serializers.SerializerMethodField()
+    start_time = serializers.DateTimeField(source='started_at', read_only=True)
+    submission_time = serializers.DateTimeField(source='completed_at', read_only=True)
+    submission_type_display = serializers.SerializerMethodField()
     exam_title = serializers.CharField(source='exam.title', read_only=True)
     exam_course_code = serializers.CharField(source='exam.course.code', read_only=True)
     exam_course_name = serializers.CharField(source='exam.course.name', read_only=True)
@@ -392,9 +493,57 @@ class ExamAttemptSerializer(serializers.ModelSerializer):
         fields = '__all__'
         read_only_fields = ('student', 'started_at', 'completed_at', 'score')
 
+    def get_student_name(self, obj):
+        name = obj.student.get_full_name()
+        return name if name and name.strip() else obj.student.username
+
+    def get_student_reg_number(self, obj):
+        return obj.student.reg_number or obj.student.registration_number or ''
+
+    def get_registration_number(self, obj):
+        return obj.student.reg_number or obj.student.registration_number or ''
+
+    def get_student_faculty(self, obj):
+        if obj.student and obj.student.faculty:
+            return obj.student.faculty.name
+        if obj.exam and obj.exam.course and obj.exam.course.faculty:
+            return obj.exam.course.faculty.name
+        return 'Clarke International University'
+
+    def get_student_faculty_code(self, obj):
+        if obj.student and obj.student.faculty:
+            return obj.student.faculty.code
+        if obj.exam and obj.exam.course and obj.exam.course.faculty:
+            return obj.exam.course.faculty.code
+        return ''
+
+    def get_academic_year(self, obj):
+        return obj.student.academic_year or obj.exam.academic_year or '2026/2027'
+
+    def get_semester(self, obj):
+        return obj.student.semester or obj.exam.semester or 1
+
+    def get_year_of_study(self, obj):
+        return obj.student.year_of_study or obj.exam.year_of_study or 1
+
+    def get_year(self, obj):
+        return obj.student.year_of_study or obj.exam.year_of_study or 1
+
+    def get_submission_type_display(self, obj):
+        return obj.get_submission_type_display_safe()
+
+    def get_lecturer_name(self, obj):
+        if obj.exam and obj.exam.lecturer:
+            name = obj.exam.lecturer.get_full_name()
+            return name if name and name.strip() else obj.exam.lecturer.username
+        return 'N/A'
+
     def to_representation(self, instance):
         data = super().to_representation(instance)
         request = self.context.get('request')
+        if not data.get('submission_type'):
+            data['submission_type'] = instance.submission_type or ('security logs' if instance.auto_submitted_reason and any(k in instance.auto_submitted_reason.lower() for k in ['tab switch', 'security', 'lockdown']) else ('system' if instance.auto_submitted_reason else 'manual'))
+        data['submission_type_display'] = instance.get_submission_type_display_safe()
         # Mask score for student users if results are NOT released by the Academic Registrar yet!
         if request and request.user and request.user.role == 'student':
             if not instance.exam.is_results_released:
@@ -421,9 +570,9 @@ class TestQuestionStudentSerializer(serializers.ModelSerializer):
 class TestSerializer(serializers.ModelSerializer):
     course_name = serializers.CharField(source='course.name', read_only=True)
     course_code = serializers.CharField(source='course.code', read_only=True)
-    faculty_id = serializers.IntegerField(source='course.faculty.id', read_only=True, allow_null=True)
-    faculty_name = serializers.CharField(source='course.faculty.name', read_only=True, allow_null=True)
-    faculty_code = serializers.CharField(source='course.faculty.code', read_only=True, allow_null=True)
+    faculty_id = serializers.SerializerMethodField()
+    faculty_name = serializers.SerializerMethodField()
+    faculty_code = serializers.SerializerMethodField()
     course_unit_name = serializers.CharField(source='course_unit.name', read_only=True, allow_null=True)
     course_unit_code = serializers.CharField(source='course_unit.code', read_only=True, allow_null=True)
     course_unit_year = serializers.IntegerField(source='course_unit.year_of_study', read_only=True, allow_null=True)
@@ -431,16 +580,70 @@ class TestSerializer(serializers.ModelSerializer):
     lecturer_name = serializers.CharField(source='lecturer.get_full_name', read_only=True)
     questions_count = serializers.IntegerField(source='questions.count', read_only=True)
     attempts_count = serializers.IntegerField(source='attempts.count', read_only=True)
+    additional_courses = serializers.PrimaryKeyRelatedField(many=True, queryset=Course.objects.all(), required=False)
+    additional_course_units = serializers.PrimaryKeyRelatedField(many=True, queryset=CourseUnit.objects.all(), required=False)
+    additional_course_details = serializers.SerializerMethodField()
+    additional_course_unit_details = serializers.SerializerMethodField()
+    status = serializers.SerializerMethodField()
 
     class Meta:
         model = Test
         fields = '__all__'
         read_only_fields = ('lecturer',)
 
+    def get_status(self, obj):
+        now = timezone.now()
+        if obj.due_date and now > obj.due_date:
+            return 'Ended'
+        if obj.scheduled_start and now < obj.scheduled_start:
+            return 'Scheduled'
+        return 'In Progress'
+
+    def get_faculty_id(self, obj):
+        if obj.course and obj.course.faculty_id:
+            return obj.course.faculty_id
+        if obj.course_unit and obj.course_unit.course and obj.course_unit.course.faculty_id:
+            return obj.course_unit.course.faculty_id
+        return None
+
+    def get_faculty_name(self, obj):
+        if obj.course and obj.course.faculty:
+            return obj.course.faculty.name
+        if obj.course_unit and obj.course_unit.course and obj.course_unit.course.faculty:
+            return obj.course_unit.course.faculty.name
+        return None
+
+    def get_faculty_code(self, obj):
+        if obj.course and obj.course.faculty:
+            return obj.course.faculty.code
+        if obj.course_unit and obj.course_unit.course and obj.course_unit.course.faculty:
+            return obj.course_unit.course.faculty.code
+        return None
+
+    def get_additional_course_details(self, obj):
+        return [{'id': c.id, 'name': c.name, 'code': c.code} for c in obj.additional_courses.all()]
+
+    def get_additional_course_unit_details(self, obj):
+        return [{'id': u.id, 'name': u.name, 'code': u.code, 'course_id': u.course_id, 'course_code': u.course.code if u.course else ''} for u in obj.additional_course_units.select_related('course').all()]
+
 class TestAttemptSerializer(serializers.ModelSerializer):
-    student_name = serializers.CharField(source='student.get_full_name', read_only=True)
+    student_name = serializers.SerializerMethodField()
     student_username = serializers.CharField(source='student.username', read_only=True)
-    student_reg_number = serializers.CharField(source='student.reg_number', read_only=True, allow_null=True)
+    student_email = serializers.CharField(source='student.email', read_only=True)
+    student_reg_number = serializers.SerializerMethodField()
+    registration_number = serializers.SerializerMethodField()
+    student_faculty = serializers.SerializerMethodField()
+    student_faculty_code = serializers.SerializerMethodField()
+    student_phone = serializers.CharField(source='student.phone', read_only=True)
+    student_gender = serializers.CharField(source='student.gender', read_only=True)
+    academic_year = serializers.SerializerMethodField()
+    semester = serializers.SerializerMethodField()
+    year_of_study = serializers.SerializerMethodField()
+    year = serializers.SerializerMethodField()
+    lecturer_name = serializers.SerializerMethodField()
+    start_time = serializers.DateTimeField(source='started_at', read_only=True)
+    submission_time = serializers.DateTimeField(source='completed_at', read_only=True)
+    submission_type_display = serializers.SerializerMethodField()
     test_title = serializers.CharField(source='test.title', read_only=True)
     test_course_code = serializers.CharField(source='test.course.code', read_only=True)
     test_course_name = serializers.CharField(source='test.course.name', read_only=True)
@@ -457,9 +660,57 @@ class TestAttemptSerializer(serializers.ModelSerializer):
         fields = '__all__'
         read_only_fields = ('student', 'started_at', 'completed_at', 'score', 'passed')
 
+    def get_student_name(self, obj):
+        name = obj.student.get_full_name()
+        return name if name and name.strip() else obj.student.username
+
+    def get_student_reg_number(self, obj):
+        return obj.student.reg_number or obj.student.registration_number or ''
+
+    def get_registration_number(self, obj):
+        return obj.student.reg_number or obj.student.registration_number or ''
+
+    def get_student_faculty(self, obj):
+        if obj.student and obj.student.faculty:
+            return obj.student.faculty.name
+        if obj.test and obj.test.course and obj.test.course.faculty:
+            return obj.test.course.faculty.name
+        return 'Clarke International University'
+
+    def get_student_faculty_code(self, obj):
+        if obj.student and obj.student.faculty:
+            return obj.student.faculty.code
+        if obj.test and obj.test.course and obj.test.course.faculty:
+            return obj.test.course.faculty.code
+        return ''
+
+    def get_academic_year(self, obj):
+        return obj.student.academic_year or obj.test.academic_year or '2026/2027'
+
+    def get_semester(self, obj):
+        return obj.student.semester or obj.test.semester or 1
+
+    def get_year_of_study(self, obj):
+        return obj.student.year_of_study or obj.test.year_of_study or 1
+
+    def get_year(self, obj):
+        return obj.student.year_of_study or obj.test.year_of_study or 1
+
+    def get_submission_type_display(self, obj):
+        return obj.get_submission_type_display_safe()
+
+    def get_lecturer_name(self, obj):
+        if obj.test and obj.test.lecturer:
+            name = obj.test.lecturer.get_full_name()
+            return name if name and name.strip() else obj.test.lecturer.username
+        return 'N/A'
+
     def to_representation(self, instance):
         data = super().to_representation(instance)
         request = self.context.get('request')
+        if not data.get('submission_type'):
+            data['submission_type'] = instance.submission_type or ('security logs' if instance.auto_submitted_reason and any(k in instance.auto_submitted_reason.lower() for k in ['tab switch', 'security', 'lockdown']) else ('system' if instance.auto_submitted_reason else 'manual'))
+        data['submission_type_display'] = instance.get_submission_type_display_safe()
         if request and request.user and request.user.role == 'student':
             if not instance.test.is_results_released:
                 data['score'] = None

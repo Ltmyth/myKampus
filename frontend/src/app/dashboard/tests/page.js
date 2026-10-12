@@ -60,6 +60,8 @@ export default function TestPortalPage() {
   const [activeTab, setActiveTab] = useState('catalog'); // 'catalog', 'builder', 'analytics', 'history'
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCourseFilter, setSelectedCourseFilter] = useState('');
+  const [selectedCourseUnitFilter, setSelectedCourseUnitFilter] = useState('');
+  const [selectedTestStatusFilter, setSelectedTestStatusFilter] = useState('All');
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState('');
   const [selectedFacultyFilter, setSelectedFacultyFilter] = useState('All');
   const [selectedSemesterFilter, setSelectedSemesterFilter] = useState('All');
@@ -150,6 +152,7 @@ export default function TestPortalPage() {
   const [targetCourseIds, setTargetCourseIds] = useState([]);
   const [targetYears, setTargetYears] = useState([]);
   const [selectedCourseUnit, setSelectedCourseUnit] = useState('');
+  const [targetCourseUnitIds, setTargetCourseUnitIds] = useState([]);
   const [category, setCategory] = useState('quiz');
   const [duration, setDuration] = useState(30);
   const [passPercentage, setPassPercentage] = useState(50);
@@ -169,6 +172,41 @@ export default function TestPortalPage() {
   const [editAllowedAttempts, setEditAllowedAttempts] = useState(1);
   const [editScheduledStart, setEditScheduledStart] = useState('');
   const [editDueDate, setEditDueDate] = useState('');
+  const [editAdditionalCourseUnits, setEditAdditionalCourseUnits] = useState([]);
+
+  // Live Attempting Students Modal State
+  const [liveStudentsModal, setLiveStudentsModal] = useState({
+    isOpen: false,
+    test: null,
+    loading: false,
+    data: null,
+    statusFilter: 'All',
+    search: '',
+    groupBy: 'none'
+  });
+
+  const openLiveStudentsModal = async (testItem) => {
+    setLiveStudentsModal({
+      isOpen: true,
+      test: testItem,
+      loading: true,
+      data: null,
+      statusFilter: 'All',
+      search: '',
+      groupBy: 'none'
+    });
+    try {
+      const data = await api.get(`/tests/${testItem.id}/live_students/`);
+      setLiveStudentsModal(prev => ({ ...prev, loading: false, data }));
+    } catch (err) {
+      setErrorMsg(err.response?.data?.detail || err.message || 'Failed to load live students data.');
+      setLiveStudentsModal(prev => ({ ...prev, loading: false }));
+    }
+  };
+
+  const closeLiveStudentsModal = () => {
+    setLiveStudentsModal(prev => ({ ...prev, isOpen: false, test: null, data: null }));
+  };
 
   // Question Builder State
   const [selectedTest, setSelectedTest] = useState(null);
@@ -353,6 +391,20 @@ export default function TestPortalPage() {
   const handleSaveEditTest = async (e) => {
     e.preventDefault();
     if (isExecutiveReadOnly || !editingTestModal) return;
+    if (editScheduledStart && new Date(editScheduledStart).getTime() < Date.now() - 60000) {
+      setErrorMsg('Validation Error: Test start date & time cannot be in the past. Ugandan time (EAT) is strictly enforced.');
+      return;
+    }
+    if (editDueDate) {
+      if (new Date(editDueDate).getTime() < Date.now() - 60000) {
+        setErrorMsg('Validation Error: Test stop date & time cannot be in the past. Ugandan time (EAT) is strictly enforced.');
+        return;
+      }
+      if (editScheduledStart && new Date(editDueDate).getTime() <= new Date(editScheduledStart).getTime()) {
+        setErrorMsg('Validation Error: Stop date & time must be strictly after the start date & time.');
+        return;
+      }
+    }
     setErrorMsg('');
     setSuccessMsg('');
     setSubmitting(true);
@@ -364,7 +416,8 @@ export default function TestPortalPage() {
         pass_percentage: parseFloat(editPassPercentage),
         allowed_attempts: parseInt(editAllowedAttempts),
         scheduled_start: getUgandanISOString(editScheduledStart),
-        due_date: getUgandanISOString(editDueDate)
+        due_date: getUgandanISOString(editDueDate),
+        additional_course_units: editAdditionalCourseUnits.map(id => parseInt(id))
       };
 
       await api.patch(`/tests/${editingTestModal.id}/`, payload);
@@ -390,6 +443,20 @@ export default function TestPortalPage() {
       setErrorMsg('Only System Administrators can set tests for All Course Units & All Years (Year 0). Please select an assigned course unit.');
       return;
     }
+    if (scheduledStart && new Date(scheduledStart).getTime() < Date.now() - 60000) {
+      setErrorMsg('Validation Error: Test start date & time cannot be in the past. Ugandan time (EAT) is strictly enforced.');
+      return;
+    }
+    if (dueDate) {
+      if (new Date(dueDate).getTime() < Date.now() - 60000) {
+        setErrorMsg('Validation Error: Test stop date & time cannot be in the past. Ugandan time (EAT) is strictly enforced.');
+        return;
+      }
+      if (scheduledStart && new Date(dueDate).getTime() <= new Date(scheduledStart).getTime()) {
+        setErrorMsg('Validation Error: Stop date & time must be strictly after the start date & time.');
+        return;
+      }
+    }
     setErrorMsg('');
     setSuccessMsg('');
     setSubmitting(true);
@@ -400,6 +467,7 @@ export default function TestPortalPage() {
         course: selectedCourse ? parseInt(selectedCourse) : (finalCourseIds[0] || null),
         target_course_ids: finalCourseIds.map(id => parseInt(id)),
         course_unit: selectedCourseUnit ? parseInt(selectedCourseUnit) : null,
+        additional_course_units: targetCourseUnitIds.map(id => parseInt(id)),
         category,
         duration_minutes: parseInt(duration),
         pass_percentage: parseFloat(passPercentage),
@@ -421,6 +489,7 @@ export default function TestPortalPage() {
       setTargetCourseIds([]);
       setTargetYears([]);
       setSelectedCourseUnit('');
+      setTargetCourseUnitIds([]);
       setDescription('');
       setScheduledStart('');
       setDueDate('');
@@ -620,6 +689,7 @@ ANSWER: C`;
 
   const handleSelectTestForQuestions = async (testItem) => {
     setSelectedTest(testItem);
+    setActiveTab('builder');
     setErrorMsg('');
     setSuccessMsg('');
     try {
@@ -628,6 +698,71 @@ ANSWER: C`;
     } catch (err) {
       setErrorMsg('Failed to fetch questions for selected test.');
     }
+  };
+
+  const handleStartNewTestBuilder = () => {
+    setSelectedTest(null);
+    setQuestions([]);
+    setTitle('');
+    setSelectedCourse('');
+    setTargetCourseIds([]);
+    setTargetYears([]);
+    setSelectedCourseUnit('');
+    setTargetCourseUnitIds([]);
+    setDescription('');
+    setScheduledStart('');
+    setDueDate('');
+    setTestSemester('0');
+    setTestAcademicYear('2026/2027');
+    setActiveTab('builder');
+  };
+
+  const hasActiveCatalogFilters = Boolean(
+    searchQuery.trim() ||
+    (selectedFacultyFilter !== 'All') ||
+    (selectedTestStatusFilter !== 'All') ||
+    selectedCourseFilter ||
+    selectedCourseUnitFilter ||
+    selectedCategoryFilter ||
+    (selectedSemesterFilter !== 'All') ||
+    (selectedAcademicYearFilter !== 'All')
+  );
+
+  const handleResetCatalogFilters = () => {
+    setSearchQuery('');
+    setSelectedFacultyFilter('All');
+    setSelectedTestStatusFilter('All');
+    setSelectedCourseFilter('');
+    setSelectedCourseUnitFilter('');
+    setSelectedCategoryFilter('');
+    setSelectedSemesterFilter('All');
+    setSelectedAcademicYearFilter('All');
+  };
+
+  const renderSubmissionTypeBadge = (type, reason) => {
+    const t = (type || '').toLowerCase();
+    if (t === 'security logs' || (reason && (reason.toLowerCase().includes('security') || reason.toLowerCase().includes('tab switch') || reason.toLowerCase().includes('lockdown')))) {
+      return (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-red-100 text-red-800 border border-red-300">
+          <span>🛡️</span>
+          <span>Security Logs</span>
+        </span>
+      );
+    }
+    if (t === 'system' || (reason && (reason.toLowerCase().includes('duration') || reason.toLowerCase().includes('timeout') || reason.toLowerCase().includes('window closed')))) {
+      return (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-100 text-amber-800 border border-amber-300">
+          <span>⏱️</span>
+          <span>System Auto</span>
+        </span>
+      );
+    }
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-300">
+        <span>✅</span>
+        <span>Manual</span>
+      </span>
+    );
   };
 
   const handleAddQuestion = async (e) => {
@@ -734,14 +869,35 @@ ANSWER: C`;
       const assignedIds = user?.assigned_courses || [];
       const assignedCodes = user?.assigned_course_codes || [];
       if (assignedIds.length > 0 || assignedCodes.length > 0) {
-        if (!assignedIds.includes(t.course) && !assignedCodes.includes(t.course_code)) return false;
+        const matchesPrimaryOrExtra = assignedIds.includes(t.course) ||
+          assignedCodes.includes(t.course_code) ||
+          (t.additional_courses && t.additional_courses.some(id => assignedIds.includes(id)));
+        if (!matchesPrimaryOrExtra) return false;
       }
     }
 
     const matchesSearch = t.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
                           t.course_code.toLowerCase().includes(searchQuery.toLowerCase()) ||
                           (t.lecturer_name && t.lecturer_name.toLowerCase().includes(searchQuery.toLowerCase()));
-    const matchesCourse = selectedCourseFilter ? t.course === parseInt(selectedCourseFilter) : true;
+    
+    const matchesCourse = selectedCourseFilter ? (
+      t.course === parseInt(selectedCourseFilter) ||
+      (t.additional_courses && t.additional_courses.includes(parseInt(selectedCourseFilter)))
+    ) : true;
+
+    const matchesCourseUnit = selectedCourseUnitFilter ? (
+      t.course_unit === parseInt(selectedCourseUnitFilter) ||
+      (t.additional_course_units && t.additional_course_units.includes(parseInt(selectedCourseUnitFilter)))
+    ) : true;
+
+    const matchesStatus = selectedTestStatusFilter === 'All' ? true : (() => {
+      const s = t.status || (
+        t.due_date && new Date(t.due_date).getTime() < Date.now() ? 'Ended' :
+        t.scheduled_start && new Date(t.scheduled_start).getTime() > Date.now() ? 'Scheduled' : 'In Progress'
+      );
+      return s.toLowerCase() === selectedTestStatusFilter.toLowerCase();
+    })();
+
     const matchesCategory = selectedCategoryFilter ? t.category === selectedCategoryFilter : true;
     const matchesFaculty = selectedFacultyFilter === 'All' ? true : fCode === selectedFacultyFilter;
     const matchesSemester = selectedSemesterFilter === 'All' ? true : (
@@ -752,7 +908,7 @@ ANSWER: C`;
     const matchesAcademicYear = selectedAcademicYearFilter === 'All' ? true : (
       !t.academic_year || t.academic_year === 'All' || t.academic_year.toLowerCase() === selectedAcademicYearFilter.toLowerCase()
     );
-    return matchesSearch && matchesCourse && matchesCategory && matchesFaculty && matchesSemester && matchesAcademicYear;
+    return matchesSearch && matchesCourse && matchesCourseUnit && matchesStatus && matchesCategory && matchesFaculty && matchesSemester && matchesAcademicYear;
   });
 
   // Calculate Metrics
@@ -845,127 +1001,275 @@ ANSWER: C`;
         </div>
       )}
 
-      {/* Toolbar: Search, Faculty Filter, Course Filter, Category Filter */}
-      <div className="flex flex-col sm:flex-row items-center justify-between gap-3 green-card p-4 rounded-2xl">
-        
-        <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
-          {/* Search bar */}
-          <input
-            type="text"
-            placeholder="Search tests or courses..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs w-full sm:w-44 focus:outline-none focus:ring-1 focus:ring-brand-light"
-          />
-
-          {/* Staff Faculty Filter */}
-          {isStaff && (
-            <div className="flex items-center space-x-1">
-              <select
-                value={['lecturer', 'student', 'faculty_admin', 'dean'].includes(user?.role) && (user?.faculty_code || user?.faculty) ? (user?.faculty_code || (typeof user?.faculty === 'object' ? user?.faculty?.code : String(user?.faculty))) : selectedFacultyFilter}
-                disabled={['lecturer', 'student', 'faculty_admin', 'dean'].includes(user?.role) && Boolean(user?.faculty_code || user?.faculty)}
-                onChange={(e) => setSelectedFacultyFilter(e.target.value)}
-                className="px-3 py-1.5 bg-slate-50 border border-slate-200 text-slate-800 text-xs font-bold rounded-lg focus:outline-none focus:ring-1 focus:ring-brand-light disabled:opacity-85"
-              >
-                <option value="All">All Faculties ({activeFacultiesList.length})</option>
-                {activeFacultiesList.map((f) => (
-                  <option key={f.id} value={f.code}>[{f.code}] {f.name}</option>
-                ))}
-              </select>
-              {['lecturer', 'student', 'faculty_admin', 'dean'].includes(user?.role) && (user?.faculty_code || user?.faculty) && (
-                <span className="text-[10px] text-amber-700 font-bold">🔒 Locked to Faculty</span>
-              )}
-            </div>
-          )}
-
-          {/* Course filter */}
-          <select
-            value={selectedCourseFilter}
-            onChange={(e) => setSelectedCourseFilter(e.target.value)}
-            className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs focus:outline-none focus:ring-1 focus:ring-brand-light"
-          >
-            <option value="">All Courses ({assignedCourses.length})</option>
-            {assignedCourses.map((c) => (
-              <option key={c.id} value={c.id}>[{c.code}] {c.name}</option>
-            ))}
-          </select>
-
-          {/* Category filter */}
-          <select
-            value={selectedCategoryFilter}
-            onChange={(e) => setSelectedCategoryFilter(e.target.value)}
-            className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs focus:outline-none focus:ring-1 focus:ring-brand-light"
-          >
-            <option value="">All Categories</option>
-            <option value="quiz">Quiz</option>
-            <option value="practice">Practice Test</option>
-            <option value="unit_test">Unit Test</option>
-            <option value="midterm">Midterm Test</option>
-            <option value="assignment">Assignment Test</option>
-          </select>
-
-          {/* Semester filter */}
-          <select
-            value={selectedSemesterFilter}
-            onChange={(e) => setSelectedSemesterFilter(e.target.value)}
-            className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-700 focus:outline-none focus:ring-1 focus:ring-brand-light"
-          >
-            <option value="All">All Semesters</option>
-            <option value="1">Semester 1</option>
-            <option value="2">Semester 2</option>
-          </select>
-
-          {/* Academic Year filter */}
-          <select
-            value={selectedAcademicYearFilter}
-            onChange={(e) => setSelectedAcademicYearFilter(e.target.value)}
-            className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-700 focus:outline-none focus:ring-1 focus:ring-brand-light"
-          >
-            <option value="All">All Years</option>
-            <option value="2026/2027">2026/2027</option>
-            <option value="2025/2026">2025/2026</option>
-            <option value="2024/2025">2024/2025</option>
-          </select>
-        </div>
-
-        {/* Tab Buttons */}
-        <div className="flex items-center space-x-1 bg-emerald-50/60 border border-emerald-200/60 p-1 rounded-xl w-full sm:w-auto justify-center">
+      {/* Primary Navigation & Action Bar */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200 pb-3">
+        {/* Left: Section Tabs */}
+        <div className="flex items-center space-x-2 sm:space-x-4 overflow-x-auto pb-1 sm:pb-0">
           <button
             onClick={() => setActiveTab('catalog')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${activeTab === 'catalog' ? 'bg-white text-brand-dark shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+            className={`pb-3 text-xs font-extrabold border-b-2 transition-all flex items-center space-x-2 shrink-0 cursor-pointer ${
+              activeTab === 'catalog'
+                ? 'border-brand-light text-brand-dark'
+                : 'border-transparent text-slate-400 hover:text-slate-600'
+            }`}
           >
-            Test Catalog
+            <span>📋 Test Catalog</span>
+            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+              activeTab === 'catalog' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-500'
+            }`}>
+              {filteredTests.length}
+            </span>
           </button>
-          
+
           {canBuildTest && (
             <button
               onClick={() => setActiveTab('builder')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${activeTab === 'builder' ? 'bg-white text-brand-dark shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+              className={`pb-3 text-xs font-extrabold border-b-2 transition-all flex items-center space-x-2 shrink-0 cursor-pointer ${
+                activeTab === 'builder'
+                  ? 'border-brand-light text-brand-dark'
+                  : 'border-transparent text-slate-400 hover:text-slate-600'
+              }`}
             >
-              Test Builder
+              <span>🛠️ Test Builder & Studio</span>
+              {selectedTest ? (
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-100 text-purple-800 border border-purple-200 truncate max-w-[140px]">
+                  {selectedTest.course_code || selectedTest.code || selectedTest.title}
+                </span>
+              ) : (
+                <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                  New
+                </span>
+              )}
             </button>
           )}
 
           {isStaff && (
             <button
               onClick={() => setActiveTab('analytics')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${activeTab === 'analytics' ? 'bg-white text-brand-dark shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+              className={`pb-3 text-xs font-extrabold border-b-2 transition-all flex items-center space-x-2 shrink-0 cursor-pointer ${
+                activeTab === 'analytics'
+                  ? 'border-brand-light text-brand-dark'
+                  : 'border-transparent text-slate-400 hover:text-slate-600'
+              }`}
             >
-              Submissions
+              <span>📊 Submissions & Results</span>
+              <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                activeTab === 'analytics' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-500'
+              }`}>
+                {totalSubmissions}
+              </span>
             </button>
           )}
 
           {!isStaff && (
             <button
               onClick={() => setActiveTab('history')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${activeTab === 'history' ? 'bg-white text-brand-dark shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+              className={`pb-3 text-xs font-extrabold border-b-2 transition-all flex items-center space-x-2 shrink-0 cursor-pointer ${
+                activeTab === 'history'
+                  ? 'border-brand-light text-brand-dark'
+                  : 'border-transparent text-slate-400 hover:text-slate-600'
+              }`}
             >
-              My Performance
+              <span>📈 My Performance</span>
             </button>
           )}
         </div>
 
+        {/* Right: Quick Action Buttons */}
+        <div className="flex items-center space-x-2 shrink-0">
+          {canBuildTest && activeTab === 'catalog' && (
+            <>
+              <button
+                type="button"
+                onClick={handleStartNewTestBuilder}
+                className="px-3.5 py-2 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-xl shadow-xs transition-all flex items-center space-x-1.5 cursor-pointer"
+                title="Create a new test paper from scratch in Test Builder"
+              >
+                <span>➕ Create New Test</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setTxtMode('new');
+                  setTxtTitle('');
+                  setTxtCourseUnit(selectedCourseUnit || (assignedCourseUnits[0]?.id || ''));
+                  setTxtScheduledStart(getUgandanNowDatetimeLocal());
+                  const d = new Date();
+                  d.setDate(d.getDate() + 2);
+                  setTxtDueDate(toUgandanDatetimeLocal(d.toISOString()));
+                  setShowTxtModal(true);
+                }}
+                className="px-3 py-2 bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 text-xs font-bold rounded-xl transition-all flex items-center space-x-1 cursor-pointer"
+                title="Upload an Aiken format .txt file to build a test automatically"
+              >
+                <span>📄 Upload .TXT</span>
+              </button>
+            </>
+          )}
+
+          {activeTab === 'builder' && (
+            <button
+              type="button"
+              onClick={() => setActiveTab('catalog')}
+              className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl border border-slate-200 transition-all flex items-center space-x-1.5 cursor-pointer"
+              title="Return to the Test Catalog"
+            >
+              <span>← View Test Catalog</span>
+            </button>
+          )}
+        </div>
       </div>
+
+      {/* Catalog Filter Toolbar (Organized & Rendered ONLY for Catalog Tab) */}
+      {activeTab === 'catalog' && (
+        <div className="green-card p-4 rounded-2xl space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-emerald-100 pb-2.5">
+            <div className="flex items-center space-x-2">
+              <span className="text-xs font-extrabold text-slate-800 uppercase tracking-wide">
+                Filter & Search Catalog
+              </span>
+              <span className="text-[11px] text-slate-500 font-medium">
+                ({filteredTests.length} tests matching)
+              </span>
+            </div>
+
+            {hasActiveCatalogFilters && (
+              <button
+                type="button"
+                onClick={handleResetCatalogFilters}
+                className="text-xs font-bold text-red-600 hover:text-red-700 bg-red-50 border border-red-200 px-2.5 py-1 rounded-lg transition-all flex items-center space-x-1 cursor-pointer"
+              >
+                <span>✕ Reset All Filters</span>
+              </button>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2.5">
+            {/* Search bar */}
+            <div className="flex items-center space-x-1.5">
+              <input
+                type="text"
+                placeholder="Search tests, courses, lecturers..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs w-full sm:w-52 focus:outline-none focus:ring-1 focus:ring-brand-light"
+              />
+            </div>
+
+            {/* Staff Faculty Filter */}
+            {isStaff && (
+              <div className="flex items-center space-x-1">
+                <span className="text-[11px] font-extrabold text-slate-500 uppercase">Faculty:</span>
+                <select
+                  value={['lecturer', 'student', 'faculty_admin', 'dean'].includes(user?.role) && (user?.faculty_code || user?.faculty) ? (user?.faculty_code || (typeof user?.faculty === 'object' ? user?.faculty?.code : String(user?.faculty))) : selectedFacultyFilter}
+                  disabled={['lecturer', 'student', 'faculty_admin', 'dean'].includes(user?.role) && Boolean(user?.faculty_code || user?.faculty)}
+                  onChange={(e) => setSelectedFacultyFilter(e.target.value)}
+                  className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 text-slate-800 text-xs font-bold rounded-lg focus:outline-none focus:ring-1 focus:ring-brand-light disabled:opacity-85"
+                >
+                  <option value="All">All Faculties ({activeFacultiesList.length})</option>
+                  {activeFacultiesList.map((f) => (
+                    <option key={f.id} value={f.code}>[{f.code}] {f.name}</option>
+                  ))}
+                </select>
+                {['lecturer', 'student', 'faculty_admin', 'dean'].includes(user?.role) && (user?.faculty_code || user?.faculty) && (
+                  <span className="text-[10px] text-amber-700 font-bold">🔒 Locked</span>
+                )}
+              </div>
+            )}
+
+            {/* Test Status Filter */}
+            <div className="flex items-center space-x-1">
+              <span className="text-[11px] font-extrabold text-slate-500 uppercase">Status:</span>
+              <select
+                value={selectedTestStatusFilter}
+                onChange={(e) => setSelectedTestStatusFilter(e.target.value)}
+                className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-none focus:ring-1 focus:ring-brand-light"
+              >
+                <option value="All">All Statuses</option>
+                <option value="In Progress">🟢 In Progress</option>
+                <option value="Scheduled">⏳ Scheduled</option>
+                <option value="Ended">🔴 Ended</option>
+              </select>
+            </div>
+
+            {/* Course filter */}
+            <div className="flex items-center space-x-1">
+              <span className="text-[11px] font-extrabold text-slate-500 uppercase">Course:</span>
+              <select
+                value={selectedCourseFilter}
+                onChange={(e) => setSelectedCourseFilter(e.target.value)}
+                className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-brand-light max-w-[180px] truncate"
+              >
+                <option value="">All Courses ({assignedCourses.length})</option>
+                {assignedCourses.map((c) => (
+                  <option key={c.id} value={c.id}>[{c.code}] {c.name}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Course Unit filter */}
+            <div className="flex items-center space-x-1">
+              <span className="text-[11px] font-extrabold text-slate-500 uppercase">Unit:</span>
+              <select
+                value={selectedCourseUnitFilter}
+                onChange={(e) => setSelectedCourseUnitFilter(e.target.value)}
+                className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-brand-light max-w-[180px] truncate"
+              >
+                <option value="">All Units ({assignedCourseUnits.length})</option>
+                {assignedCourseUnits.map((u) => (
+                  <option key={u.id} value={u.id}>[{u.code}] {u.name}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Category filter */}
+            <div className="flex items-center space-x-1">
+              <span className="text-[11px] font-extrabold text-slate-500 uppercase">Type:</span>
+              <select
+                value={selectedCategoryFilter}
+                onChange={(e) => setSelectedCategoryFilter(e.target.value)}
+                className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-brand-light"
+              >
+                <option value="">All Categories</option>
+                <option value="quiz">Quiz</option>
+                <option value="practice">Practice Test</option>
+                <option value="unit_test">Unit Test</option>
+                <option value="midterm">Midterm Test</option>
+                <option value="assignment">Assignment Test</option>
+              </select>
+            </div>
+
+            {/* Semester filter */}
+            <div className="flex items-center space-x-1">
+              <span className="text-[11px] font-extrabold text-slate-500 uppercase">Sem:</span>
+              <select
+                value={selectedSemesterFilter}
+                onChange={(e) => setSelectedSemesterFilter(e.target.value)}
+                className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-700 focus:outline-none focus:ring-1 focus:ring-brand-light"
+              >
+                <option value="All">All Sems</option>
+                <option value="1">Sem 1</option>
+                <option value="2">Sem 2</option>
+              </select>
+            </div>
+
+            {/* Academic Year filter */}
+            <div className="flex items-center space-x-1">
+              <span className="text-[11px] font-extrabold text-slate-500 uppercase">Year:</span>
+              <select
+                value={selectedAcademicYearFilter}
+                onChange={(e) => setSelectedAcademicYearFilter(e.target.value)}
+                className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-700 focus:outline-none focus:ring-1 focus:ring-brand-light"
+              >
+                <option value="All">All Years</option>
+                <option value="2026/2027">2026/2027</option>
+                <option value="2025/2026">2025/2026</option>
+                <option value="2024/2025">2024/2025</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* TAB 1: CATALOG (Organized by Faculty for Staff) */}
       {activeTab === 'catalog' && (
@@ -1109,13 +1413,13 @@ ANSWER: C`;
                                 </span>
                               </td>
                               <td className="px-3 py-3 text-[11px]">
-                                <div className="space-y-0.5">
-                                  <span className="block font-medium text-slate-800">
-                                    📅 {formatUgandanTime(testItem.scheduled_start)}
+                                <div className="space-y-1">
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded font-mono font-bold text-[10px] bg-emerald-50 text-emerald-800 border border-emerald-300">
+                                    🟢 Start: {formatUgandanTime(testItem.scheduled_start)}
                                   </span>
                                   {testItem.due_date && (
-                                    <span className="block text-amber-700 font-medium text-[10px]">
-                                      ⏳ Due: {formatUgandanTime(testItem.due_date)}
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded font-mono font-bold text-[10px] bg-red-50 text-red-800 border border-red-300">
+                                      🔴 Stop: {formatUgandanTime(testItem.due_date)}
                                     </span>
                                   )}
                                 </div>
@@ -1331,8 +1635,9 @@ ANSWER: C`;
                 {canBuildTest && (
                   <button
                     type="button"
-                    onClick={() => setActiveTab('builder')}
+                    onClick={handleStartNewTestBuilder}
                     className="px-3.5 py-1.5 bg-brand-light hover:bg-brand-medium text-white rounded-xl text-xs font-bold shadow-xs transition-all cursor-pointer"
+                    title="Launch Test Builder with a blank test form"
                   >
                     ➕ Create New Test
                   </button>
@@ -1434,13 +1739,13 @@ ANSWER: C`;
                                 </span>
                               </td>
                               <td className="px-3 py-3 text-[11px]">
-                                <div className="space-y-0.5">
-                                  <span className="block font-medium text-slate-800">
-                                    📅 {formatUgandanTime(testItem.scheduled_start)}
+                                <div className="space-y-1">
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded font-mono font-bold text-[10px] bg-emerald-50 text-emerald-800 border border-emerald-300">
+                                    🟢 Start: {formatUgandanTime(testItem.scheduled_start)}
                                   </span>
                                   {testItem.due_date && (
-                                    <span className="block text-amber-700 font-medium text-[10px]">
-                                      ⏳ Due: {formatUgandanTime(testItem.due_date)}
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded font-mono font-bold text-[10px] bg-red-50 text-red-800 border border-red-300">
+                                      🔴 Stop: {formatUgandanTime(testItem.due_date)}
                                     </span>
                                   )}
                                 </div>
@@ -1457,24 +1762,38 @@ ANSWER: C`;
                                 <button
                                   type="button"
                                   onClick={() => handleSelectTestForQuestions(testItem)}
-                                  className="px-2 py-1 bg-white hover:bg-emerald-50 text-slate-800 border border-emerald-200 font-bold rounded-lg text-[10px] transition-all inline-flex items-center space-x-1 cursor-pointer"
-                                  title="Manage test questions"
+                                  className="px-2.5 py-1 bg-white hover:bg-emerald-50 text-brand-dark border border-emerald-300 font-black rounded-lg text-[10px] transition-all inline-flex items-center space-x-1 cursor-pointer shadow-xs"
+                                  title="Open Question Studio in Test Builder for this test"
                                 >
                                   <span>❓ {testItem.questions_count} Qs</span>
                                 </button>
                               </td>
                               <td className="px-3 py-3 text-center">
                                 <div className="space-y-1">
-                                  <span className={`px-2 py-0.5 rounded text-[10px] font-black border block ${testItem.is_published ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}>
-                                    {testItem.is_published ? 'PUBLISHED' : 'DRAFT'}
+                                  <span className={`px-2 py-0.5 rounded text-[10px] font-black border block ${
+                                    (testItem.status === 'In Progress' || (!testItem.status && (!testItem.due_date || new Date(testItem.due_date) > new Date())))
+                                      ? 'bg-emerald-100 text-emerald-900 border-emerald-300'
+                                      : testItem.status === 'Scheduled'
+                                      ? 'bg-amber-100 text-amber-900 border-amber-300'
+                                      : 'bg-red-100 text-red-900 border-red-300'
+                                  }`}>
+                                    {testItem.status || 'Active'}
                                   </span>
-                                  <span className={`px-2 py-0.5 rounded text-[10px] font-bold border block ${testItem.is_results_released ? 'bg-emerald-50 text-emerald-800 border-emerald-200' : 'bg-slate-100 text-slate-600 border-slate-200'}`}>
-                                    {testItem.is_results_released ? 'RELEASED' : 'WITHHELD'}
+                                  <span className={`px-2 py-0.5 rounded text-[10px] font-bold border block ${testItem.is_published ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}>
+                                    {testItem.is_published ? 'PUBLISHED' : 'DRAFT'}
                                   </span>
                                 </div>
                               </td>
                               <td className="px-4 py-3 text-center">
                                 <div className="flex items-center justify-center space-x-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => openLiveStudentsModal(testItem)}
+                                    className="px-2 py-1 bg-cyan-50 hover:bg-cyan-100 text-cyan-800 border border-cyan-300 text-[10px] font-bold rounded-lg transition-all cursor-pointer flex items-center space-x-1"
+                                    title="View attempting students live status (Started, Pending, Submitted)"
+                                  >
+                                    <span>👥 Candidates</span>
+                                  </button>
                                   <button
                                     type="button"
                                     onClick={() => toggleExpandTest(testItem.id)}
@@ -1487,6 +1806,16 @@ ANSWER: C`;
                                   >
                                     <span>{isExpanded ? '▲ Hide' : '🔍 Preview'}</span>
                                   </button>
+                                  {!isExecutiveReadOnly && canManageThisTest && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleSelectTestForQuestions(testItem)}
+                                      className="px-2 py-1 bg-brand-light hover:bg-brand-medium text-white border border-brand-light text-[10px] font-bold rounded-lg transition-all cursor-pointer flex items-center space-x-1 shadow-xs"
+                                      title="Open Test Builder & Question Studio for this test"
+                                    >
+                                      <span>🛠️ Studio</span>
+                                    </button>
+                                  )}
                                   <button
                                     type="button"
                                     onClick={() => handlePreviewScorecard(testItem)}
@@ -1610,6 +1939,14 @@ ANSWER: C`;
                                         </button>
                                         <button
                                           type="button"
+                                          onClick={() => handleSelectTestForQuestions(testItem)}
+                                          className="px-3 py-1.5 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-xl transition-all shadow-xs cursor-pointer flex items-center space-x-1"
+                                          title="Open Question Studio in Test Builder"
+                                        >
+                                          <span>🛠️ Question Studio ({testItem.questions_count || 0})</span>
+                                        </button>
+                                        <button
+                                          type="button"
                                           onClick={() => handleOpenEditTestModal(testItem)}
                                           className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-bold rounded-xl transition-all border border-emerald-200 cursor-pointer"
                                         >
@@ -1642,7 +1979,86 @@ ANSWER: C`;
 
       {/* TAB 2: TEST BUILDER & QUESTION EDITOR (Staff) */}
       {canBuildTest && activeTab === 'builder' && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <div className="space-y-6 animate-fade-in">
+          {/* Test Builder & Studio Header Bar */}
+          <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="flex items-center space-x-3">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-brand-dark to-brand-light flex items-center justify-center text-white text-lg shadow-sm shrink-0">
+                🛠️
+              </div>
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="text-base font-black text-slate-900 tracking-tight">
+                    Test Paper Builder &amp; Question Studio
+                  </h2>
+                  {selectedTest ? (
+                    <span className="px-2.5 py-0.5 rounded-full text-[11px] font-black bg-emerald-100 text-emerald-800 border border-emerald-300">
+                      Managing: [{selectedTest.course_code}] {selectedTest.title}
+                    </span>
+                  ) : (
+                    <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                      Drafting New Paper
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  {selectedTest
+                    ? `Authoring ${questions.length} questions for ${selectedTest.title} (${selectedTest.duration_minutes}m duration)`
+                    : 'Fill out the form on the left to create a new Continuous Assessment Test, or choose an existing test to edit questions.'}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              {/* Test Switcher Dropdown */}
+              <div className="flex items-center space-x-1.5 bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 shadow-xs">
+                <label htmlFor="studio-test-switcher" className="text-[11px] font-black text-slate-600 uppercase tracking-wider">
+                  Test:
+                </label>
+                <select
+                  id="studio-test-switcher"
+                  value={selectedTest?.id || ''}
+                  onChange={(e) => {
+                    const tId = e.target.value;
+                    if (!tId) {
+                      handleStartNewTestBuilder();
+                    } else {
+                      const found = tests.find(t => String(t.id) === String(tId));
+                      if (found) handleSelectTestForQuestions(found);
+                    }
+                  }}
+                  className="bg-transparent text-xs font-bold text-slate-800 focus:outline-none cursor-pointer max-w-[190px] truncate"
+                >
+                  <option value="">➕ [Draft New Test Paper]</option>
+                  {tests.map(t => (
+                    <option key={t.id} value={t.id}>
+                      [{t.course_code}] {t.title} ({t.questions_count || 0} Qs)
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleStartNewTestBuilder}
+                className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl border border-slate-200 transition-all cursor-pointer flex items-center space-x-1"
+                title="Reset form to draft a new test paper from scratch"
+              >
+                <span>➕ Blank Form</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveTab('catalog')}
+                className="px-3 py-1.5 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-xl shadow-xs transition-all cursor-pointer flex items-center space-x-1"
+                title="Return to the Test Catalog"
+              >
+                <span>📋 Test Catalog</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           
           {/* Create Test Form */}
           <div className="green-card rounded-2xl p-6 space-y-4">
@@ -1681,6 +2097,34 @@ ANSWER: C`;
                   ))}
                 </select>
               </div>
+
+              {assignedCourseUnits.length > 1 && (
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
+                    Additional Assigned Units (Cross-Unit Setting)
+                  </label>
+                  <div className="max-h-28 overflow-y-auto border border-slate-200 rounded-lg p-2 bg-slate-50 space-y-1 text-xs">
+                    {assignedCourseUnits.filter(u => String(u.id) !== String(selectedCourseUnit)).map((u) => (
+                      <label key={u.id} className="flex items-center space-x-2 font-medium text-slate-800 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={targetCourseUnitIds.includes(u.id) || targetCourseUnitIds.includes(String(u.id))}
+                          onChange={(e) => {
+                            const uId = u.id;
+                            if (e.target.checked) {
+                              setTargetCourseUnitIds(prev => [...prev.filter(id => id !== uId), uId]);
+                            } else {
+                              setTargetCourseUnitIds(prev => prev.filter(id => id !== uId));
+                            }
+                          }}
+                          className="rounded text-brand-light focus:ring-brand-light"
+                        />
+                        <span>[{u.code}] {u.name}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               <div>
                 <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Target Course Program(s) *</label>
@@ -1833,22 +2277,30 @@ ANSWER: C`;
                 </div>
 
                 <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="block text-[10px] text-slate-500 font-semibold mb-0.5">Start Date & Time (EAT)</label>
+                  <div className="p-2 rounded-xl border-2 border-emerald-400 bg-emerald-50/30">
+                    <label className="block text-[10px] text-emerald-800 font-extrabold mb-1 flex items-center space-x-1">
+                      <span>🟢</span>
+                      <span>Start Date & Time (EAT)</span>
+                    </label>
                     <input
                       type="datetime-local"
+                      min={getUgandanNowDatetimeLocal()}
                       value={scheduledStart}
                       onChange={(e) => setScheduledStart(e.target.value)}
-                      className="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs font-semibold text-slate-800"
+                      className="w-full px-2 py-1.5 bg-white border border-emerald-300 rounded text-xs font-bold text-emerald-950 focus:ring-1 focus:ring-emerald-500"
                     />
                   </div>
-                  <div>
-                    <label className="block text-[10px] text-slate-500 font-semibold mb-0.5">Due Date & Time (EAT)</label>
+                  <div className="p-2 rounded-xl border-2 border-red-400 bg-red-50/30">
+                    <label className="block text-[10px] text-red-800 font-extrabold mb-1 flex items-center space-x-1">
+                      <span>🔴</span>
+                      <span>Stop Date & Time (EAT)</span>
+                    </label>
                     <input
                       type="datetime-local"
+                      min={scheduledStart || getUgandanNowDatetimeLocal()}
                       value={dueDate}
                       onChange={(e) => setDueDate(e.target.value)}
-                      className="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs font-semibold text-slate-800"
+                      className="w-full px-2 py-1.5 bg-white border border-red-300 rounded text-xs font-bold text-red-950 focus:ring-1 focus:ring-red-500"
                     />
                   </div>
                 </div>
@@ -2083,14 +2535,89 @@ ANSWER: C`;
 
               </div>
             ) : (
-              <div className="py-16 text-center text-slate-400 text-xs font-semibold">
-                Select a test from the Test Catalog or create one using the builder form on the left.
+              <div className="p-8 text-center space-y-6">
+                <div className="max-w-md mx-auto space-y-3">
+                  <div className="w-16 h-16 mx-auto rounded-2xl bg-emerald-50 text-brand-dark flex items-center justify-center text-2xl border border-emerald-200 shadow-xs">
+                    📝
+                  </div>
+                  <h4 className="text-base font-extrabold text-slate-850">
+                    Question Studio Ready
+                  </h4>
+                  <p className="text-xs text-slate-500 leading-relaxed">
+                    No test paper is currently loaded into the question studio. Create a new test paper using the form on the left or select an existing draft below to start adding questions.
+                  </p>
+                </div>
+
+                {/* Workflow Guidance Cards */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-lg mx-auto text-left text-xs">
+                  <div className="p-3.5 bg-white rounded-xl border border-slate-200 shadow-xs space-y-1">
+                    <span className="font-extrabold text-slate-800 flex items-center space-x-1.5">
+                      <span>1️⃣</span>
+                      <span>Draft on Left</span>
+                    </span>
+                    <p className="text-[11px] text-slate-500">
+                      Configure title, unit, academic year (2026/2027), and schedule. Click <strong>Save Test Paper</strong> to launch question authoring.
+                    </p>
+                  </div>
+                  <div className="p-3.5 bg-white rounded-xl border border-slate-200 shadow-xs space-y-1">
+                    <span className="font-extrabold text-slate-800 flex items-center space-x-1.5">
+                      <span>2️⃣</span>
+                      <span>Bulk Upload</span>
+                    </span>
+                    <p className="text-[11px] text-slate-500">
+                      Have an Aiken formatted file? Click <strong>Upload .TXT Paper</strong> on the left to parse and create instantly.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Quick Select Existing Tests */}
+                {tests.length > 0 && (
+                  <div className="pt-4 border-t border-emerald-100 max-w-xl mx-auto space-y-2.5">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-extrabold text-slate-700 uppercase tracking-wider text-[11px]">
+                        Quick Load Existing Test Papers ({tests.length})
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab('catalog')}
+                        className="text-brand-dark hover:underline font-bold text-[11px] cursor-pointer"
+                      >
+                        Browse all in Catalog →
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-left">
+                      {tests.slice(0, 4).map((testItem) => (
+                        <div
+                          key={testItem.id}
+                          className="p-3 bg-white hover:bg-emerald-50/50 rounded-xl border border-slate-200 hover:border-emerald-300 transition-all shadow-xs flex items-center justify-between gap-2"
+                        >
+                          <div className="min-w-0">
+                            <span className="font-bold text-slate-800 text-xs block truncate">
+                              {testItem.title}
+                            </span>
+                            <span className="text-[10px] font-mono text-brand-dark block">
+                              [{testItem.course_code}] · {testItem.questions_count || 0} Questions
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleSelectTestForQuestions(testItem)}
+                            className="px-2.5 py-1 bg-brand-light hover:bg-brand-medium text-white text-[10px] font-bold rounded-lg transition-all shadow-xs shrink-0 cursor-pointer"
+                          >
+                            🛠️ Load
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
 
         </div>
-      )}
+      </div>
+    )}
 
       {/* TAB 3: SUBMISSIONS ANALYTICS (Staff) */}
       {isStaff && activeTab === 'analytics' && (
@@ -2227,12 +2754,14 @@ ANSWER: C`;
                       <table className="w-full text-left text-xs border-collapse">
                         <thead>
                           <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 uppercase font-bold text-[11px]">
-                            <th className="px-4 py-3">Student Name & Reg No</th>
+                            <th className="px-4 py-3">Student Name &amp; Reg No</th>
                             <th className="px-4 py-3">Test Paper Title</th>
-                            <th className="px-4 py-3 text-center">Score %</th>
-                            <th className="px-4 py-3 text-center">Status</th>
-                            <th className="px-4 py-3 text-center">Security Logs</th>
-                            <th className="px-4 py-3">Submitted At (EAT)</th>
+                            <th className="px-3 py-3 text-center">Score %</th>
+                            <th className="px-3 py-3 text-center">Status</th>
+                            <th className="px-3 py-3">Student Started (EAT)</th>
+                            <th className="px-3 py-3">Submitted At (EAT)</th>
+                            <th className="px-3 py-3 text-center">Submission Type</th>
+                            <th className="px-3 py-3 text-center">Proctoring Logs</th>
                             <th className="px-4 py-3 text-right">Scorecard Action</th>
                           </tr>
                         </thead>
@@ -2241,32 +2770,49 @@ ANSWER: C`;
                             <tr key={att.id} className="hover:bg-slate-50/80 transition-all">
                               <td className="px-4 py-3">
                                 <p className="font-extrabold text-slate-850">{att.student_name || att.student_username}</p>
-                                <span className="text-[10px] text-slate-500 font-mono font-bold">{att.student_reg_number || `@${att.student_username}`}</span>
+                                <div className="flex items-center space-x-1.5 mt-0.5">
+                                  <span className="text-[10px] text-slate-500 font-mono font-bold">{att.student_reg_number || `@${att.student_username}`}</span>
+                                  {att.year_of_study && (
+                                    <span className="text-[9px] bg-slate-100 px-1 py-0.5 rounded text-slate-600 font-bold border border-slate-200">
+                                      Yr {att.year_of_study}
+                                    </span>
+                                  )}
+                                </div>
                               </td>
                               <td className="px-4 py-3">
                                 <p className="font-bold text-slate-800">{att.test_title}</p>
                                 <span className="text-[10px] font-bold text-brand-medium">Course: {att.test_course_code}</span>
                               </td>
-                              <td className="px-4 py-3 text-center font-black text-sm text-slate-850">
+                              <td className="px-3 py-3 text-center font-black text-sm text-slate-850">
                                 {att.score !== null && att.score !== undefined ? `${att.score}%` : 'N/A'}
                               </td>
-                              <td className="px-4 py-3 text-center">
+                              <td className="px-3 py-3 text-center">
                                 <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider border ${att.passed ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-red-50 text-red-700 border-red-200'}`}>
                                   {att.passed ? 'PASSED' : 'FAILED'}
                                 </span>
                               </td>
-                              <td className="px-4 py-3 text-center">
-                                <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${att.tab_switches_count > 0 ? 'bg-amber-50 text-amber-800 border border-amber-200' : 'bg-slate-100 text-slate-600'}`}>
-                                  {att.tab_switches_count > 0 ? `⚠️ ${att.tab_switches_count} Tab Switches` : 'Clean'}
+                              <td className="px-3 py-3 text-slate-600 font-medium text-[11px] whitespace-nowrap">
+                                <span className="inline-flex items-center gap-1 font-mono text-[10.5px]">
+                                  🟢 {formatUgandanTime(att.started_at || att.start_time)}
                                 </span>
                               </td>
-                              <td className="px-4 py-3 text-slate-600 font-medium text-[11px]">
-                                {formatUgandanTime(att.completed_at || att.started_at)}
+                              <td className="px-3 py-3 text-slate-600 font-medium text-[11px] whitespace-nowrap">
+                                <span className="inline-flex items-center gap-1 font-mono text-[10.5px]">
+                                  🔴 {att.completed_at || att.submission_time ? formatUgandanTime(att.completed_at || att.submission_time) : <span className="text-amber-600 font-bold">In Progress</span>}
+                                </span>
+                              </td>
+                              <td className="px-3 py-3 text-center whitespace-nowrap">
+                                {renderSubmissionTypeBadge(att.submission_type, att.auto_submitted_reason)}
+                              </td>
+                              <td className="px-3 py-3 text-center">
+                                <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${att.tab_switches_count > 0 ? 'bg-amber-50 text-amber-800 border border-amber-200' : 'bg-slate-100 text-slate-600'}`}>
+                                  {att.tab_switches_count > 0 ? `⚠️ ${att.tab_switches_count} Switches` : 'Clean'}
+                                </span>
                               </td>
                               <td className="px-4 py-3 text-right">
                                 <button
                                   onClick={() => router.push(`/dashboard/tests/${att.test}/results?attemptId=${att.id}`)}
-                                  className="px-3 py-1.5 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-lg shadow-sm transition-all"
+                                  className="px-3 py-1.5 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-lg shadow-sm transition-all cursor-pointer whitespace-nowrap"
                                 >
                                   📋 View Scorecard
                                 </button>
@@ -2379,25 +2925,61 @@ ANSWER: C`;
               </div>
 
               <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="block text-slate-700 font-bold uppercase mb-1">Scheduled Start</label>
+                <div className="p-2 rounded-xl border-2 border-emerald-400 bg-emerald-50/30">
+                  <label className="block text-[10px] text-emerald-800 font-extrabold mb-1 flex items-center space-x-1">
+                    <span>🟢</span>
+                    <span>Start Date & Time (EAT)</span>
+                  </label>
                   <input
                     type="datetime-local"
+                    min={getUgandanNowDatetimeLocal()}
                     value={editScheduledStart}
                     onChange={(e) => setEditScheduledStart(e.target.value)}
-                    className="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs font-semibold text-slate-800"
+                    className="w-full px-2 py-1.5 bg-white border border-emerald-300 rounded text-xs font-bold text-emerald-950 focus:ring-1 focus:ring-emerald-500"
                   />
                 </div>
-                <div>
-                  <label className="block text-slate-700 font-bold uppercase mb-1">Due Date</label>
+                <div className="p-2 rounded-xl border-2 border-red-400 bg-red-50/30">
+                  <label className="block text-[10px] text-red-800 font-extrabold mb-1 flex items-center space-x-1">
+                    <span>🔴</span>
+                    <span>Stop Date & Time (EAT)</span>
+                  </label>
                   <input
                     type="datetime-local"
+                    min={editScheduledStart || getUgandanNowDatetimeLocal()}
                     value={editDueDate}
                     onChange={(e) => setEditDueDate(e.target.value)}
-                    className="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs font-semibold text-slate-800"
+                    className="w-full px-2 py-1.5 bg-white border border-red-300 rounded text-xs font-bold text-red-950 focus:ring-1 focus:ring-red-500"
                   />
                 </div>
               </div>
+
+              {assignedCourseUnits.length > 1 && (
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
+                    Additional Assigned Units (Cross-Unit Setting)
+                  </label>
+                  <div className="max-h-24 overflow-y-auto border border-slate-200 rounded-lg p-2 bg-slate-50 space-y-1 text-xs">
+                    {assignedCourseUnits.filter(u => String(u.id) !== String(editingTestModal.course_unit)).map((u) => (
+                      <label key={u.id} className="flex items-center space-x-2 font-medium text-slate-800 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={editAdditionalCourseUnits.includes(u.id) || editAdditionalCourseUnits.includes(String(u.id))}
+                          onChange={(e) => {
+                            const uId = u.id;
+                            if (e.target.checked) {
+                              setEditAdditionalCourseUnits(prev => [...prev.filter(id => id !== uId), uId]);
+                            } else {
+                              setEditAdditionalCourseUnits(prev => prev.filter(id => id !== uId));
+                            }
+                          }}
+                          className="rounded text-brand-light focus:ring-brand-light"
+                        />
+                        <span>[{u.code}] {u.name}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               <div className="flex space-x-2 pt-2">
                 <button type="submit" disabled={submitting} className="flex-1 py-2 bg-brand-light text-white text-xs font-bold rounded-lg">
@@ -2481,6 +3063,39 @@ ANSWER: C`;
                 <div>
                   <span className="text-white/60 text-[10px] uppercase font-bold block">Target Year</span>
                   <span className="font-extrabold text-amber-300">{scorecardPreviewData.year_of_study === 0 ? 'All Years' : `Year ${scorecardPreviewData.year_of_study}`}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Simulated Candidate Identity & Audit Banner Preview */}
+            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-xs space-y-3">
+              <div className="flex items-center justify-between border-b border-slate-200/80 pb-2">
+                <div className="flex items-center space-x-2">
+                  <span className="text-[10px] font-black uppercase text-brand-dark bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-full">
+                    Scorecard Layout Preview: Candidate Header & Audit Verification
+                  </span>
+                </div>
+                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-300">
+                  <span>✅</span>
+                  <span>Manual Submission</span>
+                </span>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-[11px]">
+                <div>
+                  <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Candidate Full Name</span>
+                  <span className="font-extrabold text-slate-850 block">Sarah Namubiru (Sample)</span>
+                </div>
+                <div>
+                  <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Registration Number</span>
+                  <span className="font-mono font-bold text-brand-dark block">CIU/2026/BIT/042</span>
+                </div>
+                <div>
+                  <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Student Started (EAT)</span>
+                  <span className="font-mono text-slate-700 block">🟢 13 Oct 2026, 09:00 EAT</span>
+                </div>
+                <div>
+                  <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Submitted At (EAT)</span>
+                  <span className="font-mono text-slate-700 block">🔴 13 Oct 2026, 09:45 EAT</span>
                 </div>
               </div>
             </div>
@@ -2986,6 +3601,262 @@ ANSWER: C`;
                 </div>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: LIVE ATTEMPTING STUDENTS MONITOR */}
+      {liveStudentsModal.isOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fade-in">
+          <div className="bg-white rounded-3xl max-w-4xl w-full max-h-[90vh] flex flex-col shadow-2xl border border-slate-200 overflow-hidden">
+            
+            {/* Modal Header */}
+            <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/70">
+              <div className="space-y-1">
+                <div className="flex items-center space-x-2">
+                  <span className="text-xl">👥</span>
+                  <h3 className="text-base font-extrabold text-slate-900">
+                    Candidate Monitoring: {liveStudentsModal.test?.title}
+                  </h3>
+                  <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase border ${
+                    liveStudentsModal.data?.test_status === 'In Progress'
+                      ? 'bg-emerald-100 text-emerald-900 border-emerald-300'
+                      : liveStudentsModal.data?.test_status === 'Scheduled'
+                      ? 'bg-amber-100 text-amber-900 border-amber-300'
+                      : 'bg-red-100 text-red-900 border-red-300'
+                  }`}>
+                    {liveStudentsModal.data?.test_status || 'Assessment'}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500 font-medium">
+                  Course: <strong className="text-slate-700">[{liveStudentsModal.test?.course_code}]</strong> {liveStudentsModal.test?.course_name} · Lecturer: {liveStudentsModal.test?.lecturer_name || 'Assigned Lecturer'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closeLiveStudentsModal}
+                className="w-8 h-8 rounded-full bg-slate-200 hover:bg-slate-300 text-slate-700 flex items-center justify-center text-sm font-bold transition-all cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Metrics & Filter Bar */}
+            <div className="p-5 border-b border-slate-100 space-y-4">
+              {/* Counts */}
+              <div className="grid grid-cols-4 gap-3 text-center">
+                <div className="bg-slate-100/70 p-3 rounded-2xl border border-slate-200">
+                  <span className="text-[10px] font-bold text-slate-500 uppercase block">Total Candidates</span>
+                  <span className="text-lg font-black text-slate-900">{liveStudentsModal.data?.counts?.total ?? '...'}</span>
+                </div>
+                <div className="bg-blue-50 p-3 rounded-2xl border border-blue-200">
+                  <span className="text-[10px] font-bold text-blue-700 uppercase block">🟢 Started / Taking</span>
+                  <span className="text-lg font-black text-blue-900">{liveStudentsModal.data?.counts?.started ?? '...'}</span>
+                </div>
+                <div className="bg-emerald-50 p-3 rounded-2xl border border-emerald-200">
+                  <span className="text-[10px] font-bold text-emerald-700 uppercase block">✅ Submitted</span>
+                  <span className="text-lg font-black text-emerald-900">{liveStudentsModal.data?.counts?.submitted ?? '...'}</span>
+                </div>
+                <div className="bg-amber-50 p-3 rounded-2xl border border-amber-200">
+                  <span className="text-[10px] font-bold text-amber-700 uppercase block">⏳ Pending</span>
+                  <span className="text-lg font-black text-amber-900">{liveStudentsModal.data?.counts?.pending ?? '...'}</span>
+                </div>
+              </div>
+
+              {/* Filters */}
+              <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+                <div className="flex items-center space-x-2">
+                  <span className="text-xs font-bold text-slate-500">Status:</span>
+                  {['All', 'Started', 'Pending', 'Submitted'].map(st => (
+                    <button
+                      key={st}
+                      type="button"
+                      onClick={() => setLiveStudentsModal(prev => ({ ...prev, statusFilter: st }))}
+                      className={`px-3 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                        liveStudentsModal.statusFilter === st
+                          ? 'bg-brand-dark text-white shadow-xs'
+                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      {st}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="flex items-center space-x-3">
+                  <div className="flex items-center space-x-1">
+                    <span className="text-xs font-bold text-slate-500">Group By:</span>
+                    <select
+                      value={liveStudentsModal.groupBy}
+                      onChange={(e) => setLiveStudentsModal(prev => ({ ...prev, groupBy: e.target.value }))}
+                      className="px-2.5 py-1 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none"
+                    >
+                      <option value="none">None</option>
+                      <option value="faculty">Faculty</option>
+                      <option value="course_unit">Course Unit</option>
+                    </select>
+                  </div>
+
+                  <input
+                    type="text"
+                    placeholder="Search candidate name or reg no..."
+                    value={liveStudentsModal.search}
+                    onChange={(e) => setLiveStudentsModal(prev => ({ ...prev, search: e.target.value }))}
+                    className="px-3 py-1 bg-slate-50 border border-slate-200 rounded-xl text-xs w-56 focus:outline-none focus:ring-1 focus:ring-brand-light"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Students List / Grouped View */}
+            <div className="p-5 overflow-y-auto flex-1 space-y-4 custom-scrollbar">
+              {liveStudentsModal.loading ? (
+                <div className="flex items-center justify-center py-12">
+                  <div className="w-8 h-8 border-4 border-brand-light/20 border-t-brand-light rounded-full animate-spin"></div>
+                </div>
+              ) : (
+                (() => {
+                  let filtered = (liveStudentsModal.data?.students || []).filter(s => {
+                    if (liveStudentsModal.statusFilter !== 'All' && s.status !== liveStudentsModal.statusFilter) return false;
+                    if (liveStudentsModal.search) {
+                      const q = liveStudentsModal.search.toLowerCase();
+                      const matchName = (s.student_name || '').toLowerCase().includes(q);
+                      const matchReg = (s.reg_number || '').toLowerCase().includes(q);
+                      if (!matchName && !matchReg) return false;
+                    }
+                    return true;
+                  });
+
+                  if (filtered.length === 0) {
+                    return (
+                      <div className="text-center py-12 text-slate-500 font-semibold text-xs">
+                        No candidate records found matching current status filter.
+                      </div>
+                    );
+                  }
+
+                  // Render grouped or flat table
+                  const renderTable = (items) => (
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead>
+                        <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 uppercase font-semibold">
+                          <th className="px-3 py-2.5">Candidate Details</th>
+                          <th className="px-3 py-2.5">Faculty & Unit</th>
+                          <th className="px-3 py-2.5 text-center">Status</th>
+                          <th className="px-3 py-2.5">Start Time (EAT)</th>
+                          <th className="px-3 py-2.5">Submission (EAT)</th>
+                          <th className="px-3 py-2.5 text-center">Score</th>
+                          <th className="px-3 py-2.5 text-center">Tab Switches</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {items.map(std => (
+                          <tr key={std.student_id} className="hover:bg-slate-50/70 transition-all">
+                            <td className="px-3 py-2.5">
+                              <span className="font-bold text-slate-900 block">{std.student_name}</span>
+                              <span className="font-mono text-[11px] text-slate-500 font-bold block">{std.reg_number || 'No Reg No'}</span>
+                            </td>
+                            <td className="px-3 py-2.5">
+                              <span className="text-slate-800 font-semibold block">{std.faculty || 'General'}</span>
+                              <span className="text-[10px] text-slate-500 block">{std.course_unit || 'Assigned Unit'}</span>
+                            </td>
+                            <td className="px-3 py-2.5 text-center">
+                              <span className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase border ${
+                                std.status === 'Submitted'
+                                  ? 'bg-emerald-100 text-emerald-900 border-emerald-300'
+                                  : std.status === 'Started'
+                                  ? 'bg-blue-100 text-blue-900 border-blue-300 animate-pulse'
+                                  : 'bg-amber-100 text-amber-900 border-amber-300'
+                              }`}>
+                                {std.status}
+                              </span>
+                            </td>
+                            <td className="px-3 py-2.5 text-[11px] font-mono text-slate-700">
+                              {std.started_at ? formatUgandanTime(std.started_at) : '—'}
+                            </td>
+                            <td className="px-3 py-2.5 text-[11px] font-mono text-slate-700">
+                              {std.completed_at ? (
+                                <div>
+                                  <span>{formatUgandanTime(std.completed_at)}</span>
+                                  <div className="mt-0.5">
+                                    {renderSubmissionTypeBadge(std.submission_type, std.auto_submitted_reason || std.auto_reason)}
+                                  </div>
+                                </div>
+                              ) : '—'}
+                            </td>
+                            <td className="px-3 py-2.5 text-center font-bold">
+                              {std.score !== null && std.score !== undefined ? `${std.score}%` : '—'}
+                            </td>
+                            <td className="px-3 py-2.5 text-center">
+                              <span className={`font-mono font-bold text-xs ${std.tab_switches > 0 ? 'text-red-600' : 'text-slate-600'}`}>
+                                {std.tab_switches || 0}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  );
+
+                  if (liveStudentsModal.groupBy === 'faculty') {
+                    const groups = {};
+                    filtered.forEach(s => {
+                      const f = s.faculty || 'General Faculty';
+                      if (!groups[f]) groups[f] = [];
+                      groups[f].push(s);
+                    });
+                    return Object.entries(groups).map(([facName, sList]) => (
+                      <div key={facName} className="border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
+                        <div className="bg-slate-100 px-4 py-2 font-extrabold text-xs text-slate-800 flex items-center justify-between">
+                          <span>🏛️ {facName}</span>
+                          <span className="bg-white px-2 py-0.5 rounded text-[10px] text-slate-700 border border-slate-200">{sList.length} Students</span>
+                        </div>
+                        {renderTable(sList)}
+                      </div>
+                    ));
+                  }
+
+                  if (liveStudentsModal.groupBy === 'course_unit') {
+                    const groups = {};
+                    filtered.forEach(s => {
+                      const u = s.course_unit || 'Default Unit';
+                      if (!groups[u]) groups[u] = [];
+                      groups[u].push(s);
+                    });
+                    return Object.entries(groups).map(([uName, sList]) => (
+                      <div key={uName} className="border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
+                        <div className="bg-slate-100 px-4 py-2 font-extrabold text-xs text-slate-800 flex items-center justify-between">
+                          <span>📚 {uName}</span>
+                          <span className="bg-white px-2 py-0.5 rounded text-[10px] text-slate-700 border border-slate-200">{sList.length} Students</span>
+                        </div>
+                        {renderTable(sList)}
+                      </div>
+                    ));
+                  }
+
+                  return (
+                    <div className="border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
+                      {renderTable(filtered)}
+                    </div>
+                  );
+                })()
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 border-t border-slate-100 flex items-center justify-between bg-slate-50/50">
+              <span className="text-[11px] text-slate-500 font-medium">
+                🕒 All start and completion timestamps rendered strictly in Ugandan Time (EAT, UTC+3)
+              </span>
+              <button
+                type="button"
+                onClick={closeLiveStudentsModal}
+                className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-xl shadow cursor-pointer"
+              >
+                Close Monitor
+              </button>
+            </div>
+
           </div>
         </div>
       )}

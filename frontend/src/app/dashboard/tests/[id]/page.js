@@ -24,6 +24,7 @@ export default function TestRunnerPage({ params }) {
   const [tabSwitches, setTabSwitches] = useState(0);
   const [timeLeftSeconds, setTimeLeftSeconds] = useState(0);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [showLateStartWarning, setShowLateStartWarning] = useState(false);
   const [securityNotice, setSecurityNotice] = useState('');
   const [submitSuccess, setSubmitSuccess] = useState('');
   const [submitError, setSubmitError] = useState('');
@@ -60,6 +61,17 @@ export default function TestRunnerPage({ params }) {
       setActiveAttempt(attemptData);
       setProctoringSetting(procData || { is_proctoring_enabled: true });
 
+      // Check for late start (> 1/3 of set duration)
+      if (testData.scheduled_start) {
+        const scheduledStartMs = new Date(testData.scheduled_start).getTime();
+        const durationMs = (testData.duration_minutes || 30) * 60 * 1000;
+        const oneThirdDurationMs = durationMs / 3;
+        const delayFromStart = Date.now() - scheduledStartMs;
+        if (delayFromStart > oneThirdDurationMs) {
+          setShowLateStartWarning(true);
+        }
+      }
+
       // Load saved local draft if present
       const draftKey = `ciu_test_draft_${testId}_${user.id}`;
       const savedDraft = localStorage.getItem(draftKey);
@@ -85,12 +97,10 @@ export default function TestRunnerPage({ params }) {
         return;
       }
 
-      if (remainingSecs <= 0 || attemptData.is_late) {
-        setIsLate(true);
+      if (remainingSecs <= 0) {
         setTimeLeftSeconds(0);
-        if (dueTimestamp) {
-          setDueRemainingSeconds(Math.max(0, Math.floor((dueTimestamp - Date.now()) / 1000)));
-        }
+        handleAutoSubmit('Duration Timeout: The allocated test duration has expired.');
+        return;
       } else {
         setTimeLeftSeconds(remainingSecs);
       }
@@ -151,7 +161,7 @@ export default function TestRunnerPage({ params }) {
     };
   }, [loading, activeAttempt, proctoringSetting.is_proctoring_enabled, testId, tabSwitches]);
 
-  // 1. Timer Countdown Effect (with overtime and due-date monitoring)
+  // 1. Strict Timer Countdown to the Dot (Immediate auto-submit upon reaching 0)
   useEffect(() => {
     if (loading || !activeAttempt) return;
 
@@ -160,36 +170,17 @@ export default function TestRunnerPage({ params }) {
         setTimeLeftSeconds((prev) => {
           if (prev <= 1) {
             clearInterval(timerInterval);
-            const hasDueDate = !!testObj?.due_date;
-            const dueTimestamp = hasDueDate ? new Date(testObj.due_date).getTime() : null;
-            if (dueTimestamp && Date.now() >= dueTimestamp) {
-              handleAutoSubmit('Test Window Closed: Final Due Date Reached');
-            } else {
-              setIsLate(true);
-              if (dueTimestamp) {
-                setDueRemainingSeconds(Math.max(0, Math.floor((dueTimestamp - Date.now()) / 1000)));
-              }
-            }
+            handleAutoSubmit('Duration Timeout: The allocated test duration has expired.', null, 'system');
             return 0;
           }
           return prev - 1;
         });
       }, 1000);
       return () => clearInterval(timerInterval);
-    } else if (isLate && dueRemainingSeconds !== null && dueRemainingSeconds > 0) {
-      const dueInterval = setInterval(() => {
-        setDueRemainingSeconds((prev) => {
-          if (prev <= 1) {
-            clearInterval(dueInterval);
-            handleAutoSubmit('Test Window Closed: Final Due Date Reached');
-            return 0;
-          }
-          return prev - 1;
-        });
-      }, 1000);
-      return () => clearInterval(dueInterval);
+    } else if (timeLeftSeconds <= 0 && activeAttempt && !autoSubmittedRef.current) {
+      handleAutoSubmit('Duration Timeout: The allocated test duration has expired.', null, 'system');
     }
-  }, [loading, activeAttempt, timeLeftSeconds, isLate, dueRemainingSeconds, testObj]);
+  }, [loading, activeAttempt, timeLeftSeconds]);
 
   // 2. Security Tab Switch & Focus Blur Monitoring
   useEffect(() => {
@@ -200,7 +191,7 @@ export default function TestRunnerPage({ params }) {
         setTabSwitches((prevCount) => {
           const newCount = prevCount + 1;
           if (newCount >= 3) {
-            handleAutoSubmit('Security Lockdown: Exceeded maximum allowed tab switches (3/3).');
+            handleAutoSubmit('Security Lockdown: Exceeded maximum allowed tab switches (3/3).', null, 'security logs');
           } else {
             setSecurityNotice(`⚠️ Security Warning (${newCount}/3): Leaving the test window is prohibited and tracked.`);
           }
@@ -236,22 +227,37 @@ export default function TestRunnerPage({ params }) {
 
   const handleManualSubmit = async () => {
     setShowConfirmModal(false);
-    await handleAutoSubmit('Student Submitted');
+    await handleAutoSubmit('Student Submitted', null, 'manual');
   };
 
-  const handleAutoSubmit = async (reason, customLateReason = null) => {
+  const handleAutoSubmit = async (reason, customLateReason = null, explicitSubmissionType = null) => {
     if (autoSubmittedRef.current) return;
     autoSubmittedRef.current = true;
     setSubmitting(true);
     setSubmitError('');
     setSubmitSuccess('');
 
+    let subType = explicitSubmissionType;
+    if (!subType) {
+      if (reason && (reason.toLowerCase().includes('security') || reason.toLowerCase().includes('tab switch') || reason.toLowerCase().includes('lockdown') || reason.toLowerCase().includes('blur'))) {
+        subType = 'security logs';
+      } else if (reason && (reason.toLowerCase().includes('duration') || reason.toLowerCase().includes('timeout') || reason.toLowerCase().includes('window closed') || reason.toLowerCase().includes('deadline'))) {
+        subType = 'system';
+      } else {
+        subType = 'manual';
+      }
+    }
+
     try {
+      const nowIso = new Date().toISOString();
       await api.post(`/test-attempts/${activeAttempt.id}/submit/`, {
         answers,
         tab_switches: tabSwitches,
         auto_submitted_reason: reason,
-        late_submission_reason: customLateReason || lateReason
+        late_submission_reason: customLateReason || lateReason,
+        submission_type: subType,
+        start_time: activeAttempt?.started_at || activeAttempt?.start_time || null,
+        submission_time: nowIso
       });
 
       const draftKey = `ciu_test_draft_${testId}_${user.id}`;
@@ -336,6 +342,27 @@ export default function TestRunnerPage({ params }) {
             <span className="w-1.5 h-1.5 bg-red-500 rounded-full animate-ping"></span>
             <span>PROCTOR</span>
           </div>
+        </div>
+      )}
+
+      {/* Late Start Warning Alert (1/3 duration exceeded) */}
+      {showLateStartWarning && (
+        <div className="p-4 bg-amber-50 border-2 border-amber-400 rounded-2xl flex items-center justify-between text-amber-900 text-xs shadow-sm animate-fade-in">
+          <div className="flex items-center space-x-3">
+            <span className="text-2xl">⚠️</span>
+            <div>
+              <p className="font-extrabold text-amber-950 uppercase tracking-wide">Late Assessment Entry Warning</p>
+              <p className="text-[11px] text-amber-800 leading-relaxed font-medium">
+                You entered this test after more than one-third (1/3) of the scheduled duration had passed. Duration is strictly enforced to the dot and will auto-submit when the countdown expires.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => setShowLateStartWarning(false)}
+            className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-lg text-xs transition-all shrink-0 ml-3 cursor-pointer"
+          >
+            Acknowledge
+          </button>
         </div>
       )}
 
@@ -620,6 +647,41 @@ export default function TestRunnerPage({ params }) {
                 className="px-4 py-2 bg-brand-light hover:bg-brand-medium text-white font-bold text-xs rounded-xl shadow-sm disabled:opacity-50 disabled:pointer-events-none"
               >
                 {submitting ? 'Submitting...' : 'Confirm Submission'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Late Start Warning Modal (1/3 of set duration) */}
+      {showLateStartWarning && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm animate-fade-in p-4">
+          <div className="bg-white rounded-2xl p-6 border-2 border-amber-400 shadow-2xl max-w-md w-full space-y-4">
+            <div className="flex items-center space-x-3 text-amber-600">
+              <span className="text-3xl">⚠️</span>
+              <div>
+                <h3 className="font-extrabold text-base text-slate-900">Late Assessment Entry Warning</h3>
+                <span className="text-[11px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                  Entry past 1/3 of duration
+                </span>
+              </div>
+            </div>
+            
+            <p className="text-xs text-slate-700 leading-relaxed">
+              You are starting this assessment after more than <strong>one-third (1/3)</strong> of the scheduled duration has passed.
+            </p>
+            
+            <div className="bg-amber-50/70 p-3.5 rounded-xl border border-amber-200 text-xs text-amber-900 space-y-1.5 font-medium">
+              <p>⏱️ <strong>Strict Duration Policy:</strong> The assessment timer is enforced strictly to the dot.</p>
+              <p>⚡ <strong>Automatic Submission:</strong> All answered and in-progress questions will be automatically finalized and submitted as soon as the countdown timer reaches zero (00:00:00).</p>
+            </div>
+
+            <div className="flex items-center justify-end pt-2">
+              <button
+                onClick={() => setShowLateStartWarning(false)}
+                className="w-full py-2.5 bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs rounded-xl shadow-md transition-all cursor-pointer"
+              >
+                I Understand & Acknowledge — Proceed to Test
               </button>
             </div>
           </div>

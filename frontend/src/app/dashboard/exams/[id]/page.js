@@ -27,6 +27,8 @@ export default function TakeExamPage() {
   const [showSecurityWarning, setShowSecurityWarning] = useState(false);
   const [showSubmitModal, setShowSubmitModal] = useState(false);
   const [confirmCheckbox, setConfirmCheckbox] = useState(false);
+  const [successMsg, setSuccessMsg] = useState('');
+  const [showLateStartWarning, setShowLateStartWarning] = useState(false);
 
   // Late submission tracking
   const [isLate, setIsLate] = useState(false);
@@ -34,6 +36,7 @@ export default function TakeExamPage() {
   const [dueRemainingSeconds, setDueRemainingSeconds] = useState(null);
 
   const timerRef = useRef(null);
+  const autoSubmittedRef = useRef(false);
 
   useEffect(() => {
     if (examId) {
@@ -47,7 +50,7 @@ export default function TakeExamPage() {
           const updated = prev + 1;
           setShowSecurityWarning(true);
           if (updated >= 3) {
-            autoSubmitExam(null, null, updated, 'Security Lockdown: Exceeded maximum allowed tab switches (3/3).');
+            autoSubmitExam(null, null, updated, 'Security Lockdown: Exceeded maximum allowed tab switches (3/3).', 'security logs');
           }
           return updated;
         });
@@ -61,44 +64,26 @@ export default function TakeExamPage() {
     };
   }, [examId]);
 
-  // Timer countdown hook (with overtime and due-date monitoring)
+  // Timer countdown hook (strictly followed to the dot: auto-submit upon reaching 0)
   useEffect(() => {
     if (timeLeft > 0) {
       timerRef.current = setInterval(() => {
         setTimeLeft(prev => {
           if (prev <= 1) {
             clearInterval(timerRef.current);
-            const hasDueDate = !!exam?.due_date;
-            const dueTimestamp = hasDueDate ? new Date(exam.due_date).getTime() : null;
-            if (dueTimestamp && Date.now() >= dueTimestamp) {
-              autoSubmitExam(null, null, tabSwitches, 'Assessment Window Closed: Final Due Date Reached');
-            } else {
-              setIsLate(true);
-              if (dueTimestamp) {
-                setDueRemainingSeconds(Math.max(0, Math.floor((dueTimestamp - Date.now()) / 1000)));
-              }
-            }
+            autoSubmitExam(null, null, tabSwitches, 'Duration Timeout: The allocated examination duration has expired.', 'system');
             return 0;
           }
           return prev - 1;
         });
       }, 1000);
-    } else if (isLate && dueRemainingSeconds !== null && dueRemainingSeconds > 0) {
-      timerRef.current = setInterval(() => {
-        setDueRemainingSeconds(prev => {
-          if (prev <= 1) {
-            clearInterval(timerRef.current);
-            autoSubmitExam(null, null, tabSwitches, 'Assessment Window Closed: Final Due Date Reached');
-            return 0;
-          }
-          return prev - 1;
-        });
-      }, 1000);
+    } else if (timeLeft <= 0 && attempt && !autoSubmittedRef.current && !loading) {
+      autoSubmitExam(null, null, tabSwitches, 'Duration Timeout: The allocated examination duration has expired.', 'system');
     }
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
-  }, [timeLeft, isLate, dueRemainingSeconds, exam]);
+  }, [timeLeft, attempt, loading]);
 
   async function loadExamAttempt() {
     try {
@@ -123,6 +108,17 @@ export default function TakeExamPage() {
       setAnswers(attemptData.answers || {});
       setQuestions(qData || []);
 
+      // Check for late start (> 1/3 of set duration)
+      if (examData.scheduled_start) {
+        const scheduledStartMs = new Date(examData.scheduled_start).getTime();
+        const durationMs = (examData.duration_minutes || 60) * 60 * 1000;
+        const oneThirdDurationMs = durationMs / 3;
+        const delayFromStart = Date.now() - scheduledStartMs;
+        if (delayFromStart > oneThirdDurationMs) {
+          setShowLateStartWarning(true);
+        }
+      }
+
       // Calculate time remaining based on duration and start time
       const startTime = new Date(attemptData.started_at).getTime();
       const endTime = startTime + examData.duration_minutes * 60 * 1000;
@@ -137,12 +133,10 @@ export default function TakeExamPage() {
         return;
       }
 
-      if (remainingSeconds <= 0 || attemptData.is_late) {
-        setIsLate(true);
+      if (remainingSeconds <= 0) {
         setTimeLeft(0);
-        if (dueTimestamp) {
-          setDueRemainingSeconds(Math.max(0, Math.floor((dueTimestamp - now) / 1000)));
-        }
+        autoSubmitExam(attemptData.id, attemptData.answers, 0, 'Duration Timeout: The allocated examination duration has expired.');
+        return;
       } else {
         setTimeLeft(remainingSeconds);
       }
@@ -166,28 +160,45 @@ export default function TakeExamPage() {
     setConfirmCheckbox(false);
   };
 
-  const autoSubmitExam = async (attId = null, currentAnswers = null, switches = tabSwitches, reason = 'Time Expired') => {
+  const autoSubmitExam = async (attId = null, currentAnswers = null, switches = tabSwitches, reason = 'Duration Timeout: The allocated examination duration has expired.', explicitSubmissionType = null) => {
+    if (autoSubmittedRef.current) return;
+    autoSubmittedRef.current = true;
     const finalAttId = attId || attempt?.id;
     const finalAnswers = currentAnswers || answers;
     if (!finalAttId) return;
 
-    alert(`Security Notice: ${reason}`);
-    performSubmit(finalAttId, finalAnswers, switches, reason);
+    performSubmit(finalAttId, finalAnswers, switches, reason, explicitSubmissionType);
   };
 
-  const performSubmit = async (attId, answersPayload, switches = tabSwitches, reason = null) => {
+  const performSubmit = async (attId, answersPayload, switches = tabSwitches, reason = null, explicitSubmissionType = null) => {
     try {
       setLoading(true);
       setErrorMsg('');
       setSuccessMsg('✅ Exam paper submitted successfully! Redirecting to results...');
+
+      let subType = explicitSubmissionType;
+      if (!subType) {
+        if (reason && (reason.toLowerCase().includes('security') || reason.toLowerCase().includes('tab switch') || reason.toLowerCase().includes('lockdown') || reason.toLowerCase().includes('blur'))) {
+          subType = 'security logs';
+        } else if (reason && (reason.toLowerCase().includes('duration') || reason.toLowerCase().includes('timeout') || reason.toLowerCase().includes('window closed') || reason.toLowerCase().includes('deadline'))) {
+          subType = 'system';
+        } else {
+          subType = 'manual';
+        }
+      }
+
+      const nowIso = new Date().toISOString();
       await api.post(`/attempts/${attId}/submit/`, {
         answers: answersPayload,
         tab_switches: switches,
         auto_submitted_reason: reason,
-        late_submission_reason: lateReason
+        late_submission_reason: lateReason,
+        submission_type: subType,
+        start_time: attempt?.started_at || attempt?.start_time || null,
+        submission_time: nowIso
       });
       setTimeout(() => {
-        router.push(`/dashboard/exams/${examId}/results`);
+        router.push(`/dashboard/exams/${examId}/results?attemptId=${attId}`);
       }, 700);
     } catch (err) {
       setErrorMsg(err.message || '⚠️ Failed to submit exam paper. Please check network connection and contact your lecturer.');
@@ -256,6 +267,27 @@ export default function TakeExamPage() {
             <span>SECURITY WARNING: Tab switching or page blur detected! Tab changes recorded: <strong className="text-sm">{tabSwitches}</strong>. Switching tabs may result in automatic disqualification.</span>
           </div>
           <button onClick={() => setShowSecurityWarning(false)} className="text-red-700 hover:text-red-950 font-bold px-2 py-1 hover:bg-red-200 rounded">
+            Acknowledge
+          </button>
+        </div>
+      )}
+
+      {/* Late Start Warning Alert (1/3 duration exceeded) */}
+      {showLateStartWarning && (
+        <div className="p-4 bg-amber-50 border-2 border-amber-400 rounded-2xl flex items-center justify-between text-amber-900 text-xs shadow-sm animate-fade-in">
+          <div className="flex items-center space-x-3">
+            <span className="text-2xl">⚠️</span>
+            <div>
+              <p className="font-extrabold text-amber-950 uppercase tracking-wide">Late Assessment Entry Warning</p>
+              <p className="text-[11px] text-amber-800 leading-relaxed font-medium">
+                You entered this examination after more than one-third (1/3) of the scheduled duration had passed. Duration is strictly enforced to the dot and will auto-submit when the countdown expires.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => setShowLateStartWarning(false)}
+            className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-lg text-xs transition-all shrink-0 ml-3 cursor-pointer"
+          >
             Acknowledge
           </button>
         </div>
@@ -514,11 +546,46 @@ export default function TakeExamPage() {
                 disabled={!confirmCheckbox || (isLate && !lateReason.trim())}
                 onClick={() => {
                   setShowSubmitModal(false);
-                  performSubmit(attempt.id, answers);
+                  performSubmit(attempt.id, answers, tabSwitches, 'Student Submitted', 'manual');
                 }}
                 className="flex-1 py-2.5 bg-brand-emerald disabled:opacity-50 disabled:pointer-events-none text-brand-dark text-xs font-extrabold rounded-xl transition-all shadow hover:bg-brand-emerald/90"
               >
                 Confirm & Submit
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Late Start Warning Modal (1/3 of set duration) */}
+      {showLateStartWarning && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm animate-fade-in p-4">
+          <div className="bg-white rounded-2xl p-6 border-2 border-amber-400 shadow-2xl max-w-md w-full space-y-4">
+            <div className="flex items-center space-x-3 text-amber-600">
+              <span className="text-3xl">⚠️</span>
+              <div>
+                <h3 className="font-extrabold text-base text-slate-900">Late Assessment Entry Warning</h3>
+                <span className="text-[11px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                  Entry past 1/3 of duration
+                </span>
+              </div>
+            </div>
+            
+            <p className="text-xs text-slate-700 leading-relaxed">
+              You are starting this assessment after more than <strong>one-third (1/3)</strong> of the scheduled duration has passed.
+            </p>
+            
+            <div className="bg-amber-50/70 p-3.5 rounded-xl border border-amber-200 text-xs text-amber-900 space-y-1.5 font-medium">
+              <p>⏱️ <strong>Strict Duration Policy:</strong> The assessment timer is enforced strictly to the dot.</p>
+              <p>⚡ <strong>Automatic Submission:</strong> All answered and in-progress questions will be automatically finalized and submitted as soon as the countdown timer reaches zero (00:00:00).</p>
+            </div>
+
+            <div className="flex items-center justify-end pt-2">
+              <button
+                onClick={() => setShowLateStartWarning(false)}
+                className="w-full py-2.5 bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs rounded-xl shadow-md transition-all cursor-pointer"
+              >
+                I Understand & Acknowledge — Proceed to Exam
               </button>
             </div>
           </div>
