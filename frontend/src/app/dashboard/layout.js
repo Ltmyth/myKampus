@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { api } from '@/lib/api';
 import Link from 'next/link';
@@ -19,6 +19,60 @@ export default function DashboardLayout({ children }) {
   const [otpError, setOtpError] = useState('');
   const [otpSuccess, setOtpSuccess] = useState('');
   const [submittingOtp, setSubmittingOtp] = useState(false);
+
+  // 5-Minute Idle Session Lock for Authorised Users
+  const [isIdleLocked, setIsIdleLocked] = useState(false);
+  const [idlePassword, setIdlePassword] = useState('');
+  const [idleError, setIdleError] = useState('');
+  const [verifyingIdle, setVerifyingIdle] = useState(false);
+  const idleTimerRef = useRef(null);
+
+  useEffect(() => {
+    // Only apply to authorized users (staff, admins, lecturers, executives) - NOT students
+    if (!user || user.role === 'student' || user.must_change_password) return;
+
+    const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes (300,000 ms)
+
+    const resetIdleTimer = () => {
+      if (isIdleLocked) return;
+      if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+      idleTimerRef.current = setTimeout(() => {
+        setIsIdleLocked(true);
+        setIdlePassword('');
+        setIdleError('');
+      }, IDLE_TIMEOUT_MS);
+    };
+
+    const events = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll'];
+    events.forEach(evt => window.addEventListener(evt, resetIdleTimer, { passive: true }));
+
+    resetIdleTimer();
+
+    return () => {
+      if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+      events.forEach(evt => window.removeEventListener(evt, resetIdleTimer));
+    };
+  }, [user, isIdleLocked]);
+
+  const handleUnlockSession = async (e) => {
+    e.preventDefault();
+    if (!idlePassword.trim()) {
+      setIdleError('Please enter your password.');
+      return;
+    }
+    setIdleError('');
+    setVerifyingIdle(true);
+    try {
+      await api.post('/auth/verify_password/', { password: idlePassword });
+      setIsIdleLocked(false);
+      setIdlePassword('');
+      setIdleError('');
+    } catch (err) {
+      setIdleError(err.response?.data?.detail || err.message || 'Invalid password. Please enter your correct password.');
+    } finally {
+      setVerifyingIdle(false);
+    }
+  };
 
   const handleChangeOneTimePassword = async (e) => {
     e.preventDefault();
@@ -433,6 +487,79 @@ export default function DashboardLayout({ children }) {
               >
                 {submittingOtp ? 'Updating Password...' : 'Save New Password & Continue'}
               </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 5-MINUTE IDLE RE-AUTHENTICATION MODAL FOR AUTHORISED USERS */}
+      {isIdleLocked && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in">
+          <div className="bg-white rounded-3xl p-6 sm:p-8 max-w-md w-full space-y-5 shadow-2xl border-2 border-emerald-500/20 text-center">
+            <div className="w-16 h-16 bg-emerald-50 border-2 border-emerald-200 rounded-2xl flex items-center justify-center mx-auto text-3xl shadow-inner">
+              🔒
+            </div>
+
+            <div>
+              <span className="text-[10px] font-mono uppercase tracking-wider bg-emerald-100 text-emerald-800 font-bold px-2.5 py-1 rounded-full">
+                Security Session Timeout
+              </span>
+              <h3 className="text-xl font-black text-slate-900 mt-2">Resume Authorised Session</h3>
+              <p className="text-slate-500 text-xs mt-1 leading-relaxed">
+                You have been inactive for over <strong className="text-slate-700">5 minutes</strong>. For institutional compliance and data protection, please confirm your password to unlock your session.
+              </p>
+            </div>
+
+            <div className="bg-slate-50 rounded-2xl p-3 border border-slate-100 text-left flex items-center justify-between">
+              <div>
+                <p className="text-[11px] font-bold text-slate-800">{user?.first_name ? `${user.first_name} ${user.last_name}` : user?.username}</p>
+                <p className="text-[10px] text-slate-500 font-mono">@{user?.username} · <span className="capitalize font-bold text-emerald-700">{user?.role?.replace('_', ' ')}</span></p>
+              </div>
+              <button
+                type="button"
+                onClick={logout}
+                className="text-[11px] font-bold text-rose-600 hover:text-rose-800 hover:underline px-2 py-1 cursor-pointer"
+              >
+                Sign Out
+              </button>
+            </div>
+
+            {idleError && (
+              <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-red-700 text-xs font-semibold text-left">
+                {idleError}
+              </div>
+            )}
+
+            <form onSubmit={handleUnlockSession} className="space-y-4 text-xs text-left">
+              <div>
+                <label className="block text-slate-700 font-bold uppercase mb-1 text-[10px]">Your Account Password</label>
+                <input
+                  type="password"
+                  value={idlePassword}
+                  onChange={(e) => setIdlePassword(e.target.value)}
+                  placeholder="Enter your password to unlock..."
+                  autoFocus
+                  required
+                  className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl font-medium text-slate-900 focus:bg-white focus:ring-2 focus:ring-brand-light/30 focus:border-brand-light outline-none"
+                />
+              </div>
+
+              <div className="flex space-x-2">
+                <button
+                  type="submit"
+                  disabled={verifyingIdle}
+                  className="flex-1 py-3 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-xl shadow-md transition-all active:scale-[0.98] disabled:opacity-50 cursor-pointer"
+                >
+                  {verifyingIdle ? 'Verifying Password...' : 'Unlock Workspace'}
+                </button>
+                <button
+                  type="button"
+                  onClick={logout}
+                  className="px-4 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition-all cursor-pointer"
+                >
+                  Exit
+                </button>
+              </div>
             </form>
           </div>
         </div>

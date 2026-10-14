@@ -86,6 +86,7 @@ export default function AdminPage() {
 
   // Form states (Edit User)
   const [courses, setCourses] = useState([]);
+  const [courseUnits, setCourseUnits] = useState([]);
   const [editingUser, setEditingUser] = useState(null);
   const [editUsername, setEditUsername] = useState('');
   const [editEmail, setEditEmail] = useState('');
@@ -103,6 +104,10 @@ export default function AdminPage() {
   const [editEntryYear, setEditEntryYear] = useState(2026);
   const [editFaculty, setEditFaculty] = useState('');
   const [editAssignedCourses, setEditAssignedCourses] = useState([]);
+  const [editAssignedFaculties, setEditAssignedFaculties] = useState([]);
+  const [editAssignedCourseUnits, setEditAssignedCourseUnits] = useState([]);
+  const [staffAssignedFaculties, setStaffAssignedFaculties] = useState([]);
+  const [staffAssignedCourseUnits, setStaffAssignedCourseUnits] = useState([]);
 
   // Bulk Student Allocation State
   const [showBulkAssignModal, setShowBulkAssignModal] = useState(false);
@@ -231,12 +236,13 @@ export default function AdminPage() {
   async function loadAdminData() {
     try {
       setLoading(true);
-      const [usersData, invitesData, logsData, facsData, crsData, procData] = await Promise.all([
+      const [usersData, invitesData, logsData, facsData, crsData, unitsData, procData] = await Promise.all([
         api.get('/admin/users/').catch(() => []),
         api.get('/invitations/').catch(() => []),
         api.get('/system-logs/').catch(() => []),
         api.get('/faculties/').catch(() => []),
         api.get('/courses/').catch(() => []),
+        api.get('/course-units/').catch(() => []),
         api.get('/proctoring-settings/').catch(() => ({ is_proctoring_enabled: true }))
       ]);
       setUsers(Array.isArray(usersData) ? usersData : (usersData?.results || []));
@@ -244,6 +250,7 @@ export default function AdminPage() {
       setSystemLogs(Array.isArray(logsData) ? logsData : (logsData?.results || []));
       setFaculties(Array.isArray(facsData) ? facsData : (facsData?.results || []));
       setCourses(Array.isArray(crsData) ? crsData : (crsData?.results || []));
+      setCourseUnits(Array.isArray(unitsData) ? unitsData : (unitsData?.results || []));
       setProctoringSetting(procData || { is_proctoring_enabled: true });
     } catch (err) {
       setErrorMsg('Failed to load admin resources.');
@@ -393,7 +400,9 @@ export default function AdminPage() {
         full_name: staffFullName.trim(),
         email: staffEmail.trim(),
         role: staffRole,
-        faculty: staffFacultyId || undefined,
+        faculty: staffFacultyId || (staffAssignedFaculties.length > 0 ? staffAssignedFaculties[0] : undefined),
+        assigned_faculties: staffAssignedFaculties.map(id => parseInt(id)),
+        assigned_course_units: staffAssignedCourseUnits.map(id => parseInt(id)),
         gender: staffGender,
         phone_number: staffPhone.trim() || undefined,
         initial_password: staffPasswordMode === 'custom' ? staffCustomPassword : undefined
@@ -414,6 +423,8 @@ export default function AdminPage() {
       setStaffEmail('');
       setStaffRole('lecturer');
       setStaffFacultyId('');
+      setStaffAssignedFaculties([]);
+      setStaffAssignedCourseUnits([]);
       setStaffGender('other');
       setStaffPhone('');
       setStaffCustomPassword('');
@@ -882,6 +893,14 @@ export default function AdminPage() {
     setEditEntryYear(u.entry_year || 2026);
     setEditFaculty(u.faculty || '');
     setEditAssignedCourses(u.assigned_courses || []);
+    const initialFacs = Array.isArray(u.assigned_faculties) && u.assigned_faculties.length > 0
+      ? u.assigned_faculties.map(f => typeof f === 'object' ? f.id : parseInt(f))
+      : (u.faculty ? [parseInt(u.faculty)] : []);
+    const initialUnits = Array.isArray(u.assigned_course_units)
+      ? u.assigned_course_units.map(unit => typeof unit === 'object' ? unit.id : parseInt(unit))
+      : [];
+    setEditAssignedFaculties(initialFacs);
+    setEditAssignedCourseUnits(initialUnits);
     setErrorMsg('');
     setSuccessMsg('');
   };
@@ -919,8 +938,10 @@ export default function AdminPage() {
         semester: parseInt(editSemester || 1),
         intake: editIntake,
         entry_year: parseInt(editEntryYear || 2026),
-        faculty: editFaculty ? parseInt(editFaculty) : null,
-        assigned_courses: editAssignedCourses ? editAssignedCourses.map(id => parseInt(id)) : []
+        faculty: editFaculty ? parseInt(editFaculty) : (editAssignedFaculties.length > 0 ? editAssignedFaculties[0] : null),
+        assigned_courses: editAssignedCourses ? editAssignedCourses.map(id => parseInt(id)) : [],
+        assigned_faculties: editAssignedFaculties ? editAssignedFaculties.map(id => parseInt(id)) : [],
+        assigned_course_units: editAssignedCourseUnits ? editAssignedCourseUnits.map(id => parseInt(id)) : []
       };
 
       if (editPassword && editPassword.trim()) {
@@ -1243,7 +1264,9 @@ export default function AdminPage() {
     if (userFacultyFilter !== 'ALL') {
       const facId = String(u.faculty);
       const facCode = u.faculty_code || '';
-      if (facId !== userFacultyFilter && facCode !== userFacultyFilter) return false;
+      const inAssignedFacs = Array.isArray(u.assigned_faculties) && u.assigned_faculties.some(f => String(f) === userFacultyFilter || String(f?.id) === userFacultyFilter);
+      const inAssignedFacDetails = Array.isArray(u.assigned_faculty_details) && u.assigned_faculty_details.some(f => String(f.id) === userFacultyFilter || f.code === userFacultyFilter);
+      if (facId !== userFacultyFilter && facCode !== userFacultyFilter && !inAssignedFacs && !inAssignedFacDetails) return false;
     }
 
     // 6. Course filter
@@ -1508,7 +1531,7 @@ export default function AdminPage() {
                   <div className="relative">
                     <input
                       type="text"
-                      placeholder="Name, email, reg no..."
+                      placeholder="Name, username (e.g. CIU006), reg no..."
                       value={userSearchTerm}
                       onChange={(e) => { setUserSearchTerm(e.target.value); setCurrentPage(1); }}
                       className="w-full pl-7 pr-2 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-brand-light focus:bg-white transition-all"
@@ -1521,8 +1544,8 @@ export default function AdminPage() {
                 <div>
                   <label className="block text-slate-600 font-bold uppercase mb-1 text-[10px]">Filter Faculty</label>
                   <select
-                    value={['lecturer', 'student', 'faculty_admin', 'dean'].includes(user?.role) && (user?.faculty_code || user?.faculty) ? (user.faculty_code || String(user.faculty)) : userFacultyFilter}
-                    disabled={['lecturer', 'student', 'faculty_admin', 'dean'].includes(user?.role) && Boolean(user?.faculty_code || user?.faculty)}
+                    value={['student', 'faculty_admin', 'dean'].includes(user?.role) && (user?.faculty_code || user?.faculty) ? (user.faculty_code || String(user.faculty)) : userFacultyFilter}
+                    disabled={['student', 'faculty_admin', 'dean'].includes(user?.role) && Boolean(user?.faculty_code || user?.faculty)}
                     onChange={(e) => { setUserFacultyFilter(e.target.value); setCurrentPage(1); }}
                     className="w-full px-2.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:bg-white disabled:opacity-85"
                   >
@@ -3337,15 +3360,46 @@ export default function AdminPage() {
                 </>
               ) : (
                 <>
+                  <div>
+                    <label className="block text-slate-700 font-bold uppercase mb-1 text-[10px]">
+                      🏛️ Assigned Faculties (Multiple)
+                    </label>
+                    <p className="text-[10px] text-slate-500 mb-1.5">Lecturers can access curriculum and assessments strictly across these assigned faculties.</p>
+                    <div className="max-h-28 overflow-y-auto custom-scrollbar border border-slate-200 rounded-xl p-2 bg-slate-50 space-y-1">
+                      {faculties.map(f => {
+                        const isChecked = editAssignedFaculties.includes(f.id);
+                        return (
+                          <label key={f.id} className="flex items-center space-x-2 p-1 hover:bg-white rounded cursor-pointer text-xs">
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setEditAssignedFaculties(prev => [...prev, f.id]);
+                                  if (!editFaculty) setEditFaculty(String(f.id));
+                                } else {
+                                  setEditAssignedFaculties(prev => prev.filter(id => id !== f.id));
+                                }
+                              }}
+                              className="rounded text-brand-dark focus:ring-brand-light cursor-pointer"
+                            />
+                            <span className="font-bold text-slate-800">{f.code}</span>
+                            <span className="text-slate-600">({f.name})</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-slate-700 font-bold uppercase mb-1 text-[10px]">Faculty Department</label>
+                      <label className="block text-slate-700 font-bold uppercase mb-1 text-[10px]">Primary Department</label>
                       <select
                         value={editFaculty}
                         onChange={(e) => setEditFaculty(e.target.value)}
                         className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800"
                       >
-                        <option value="">-- No Faculty --</option>
+                        <option value="">-- No Primary Faculty --</option>
                         {faculties.map(f => (
                           <option key={f.id} value={f.id}>{f.code} - {f.name}</option>
                         ))}
@@ -3355,7 +3409,7 @@ export default function AdminPage() {
 
                   <div>
                     <label className="block text-slate-700 font-bold uppercase mb-1 text-[10px]">Assigned Degree Courses</label>
-                    <div className="max-h-28 overflow-y-auto custom-scrollbar border border-slate-200 rounded-xl p-2 bg-slate-50 space-y-1">
+                    <div className="max-h-24 overflow-y-auto custom-scrollbar border border-slate-200 rounded-xl p-2 bg-slate-50 space-y-1">
                       {courses.map(c => {
                         const isChecked = editAssignedCourses.includes(c.id);
                         return (
@@ -3374,6 +3428,37 @@ export default function AdminPage() {
                             />
                             <span className="font-bold text-slate-800">{c.code}</span>
                             <span className="text-slate-600">({c.name})</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-700 font-bold uppercase mb-1 text-[10px]">
+                      📚 Assigned Course Units
+                    </label>
+                    <p className="text-[10px] text-slate-500 mb-1.5">Assign lecturer to specific teaching units across designated faculties.</p>
+                    <div className="max-h-28 overflow-y-auto custom-scrollbar border border-slate-200 rounded-xl p-2 bg-slate-50 space-y-1">
+                      {courseUnits.map(u => {
+                        const isChecked = editAssignedCourseUnits.includes(u.id);
+                        return (
+                          <label key={u.id} className="flex items-center space-x-2 p-1 hover:bg-white rounded cursor-pointer text-xs">
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setEditAssignedCourseUnits(prev => [...prev, u.id]);
+                                } else {
+                                  setEditAssignedCourseUnits(prev => prev.filter(id => id !== u.id));
+                                }
+                              }}
+                              className="rounded text-brand-dark focus:ring-brand-light cursor-pointer"
+                            />
+                            <span className="font-mono font-bold text-slate-800">[{u.code}]</span>
+                            <span className="text-slate-700 font-medium">{u.name}</span>
+                            <span className="text-slate-400 text-[10px]">({u.course_code || 'Course'})</span>
                           </label>
                         );
                       })}
@@ -4023,6 +4108,69 @@ export default function AdminPage() {
                   </select>
                 </div>
               </div>
+
+              {staffRole === 'lecturer' && (
+                <div className="space-y-3 p-3 bg-slate-50 border border-slate-200 rounded-2xl">
+                  <div>
+                    <label className="block text-slate-700 font-bold uppercase mb-1 text-[10px]">
+                      🏛️ Assigned Faculties (Multiple)
+                    </label>
+                    <div className="max-h-24 overflow-y-auto custom-scrollbar border border-slate-200 rounded-xl p-2 bg-white space-y-1">
+                      {faculties.map(f => {
+                        const isChecked = staffAssignedFaculties.includes(f.id);
+                        return (
+                          <label key={f.id} className="flex items-center space-x-2 p-1 hover:bg-slate-50 rounded cursor-pointer text-xs">
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setStaffAssignedFaculties(prev => [...prev, f.id]);
+                                  if (!staffFacultyId) setStaffFacultyId(String(f.id));
+                                } else {
+                                  setStaffAssignedFaculties(prev => prev.filter(id => id !== f.id));
+                                }
+                              }}
+                              className="rounded text-brand-dark focus:ring-brand-light cursor-pointer"
+                            />
+                            <span className="font-bold text-slate-800">{f.code}</span>
+                            <span className="text-slate-600">({f.name})</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-700 font-bold uppercase mb-1 text-[10px]">
+                      📚 Assigned Teaching Course Units
+                    </label>
+                    <div className="max-h-24 overflow-y-auto custom-scrollbar border border-slate-200 rounded-xl p-2 bg-white space-y-1">
+                      {courseUnits.map(u => {
+                        const isChecked = staffAssignedCourseUnits.includes(u.id);
+                        return (
+                          <label key={u.id} className="flex items-center space-x-2 p-1 hover:bg-slate-50 rounded cursor-pointer text-xs">
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setStaffAssignedCourseUnits(prev => [...prev, u.id]);
+                                } else {
+                                  setStaffAssignedCourseUnits(prev => prev.filter(id => id !== u.id));
+                                }
+                              }}
+                              className="rounded text-brand-dark focus:ring-brand-light cursor-pointer"
+                            />
+                            <span className="font-mono font-bold text-slate-800">[{u.code}]</span>
+                            <span className="text-slate-700 font-medium">{u.name}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              )}
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div className="space-y-1">

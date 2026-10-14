@@ -26,6 +26,7 @@ class User(AbstractUser):
     phone = models.CharField(max_length=20, blank=True, null=True)
     tuition_paid_percentage = models.FloatField(default=0.0, help_text="Tuition clearance percentage (0.0 to 100.0)")
     faculty = models.ForeignKey('Faculty', on_delete=models.SET_NULL, null=True, blank=True, related_name='students')
+    assigned_faculties = models.ManyToManyField('Faculty', blank=True, related_name='assigned_lecturers', help_text="Faculties assigned to this lecturer or staff member")
     assigned_courses = models.ManyToManyField('Course', blank=True, related_name='assigned_students')
     reg_number = models.CharField(max_length=50, blank=True, null=True, db_index=True, help_text="Official Registration Number (e.g. 2026SOBAT-A001)")
     YEAR_OF_STUDY_CHOICES = (

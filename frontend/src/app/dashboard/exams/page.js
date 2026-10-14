@@ -361,6 +361,16 @@ export default function ExamsPage() {
         if (parentC) setSelectedCourse(parentC.id);
         if (u.year_of_study) setExamYearOfStudy(u.year_of_study);
         if (u.semester) setExamSemester(String(u.semester));
+        if (u.name) {
+          setExamTitle(prev => {
+            const trimmed = prev.trim();
+            if (!trimmed) return `Final Exam - ${u.name}`;
+            if (!trimmed.toLowerCase().includes(u.name.toLowerCase())) {
+              return `${trimmed} - ${u.name}`;
+            }
+            return prev;
+          });
+        }
       }
     }
   };
@@ -567,8 +577,14 @@ export default function ExamsPage() {
     setSubmitting(true);
 
     try {
+      let finalTitle = examTitle.trim();
+      const unitObj = courseUnits.find(u => String(u.id) === String(selectedCourseUnit));
+      if (unitObj && unitObj.name && !finalTitle.toLowerCase().includes(unitObj.name.toLowerCase())) {
+        finalTitle = `${finalTitle} - ${unitObj.name}`;
+      }
+
       const payload = {
-        title: examTitle,
+        title: finalTitle,
         course: selectedCourse ? parseInt(selectedCourse) : (finalCourseIds[0] || null),
         target_course_ids: finalCourseIds.map(id => parseInt(id)),
         course_unit: selectedCourseUnit ? parseInt(selectedCourseUnit) : null,
@@ -636,7 +652,12 @@ export default function ExamsPage() {
           setSubmitting(false);
           return;
         }
-        formData.append('title', examTxtTitle || 'Aiken Imported Examination');
+        let txtTitle = (examTxtTitle || 'Aiken Imported Examination').trim();
+        const cuObj = courseUnits.find(u => String(u.id) === String(examTxtCourseUnit));
+        if (cuObj && cuObj.name && !txtTitle.toLowerCase().includes(cuObj.name.toLowerCase())) {
+          txtTitle = `${txtTitle} - ${cuObj.name}`;
+        }
+        formData.append('title', txtTitle);
         formData.append('course_unit', examTxtCourseUnit);
         formData.append('exam_type', examTxtType);
         formData.append('duration_minutes', examTxtDuration);
@@ -1262,6 +1283,8 @@ ANSWER: C`;
                                   const myAttempt = attempts.find(a => a.exam === examItem.id);
                                   const isExpanded = expandedExamIds.includes(examItem.id);
                                   const isApproved = Boolean(examItem.is_approved_by_dean);
+                                  const studentTuitionPaid = Number(user?.tuition_paid_percentage ?? user?.effective_tuition_percentage ?? 0);
+                                  const isExamCleared = (studentTuitionPaid >= 100.0) || Boolean(user?.is_exam_cleared) || Boolean(user?.is_temp_cleared && (user?.temp_clearance_info?.clearance_type === 'both' || user?.temp_clearance_info?.clearance_type === 'exams' || !user?.temp_clearance_info));
 
                                   return (
                                     <Fragment key={examItem.id}>
@@ -1390,9 +1413,12 @@ ANSWER: C`;
                                               <button
                                                 onClick={() => startExam(examItem.id)}
                                                 disabled={!examItem.is_active || examItem.questions_count === 0}
-                                                className="px-2.5 py-1 bg-brand-light hover:bg-brand-medium text-white text-[10px] font-bold rounded-lg shadow-xs transition-all disabled:opacity-50 cursor-pointer"
+                                                className={`px-2.5 py-1 text-white text-[10px] font-bold rounded-lg shadow-xs transition-all disabled:opacity-50 cursor-pointer ${
+                                                  !isExamCleared ? 'bg-amber-600 hover:bg-amber-700' : 'bg-brand-light hover:bg-brand-medium'
+                                                }`}
+                                                title={!isExamCleared ? '100% Tuition Clearance Required to sit for final exams' : 'Launch Examination'}
                                               >
-                                                Launch
+                                                {!isExamCleared ? '🔒 100% Clearance Req.' : 'Launch'}
                                               </button>
                                             )}
                                           </div>

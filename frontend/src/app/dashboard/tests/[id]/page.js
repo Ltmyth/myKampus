@@ -36,11 +36,26 @@ export default function TestRunnerPage({ params }) {
 
   const [submitting, setSubmitting] = useState(false);
   const autoSubmittedRef = useRef(false);
+  const activeAttemptRef = useRef(null);
+  const testObjRef = useRef(null);
+  const tabSwitchesRef = useRef(0);
 
   // Webcam Proctoring Refs & States
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const [cameraActive, setCameraActive] = useState(false);
+
+  useEffect(() => {
+    activeAttemptRef.current = activeAttempt;
+  }, [activeAttempt]);
+
+  useEffect(() => {
+    testObjRef.current = testObj;
+  }, [testObj]);
+
+  useEffect(() => {
+    tabSwitchesRef.current = tabSwitches;
+  }, [tabSwitches]);
 
   useEffect(() => {
     initTestRunner();
@@ -60,6 +75,11 @@ export default function TestRunnerPage({ params }) {
       setQuestions(qData || []);
       setActiveAttempt(attemptData);
       setProctoringSetting(procData || { is_proctoring_enabled: true });
+
+      if (attemptData.completed_at) {
+        router.push(`/dashboard/tests/${testId}/results?attemptId=${attemptData.id}`);
+        return;
+      }
 
       // Check for late start (> 1/3 of set duration)
       if (testData.scheduled_start) {
@@ -84,22 +104,23 @@ export default function TestRunnerPage({ params }) {
       }
 
       // Calculate initial timer value (in seconds)
-      const durationSecs = (testData.duration_minutes || 30) * 60;
-      const startedAt = new Date(attemptData.started_at).getTime();
-      const elapsedSecs = Math.floor((Date.now() - startedAt) / 1000);
-      const remainingSecs = durationSecs - elapsedSecs;
-      const hasDueDate = !!testData.due_date;
-      const dueTimestamp = hasDueDate ? new Date(testData.due_date).getTime() : null;
-      const isPastDueDate = dueTimestamp && Date.now() >= dueTimestamp;
+      const startedAt = new Date(attemptData.started_at || attemptData.start_time || Date.now()).getTime();
+      const allottedEndTime = startedAt + (testData.duration_minutes || 30) * 60 * 1000;
+      const now = Date.now();
+      const dueTimestamp = testData.due_date ? new Date(testData.due_date).getTime() : null;
+      // Late start allowed before due_date, but test end time is strictly followed to the dot for auto-submission
+      const effectiveEndTime = dueTimestamp ? Math.min(allottedEndTime, dueTimestamp) : allottedEndTime;
+      const remainingSecs = Math.max(0, Math.floor((effectiveEndTime - now) / 1000));
 
-      if (isPastDueDate) {
-        handleAutoSubmit('Test Window Closed: Final Due Date Reached');
+      if (dueTimestamp && now >= dueTimestamp) {
+        setTimeLeftSeconds(0);
+        handleAutoSubmit('Test Window Closed: Final Due Date Reached', null, 'system');
         return;
       }
 
       if (remainingSecs <= 0) {
         setTimeLeftSeconds(0);
-        handleAutoSubmit('Duration Timeout: The allocated test duration has expired.');
+        handleAutoSubmit('Duration Timeout: The allocated test duration has expired.', null, 'system');
         return;
       } else {
         setTimeLeftSeconds(remainingSecs);
@@ -140,7 +161,7 @@ export default function TestRunnerPage({ params }) {
             api.post('/proctoring-monitor/stream_snapshot/', {
               image_data: dataUrl,
               test_id: testId,
-              tab_switches: tabSwitches,
+              tab_switches: tabSwitchesRef.current || tabSwitches,
               is_camera_active: true
             }).catch(() => {});
           }
@@ -170,7 +191,7 @@ export default function TestRunnerPage({ params }) {
         setTimeLeftSeconds((prev) => {
           if (prev <= 1) {
             clearInterval(timerInterval);
-            handleAutoSubmit('Duration Timeout: The allocated test duration has expired.', null, 'system');
+            handleAutoSubmit('Test End Time Reached: Assessment duration or scheduled cutoff reached.', null, 'system');
             return 0;
           }
           return prev - 1;
@@ -178,11 +199,11 @@ export default function TestRunnerPage({ params }) {
       }, 1000);
       return () => clearInterval(timerInterval);
     } else if (timeLeftSeconds <= 0 && activeAttempt && !autoSubmittedRef.current) {
-      handleAutoSubmit('Duration Timeout: The allocated test duration has expired.', null, 'system');
+      handleAutoSubmit('Test End Time Reached: Assessment duration or scheduled cutoff reached.', null, 'system');
     }
   }, [loading, activeAttempt, timeLeftSeconds]);
 
-  // 2. Security Tab Switch & Focus Blur Monitoring
+  // 2. Security Tab Switch & Focus Blur Monitoring with real-time audit logging
   useEffect(() => {
     if (loading || !activeAttempt) return;
 
@@ -190,6 +211,20 @@ export default function TestRunnerPage({ params }) {
       if (document.hidden && !autoSubmittedRef.current) {
         setTabSwitches((prevCount) => {
           const newCount = prevCount + 1;
+          tabSwitchesRef.current = newCount;
+
+          // Real-time security event logging to backend proctoring monitor
+          if (activeAttemptRef.current?.id || testId) {
+            api.post('/proctoring-monitor/log_tab_switch/', {
+              test_id: parseInt(testId),
+              attempt_id: activeAttemptRef.current?.id,
+              tab_switches: newCount,
+              title: testObjRef.current?.title || 'Test'
+            }).catch(err => {
+              console.warn('Proctoring log tab switch error:', err);
+            });
+          }
+
           if (newCount >= 3) {
             handleAutoSubmit('Security Lockdown: Exceeded maximum allowed tab switches (3/3).', null, 'security logs');
           } else {
@@ -202,7 +237,7 @@ export default function TestRunnerPage({ params }) {
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, [loading, activeAttempt]);
+  }, [loading, activeAttempt, testId]);
 
   // 3. LocalStorage Auto-Sync Backup
   useEffect(() => {
@@ -232,6 +267,8 @@ export default function TestRunnerPage({ params }) {
 
   const handleAutoSubmit = async (reason, customLateReason = null, explicitSubmissionType = null) => {
     if (autoSubmittedRef.current) return;
+    const finalAtt = activeAttemptRef.current || activeAttempt;
+    if (!finalAtt || !finalAtt.id) return; // Strict guard: no attempt launched = no auto-submission
     autoSubmittedRef.current = true;
     setSubmitting(true);
     setSubmitError('');
@@ -241,7 +278,7 @@ export default function TestRunnerPage({ params }) {
     if (!subType) {
       if (reason && (reason.toLowerCase().includes('security') || reason.toLowerCase().includes('tab switch') || reason.toLowerCase().includes('lockdown') || reason.toLowerCase().includes('blur'))) {
         subType = 'security logs';
-      } else if (reason && (reason.toLowerCase().includes('duration') || reason.toLowerCase().includes('timeout') || reason.toLowerCase().includes('window closed') || reason.toLowerCase().includes('deadline'))) {
+      } else if (reason && (reason.toLowerCase().includes('duration') || reason.toLowerCase().includes('timeout') || reason.toLowerCase().includes('window closed') || reason.toLowerCase().includes('deadline') || reason.toLowerCase().includes('end time'))) {
         subType = 'system';
       } else {
         subType = 'manual';
@@ -250,13 +287,13 @@ export default function TestRunnerPage({ params }) {
 
     try {
       const nowIso = new Date().toISOString();
-      await api.post(`/test-attempts/${activeAttempt.id}/submit/`, {
+      await api.post(`/test-attempts/${finalAtt.id}/submit/`, {
         answers,
-        tab_switches: tabSwitches,
+        tab_switches: tabSwitchesRef.current || tabSwitches,
         auto_submitted_reason: reason,
         late_submission_reason: customLateReason || lateReason,
         submission_type: subType,
-        start_time: activeAttempt?.started_at || activeAttempt?.start_time || null,
+        start_time: finalAtt?.started_at || finalAtt?.start_time || null,
         submission_time: nowIso
       });
 
@@ -265,7 +302,7 @@ export default function TestRunnerPage({ params }) {
 
       setSubmitSuccess('✅ Test submitted successfully! Redirecting to your scorecard...');
       setTimeout(() => {
-        router.push(`/dashboard/tests/${testId}/results?attemptId=${activeAttempt.id}`);
+        router.push(`/dashboard/tests/${testId}/results?attemptId=${finalAtt.id}`);
       }, 700);
     } catch (err) {
       const msg = err.message || 'Test submission failed. Please check network connection and try again.';

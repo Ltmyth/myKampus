@@ -21,6 +21,8 @@ def resolve_user_faculty(user):
         if app and app.course and app.course.faculty:
             return app.course.faculty
     elif getattr(user, 'role', '') == 'lecturer':
+        if hasattr(user, 'assigned_faculties') and user.assigned_faculties.exists():
+            return user.assigned_faculties.first()
         unit = user.assigned_course_units.select_related('course__faculty').filter(course__faculty__isnull=False).first()
         if unit and unit.course and unit.course.faculty:
             return unit.course.faculty
@@ -35,6 +37,8 @@ class UserSerializer(serializers.ModelSerializer):
     faculty_code = serializers.SerializerMethodField()
     registration_number = serializers.ReadOnlyField()
     assigned_course_codes = serializers.SerializerMethodField()
+    assigned_faculty_details = serializers.SerializerMethodField()
+    assigned_course_unit_details = serializers.SerializerMethodField()
     gender_display = serializers.CharField(source='get_gender_display', read_only=True)
     is_test_cleared = serializers.SerializerMethodField()
     is_exam_cleared = serializers.SerializerMethodField()
@@ -47,7 +51,7 @@ class UserSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ('id', 'username', 'email', 'first_name', 'last_name', 'role', 'phone', 'gender', 'gender_display', 'tuition_paid_percentage', 'effective_tuition_percentage', 'faculty', 'faculty_name', 'faculty_code', 'assigned_courses', 'assigned_course_codes', 'reg_number', 'registration_number', 'year_of_study', 'semester', 'academic_year', 'entry_year', 'intake', 'must_change_password', 'is_active', 'is_test_cleared', 'is_exam_cleared', 'is_temp_cleared', 'clearance_source', 'clearance_mode', 'temp_clearance_info', 'clearance_level')
+        fields = ('id', 'username', 'email', 'first_name', 'last_name', 'role', 'phone', 'gender', 'gender_display', 'tuition_paid_percentage', 'effective_tuition_percentage', 'faculty', 'faculty_name', 'faculty_code', 'assigned_faculties', 'assigned_faculty_details', 'assigned_courses', 'assigned_course_codes', 'assigned_course_unit_details', 'reg_number', 'registration_number', 'year_of_study', 'semester', 'academic_year', 'entry_year', 'intake', 'must_change_password', 'is_active', 'is_test_cleared', 'is_exam_cleared', 'is_temp_cleared', 'clearance_source', 'clearance_mode', 'temp_clearance_info', 'clearance_level')
         read_only_fields = ('role', 'registration_number', 'is_active')
 
     def get_faculty_name(self, obj):
@@ -57,6 +61,25 @@ class UserSerializer(serializers.ModelSerializer):
     def get_faculty_code(self, obj):
         fac = resolve_user_faculty(obj)
         return fac.code if fac else None
+
+    def get_assigned_faculty_details(self, obj):
+        facs = list(obj.assigned_faculties.all())
+        if not facs and obj.faculty:
+            facs = [obj.faculty]
+        return [{'id': f.id, 'code': f.code, 'name': f.name} for f in facs]
+
+    def get_assigned_course_unit_details(self, obj):
+        if obj.role != 'lecturer':
+            return []
+        units = list(obj.assigned_course_units.select_related('course', 'course__faculty').all())
+        return [{
+            'id': u.id,
+            'code': u.code,
+            'name': u.name,
+            'course_code': u.course.code if u.course else '',
+            'course_name': u.course.name if u.course else '',
+            'faculty_code': u.course.faculty.code if (u.course and u.course.faculty) else ''
+        } for u in units]
 
     def validate_gender(self, value):
         if not value:
@@ -86,6 +109,7 @@ class UserSerializer(serializers.ModelSerializer):
             unit_course_ids = list(instance.assigned_course_units.filter(course__isnull=False).values_list('course_id', flat=True).distinct())
             existing = set(data.get('assigned_courses') or [])
             data['assigned_courses'] = sorted(list(existing.union(unit_course_ids)))
+            data['assigned_course_units'] = list(instance.assigned_course_units.values_list('id', flat=True))
         return data
 
     def _get_clearance(self, obj):
@@ -146,6 +170,9 @@ class AdminUserSerializer(serializers.ModelSerializer):
     gender_display = serializers.CharField(source='get_gender_display', read_only=True)
     registration_number = serializers.ReadOnlyField()
     assigned_course_codes = serializers.SerializerMethodField()
+    assigned_faculty_details = serializers.SerializerMethodField()
+    assigned_course_unit_details = serializers.SerializerMethodField()
+    gender_display = serializers.CharField(source='get_gender_display', read_only=True)
     is_test_cleared = serializers.SerializerMethodField()
     is_exam_cleared = serializers.SerializerMethodField()
     clearance_source = serializers.SerializerMethodField()
@@ -157,7 +184,7 @@ class AdminUserSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ('id', 'username', 'email', 'password', 'first_name', 'last_name', 'role', 'phone', 'gender', 'gender_display', 'tuition_paid_percentage', 'effective_tuition_percentage', 'faculty', 'faculty_name', 'faculty_code', 'assigned_courses', 'assigned_course_codes', 'reg_number', 'registration_number', 'year_of_study', 'semester', 'academic_year', 'entry_year', 'intake', 'must_change_password', 'is_active', 'is_test_cleared', 'is_exam_cleared', 'is_temp_cleared', 'clearance_source', 'clearance_mode', 'temp_clearance_info', 'clearance_level')
+        fields = ('id', 'username', 'email', 'password', 'first_name', 'last_name', 'role', 'phone', 'gender', 'gender_display', 'tuition_paid_percentage', 'effective_tuition_percentage', 'faculty', 'faculty_name', 'faculty_code', 'assigned_faculties', 'assigned_faculty_details', 'assigned_courses', 'assigned_course_codes', 'assigned_course_unit_details', 'reg_number', 'registration_number', 'year_of_study', 'semester', 'academic_year', 'entry_year', 'intake', 'must_change_password', 'is_active', 'is_test_cleared', 'is_exam_cleared', 'is_temp_cleared', 'clearance_source', 'clearance_mode', 'temp_clearance_info', 'clearance_level')
 
     def get_faculty_name(self, obj):
         fac = resolve_user_faculty(obj)
@@ -166,6 +193,25 @@ class AdminUserSerializer(serializers.ModelSerializer):
     def get_faculty_code(self, obj):
         fac = resolve_user_faculty(obj)
         return fac.code if fac else None
+
+    def get_assigned_faculty_details(self, obj):
+        facs = list(obj.assigned_faculties.all())
+        if not facs and obj.faculty:
+            facs = [obj.faculty]
+        return [{'id': f.id, 'code': f.code, 'name': f.name} for f in facs]
+
+    def get_assigned_course_unit_details(self, obj):
+        if obj.role != 'lecturer':
+            return []
+        units = list(obj.assigned_course_units.select_related('course', 'course__faculty').all())
+        return [{
+            'id': u.id,
+            'code': u.code,
+            'name': u.name,
+            'course_code': u.course.code if u.course else '',
+            'course_name': u.course.name if u.course else '',
+            'faculty_code': u.course.faculty.code if (u.course and u.course.faculty) else ''
+        } for u in units]
 
     def validate_phone(self, value):
         if value:
@@ -184,7 +230,19 @@ class AdminUserSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         password = validated_data.pop('password', None)
+        assigned_courses = validated_data.pop('assigned_courses', None)
+        assigned_faculties = validated_data.pop('assigned_faculties', None)
+        assigned_unit_ids = self.initial_data.get('assigned_course_units') or self.initial_data.get('course_units')
+
         user = super().create(validated_data)
+        if assigned_courses is not None:
+            user.assigned_courses.set(assigned_courses)
+        if assigned_faculties is not None:
+            user.assigned_faculties.set(assigned_faculties)
+        if assigned_unit_ids is not None:
+            from .models import CourseUnit
+            units = CourseUnit.objects.filter(id__in=assigned_unit_ids)
+            user.assigned_course_units.set(units)
         if password and str(password).strip():
             user.set_password(str(password).strip())
             user.must_change_password = True
@@ -194,9 +252,18 @@ class AdminUserSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         password = validated_data.pop('password', None)
         assigned_courses = validated_data.pop('assigned_courses', None)
+        assigned_faculties = validated_data.pop('assigned_faculties', None)
+        assigned_unit_ids = self.initial_data.get('assigned_course_units') or self.initial_data.get('course_units')
+
         user = super().update(instance, validated_data)
         if assigned_courses is not None:
             user.assigned_courses.set(assigned_courses)
+        if assigned_faculties is not None:
+            user.assigned_faculties.set(assigned_faculties)
+        if assigned_unit_ids is not None:
+            from .models import CourseUnit
+            units = CourseUnit.objects.filter(id__in=assigned_unit_ids)
+            user.assigned_course_units.set(units)
         if password and str(password).strip():
             user.set_password(str(password).strip())
             user.save()
@@ -220,6 +287,7 @@ class AdminUserSerializer(serializers.ModelSerializer):
             unit_course_ids = list(instance.assigned_course_units.filter(course__isnull=False).values_list('course_id', flat=True).distinct())
             existing = set(data.get('assigned_courses') or [])
             data['assigned_courses'] = sorted(list(existing.union(unit_course_ids)))
+            data['assigned_course_units'] = list(instance.assigned_course_units.values_list('id', flat=True))
         return data
 
     def _get_clearance(self, obj):

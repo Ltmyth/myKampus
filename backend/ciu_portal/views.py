@@ -5,6 +5,7 @@ from django.db import models
 from django.utils import timezone
 from django.http import HttpResponse
 from rest_framework import viewsets, status, permissions, generics, serializers
+from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
@@ -151,16 +152,40 @@ class ChangePasswordView(generics.GenericAPIView):
             'user': serializer.data
         })
 
+class VerifyPasswordView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        password = request.data.get('password')
+        if not password:
+            return Response({'detail': 'Password is required to unlock your session.'}, status=status.HTTP_400_BAD_REQUEST)
+        user = request.user
+        if not user.check_password(str(password).strip()):
+            log_system_event(user, "IDLE_REAUTH_FAILED", level="WARNING", details="Failed idle re-authentication attempt.")
+            return Response({'detail': 'Invalid password. Please enter your correct password.', 'verified': False}, status=status.HTTP_400_BAD_REQUEST)
+        
+        log_system_event(user, "IDLE_REAUTH_SUCCESS", level="INFO", details=f"User {user.username} re-authenticated successfully after idle timeout.")
+        return Response({'detail': 'Password verified successfully.', 'verified': True})
+
 def get_user_assigned_faculties(user):
     if not user or not user.is_authenticated:
         return Faculty.objects.none()
     if user.role in ['admin', 'platform_coordinator', 'registrar', 'dvc', 'vc']:
         return Faculty.objects.all()
     
+    if user.role == 'lecturer':
+        facs = Faculty.objects.filter(
+            models.Q(id=user.faculty_id) |
+            models.Q(assigned_lecturers=user) |
+            models.Q(courses__units__lecturers=user)
+        ).distinct()
+        return facs
+
     facs = Faculty.objects.filter(
         models.Q(id=user.faculty_id) |
         models.Q(dean=user) |
-        models.Q(secretary=user)
+        models.Q(secretary=user) |
+        models.Q(assigned_lecturers=user)
     ).distinct()
 
     if not facs.exists() and getattr(user, 'faculty', None):
@@ -479,9 +504,27 @@ class AdminUserViewSet(viewsets.ModelViewSet):
         faculty_param = self.request.query_params.get('faculty')
         if faculty_param and faculty_param != 'All':
             if str(faculty_param).isdigit():
-                qs = qs.filter(faculty_id=int(faculty_param))
+                f_id = int(faculty_param)
+                qs = qs.filter(models.Q(faculty_id=f_id) | models.Q(assigned_faculties__id=f_id)).distinct()
             else:
-                qs = qs.filter(faculty__code__iexact=faculty_param.strip())
+                qs = qs.filter(models.Q(faculty__code__iexact=faculty_param.strip()) | models.Q(assigned_faculties__code__iexact=faculty_param.strip())).distinct()
+
+        # Filter users/lecturers by name, username (e.g. CIU006), email, or reg_number
+        search_param = (
+            self.request.query_params.get('search') or
+            self.request.query_params.get('q') or
+            self.request.query_params.get('username') or
+            self.request.query_params.get('name')
+        )
+        if search_param and str(search_param).strip():
+            s_val = str(search_param).strip()
+            qs = qs.filter(
+                models.Q(username__icontains=s_val) |
+                models.Q(first_name__icontains=s_val) |
+                models.Q(last_name__icontains=s_val) |
+                models.Q(email__icontains=s_val) |
+                models.Q(reg_number__icontains=s_val)
+            ).distinct()
 
         course_param = self.request.query_params.get('course') or self.request.query_params.get('course_id')
         if course_param and str(course_param).strip() and str(course_param).strip() != 'All':
@@ -896,6 +939,35 @@ class AdminUserViewSet(viewsets.ModelViewSet):
         )
         new_staff.set_password(raw_password)
         new_staff.save()
+
+        # Handle multiple faculties assignment
+        assigned_faculties_data = request.data.get('assigned_faculties') or request.data.get('faculties') or []
+        if isinstance(assigned_faculties_data, str):
+            try:
+                import json
+                assigned_faculties_data = json.loads(assigned_faculties_data)
+            except Exception:
+                assigned_faculties_data = [assigned_faculties_data]
+        if assigned_faculties_data:
+            fac_objs = Faculty.objects.filter(
+                models.Q(id__in=[int(x) for x in assigned_faculties_data if str(x).isdigit()]) |
+                models.Q(code__in=[str(x).strip() for x in assigned_faculties_data if not str(x).isdigit()])
+            )
+            new_staff.assigned_faculties.set(fac_objs)
+        elif faculty:
+            new_staff.assigned_faculties.add(faculty)
+
+        # Handle multiple course units assignment
+        assigned_units_data = request.data.get('assigned_course_units') or request.data.get('course_units') or []
+        if isinstance(assigned_units_data, str):
+            try:
+                import json
+                assigned_units_data = json.loads(assigned_units_data)
+            except Exception:
+                assigned_units_data = [assigned_units_data]
+        if assigned_units_data:
+            cu_objs = CourseUnit.objects.filter(id__in=[int(x) for x in assigned_units_data if str(x).isdigit()])
+            new_staff.assigned_course_units.set(cu_objs)
 
         if faculty:
             if role == 'dean' and not faculty.dean:
@@ -2143,9 +2215,15 @@ class CourseViewSet(viewsets.ModelViewSet):
             assigned_facs = get_user_assigned_faculties(user)
             qs = Course.objects.filter(faculty__in=assigned_facs)
         elif user.role == 'lecturer':
+            assigned_facs = get_user_assigned_faculties(user)
             qs = Course.objects.filter(
-                models.Q(units__lecturers=user) | models.Q(id__in=user.assigned_courses.values_list('id', flat=True))
-            ).distinct()
+                models.Q(faculty__in=assigned_facs) |
+                models.Q(units__lecturers=user) |
+                models.Q(id__in=user.assigned_courses.values_list('id', flat=True))
+            )
+            if assigned_facs.exists():
+                qs = qs.filter(faculty__in=assigned_facs)
+            qs = qs.distinct()
         elif user.role == 'student':
             assigned_courses_qs = Course.objects.filter(
                 models.Q(assigned_students=user) | models.Q(applications__student=user, applications__status='approved')
@@ -2409,7 +2487,13 @@ class CourseUnitViewSet(viewsets.ModelViewSet):
                 student_courses = Course.objects.none()
             qs = CourseUnit.objects.filter(course__in=student_courses)
         elif user.role == 'lecturer':
-            qs = CourseUnit.objects.filter(lecturers=user).distinct()
+            assigned_facs = get_user_assigned_faculties(user)
+            qs = CourseUnit.objects.filter(
+                models.Q(lecturers=user) | models.Q(course__faculty__in=assigned_facs)
+            )
+            if assigned_facs.exists():
+                qs = qs.filter(course__faculty__in=assigned_facs)
+            qs = qs.distinct()
         else:
             qs = CourseUnit.objects.all()
 
@@ -2983,12 +3067,21 @@ class ExamViewSet(viewsets.ModelViewSet):
                 models.Q(academic_year__iexact=student_acad) | models.Q(academic_year__isnull=True) | models.Q(academic_year__iexact='All') | models.Q(academic_year='')
             ).distinct().order_by('-created_at')
         elif user.role == 'lecturer':
+            assigned_facs = get_user_assigned_faculties(user)
             qs = Exam.objects.filter(
                 models.Q(lecturer=user) |
                 models.Q(course__units__lecturers=user) |
                 models.Q(course_unit__lecturers=user) |
-                models.Q(additional_course_units__lecturers=user)
-            ).distinct().order_by('-created_at')
+                models.Q(additional_course_units__lecturers=user) |
+                models.Q(course__faculty__in=assigned_facs) |
+                models.Q(course_unit__course__faculty__in=assigned_facs)
+            )
+            if assigned_facs.exists():
+                qs = qs.filter(
+                    models.Q(course__faculty__in=assigned_facs) |
+                    models.Q(course_unit__course__faculty__in=assigned_facs)
+                )
+            qs = qs.distinct().order_by('-created_at')
         else:
             qs = Exam.objects.all().order_by('-created_at')
 
@@ -3082,6 +3175,9 @@ class ExamViewSet(viewsets.ModelViewSet):
                 serializer.validated_data['year_of_study'] = course_unit.year_of_study
             if semester == 0 or 'semester' not in serializer.validated_data:
                 serializer.validated_data['semester'] = course_unit.semester
+            title = serializer.validated_data.get('title', '').strip()
+            if course_unit.name and not title.lower().endswith(course_unit.name.lower()) and course_unit.name.lower() not in title.lower():
+                serializer.validated_data['title'] = f"{title} - {course_unit.name}"
 
         if user.role == 'lecturer':
             course = serializer.validated_data.get('course')
@@ -3406,6 +3502,8 @@ class ExamViewSet(viewsets.ModelViewSet):
             course = Course.objects.first()
 
         course_unit = CourseUnit.objects.filter(id=course_unit_id).first() if course_unit_id else None
+        if course_unit and course_unit.name and course_unit.name.lower() not in title.lower():
+            title = f"{title} - {course_unit.name}"
 
         exam = Exam.objects.create(
             course=course,
@@ -3647,9 +3745,12 @@ class ExamAttemptViewSet(viewsets.ReadOnlyModelViewSet):
         now = timezone.now()
         exam = attempt.exam
 
-        # Hard Due Date Cutoff
-        if exam.due_date and now > exam.due_date:
+        # Hard Due Date Cutoff (with 5-minute network grace window for progress auto-submissions)
+        if exam.due_date and now > (exam.due_date + timezone.timedelta(minutes=5)):
             return Response({'detail': 'Exam Access Denied: The final deadline (due date) for this exam has passed. Submissions are closed.'}, status=status.HTTP_400_BAD_REQUEST)
+        if exam.due_date and now > exam.due_date:
+            is_late = True
+            auto_submitted_reason = auto_submitted_reason or 'Scheduled exam due date reached to the dot'
 
         answers = request.data.get('answers', {})
         tab_switches = request.data.get('tab_switches', 0)
@@ -3794,12 +3895,21 @@ class TestViewSet(viewsets.ModelViewSet):
                 models.Q(academic_year__iexact=student_acad) | models.Q(academic_year__isnull=True) | models.Q(academic_year__iexact='All') | models.Q(academic_year='')
             ).distinct().order_by('-created_at')
         elif user.role == 'lecturer':
+            assigned_facs = get_user_assigned_faculties(user)
             qs = Test.objects.filter(
                 models.Q(lecturer=user) |
                 models.Q(course__units__lecturers=user) |
                 models.Q(course_unit__lecturers=user) |
-                models.Q(additional_course_units__lecturers=user)
-            ).distinct().order_by('-created_at')
+                models.Q(additional_course_units__lecturers=user) |
+                models.Q(course__faculty__in=assigned_facs) |
+                models.Q(course_unit__course__faculty__in=assigned_facs)
+            )
+            if assigned_facs.exists():
+                qs = qs.filter(
+                    models.Q(course__faculty__in=assigned_facs) |
+                    models.Q(course_unit__course__faculty__in=assigned_facs)
+                )
+            qs = qs.distinct().order_by('-created_at')
         else:
             qs = Test.objects.all().order_by('-created_at')
 
@@ -3897,6 +4007,9 @@ class TestViewSet(viewsets.ModelViewSet):
                 serializer.validated_data['year_of_study'] = course_unit.year_of_study
             if semester == 0 or 'semester' not in serializer.validated_data:
                 serializer.validated_data['semester'] = course_unit.semester
+            title = serializer.validated_data.get('title', '').strip()
+            if course_unit.name and not title.lower().endswith(course_unit.name.lower()) and course_unit.name.lower() not in title.lower():
+                serializer.validated_data['title'] = f"{title} - {course_unit.name}"
 
         if user.role == 'lecturer':
             course = serializer.validated_data.get('course')
@@ -4258,6 +4371,8 @@ class TestViewSet(viewsets.ModelViewSet):
             course = Course.objects.first()
 
         course_unit = CourseUnit.objects.filter(id=course_unit_id).first() if course_unit_id else None
+        if course_unit and course_unit.name and course_unit.name.lower() not in title.lower():
+            title = f"{title} - {course_unit.name}"
 
         test_obj = Test.objects.create(
             course=course,
@@ -4518,9 +4633,12 @@ class TestAttemptViewSet(viewsets.ReadOnlyModelViewSet):
         now = timezone.now()
         test_obj = attempt.test
 
-        # Hard Due Date Cutoff
-        if test_obj.due_date and now > test_obj.due_date:
+        # Hard Due Date Cutoff (with 5-minute network grace window for progress auto-submissions)
+        if test_obj.due_date and now > (test_obj.due_date + timezone.timedelta(minutes=5)):
             return Response({'detail': 'Test Access Denied: The final deadline (due date) for this test has passed. Submissions are closed.'}, status=status.HTTP_400_BAD_REQUEST)
+        if test_obj.due_date and now > test_obj.due_date:
+            is_late = True
+            auto_submitted_reason = auto_submitted_reason or 'Scheduled test due date reached to the dot'
 
         answers = request.data.get('answers', {})
         tab_switches = request.data.get('tab_switches', 0)
@@ -5439,7 +5557,7 @@ class ProctoringMonitorViewSet(viewsets.ModelViewSet):
     serializer_class = ProctorSnapshotSerializer
 
     def get_permissions(self):
-        if self.action == 'stream_snapshot':
+        if self.action in ['stream_snapshot', 'log_tab_switch']:
             return [permissions.IsAuthenticated(), IsStudent()]
         return [permissions.IsAuthenticated(), IsStaffUser()]
 
@@ -5480,6 +5598,35 @@ class ProctoringMonitorViewSet(viewsets.ModelViewSet):
             log_system_event(student, "PROCTORING_FLAGGED", level="WARNING", details=f"Candidate camera inactive or high tab switches ({tab_switches}) during test/exam.")
 
         return Response(ProctorSnapshotSerializer(snapshot).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=['post'])
+    def log_tab_switch(self, request):
+        student = request.user
+        test_id = request.data.get('test_id')
+        exam_id = request.data.get('exam_id')
+        attempt_id = request.data.get('attempt_id')
+        current_switches = int(request.data.get('tab_switches', 1))
+        title = request.data.get('title', 'Assessment')
+
+        if exam_id:
+            att = ExamAttempt.objects.filter(id=attempt_id, student=student).first() if attempt_id else ExamAttempt.objects.filter(exam_id=exam_id, student=student, completed_at__isnull=True).first()
+            if att:
+                att.tab_switches_count = max(att.tab_switches_count, current_switches)
+                att.save(update_fields=['tab_switches_count'])
+        elif test_id:
+            att = TestAttempt.objects.filter(id=attempt_id, student=student).first() if attempt_id else TestAttempt.objects.filter(test_id=test_id, student=student, completed_at__isnull=True).first()
+            if att:
+                att.tab_switches_count = max(att.tab_switches_count, current_switches)
+                att.save(update_fields=['tab_switches_count'])
+        elif attempt_id:
+            att = ExamAttempt.objects.filter(id=attempt_id, student=student).first() or TestAttempt.objects.filter(id=attempt_id, student=student).first()
+            if att:
+                att.tab_switches_count = max(att.tab_switches_count, current_switches)
+                att.save(update_fields=['tab_switches_count'])
+
+        msg = f"Candidate {student.username} ({student.get_full_name() or student.username}) switched browser tab/window during {title}. Tab Switch #{current_switches} logged."
+        log_system_event(student, "TAB_SWITCH_SECURITY_ALERT", level="WARNING", details=msg)
+        return Response({'detail': msg, 'tab_switches': current_switches}, status=status.HTTP_200_OK)
 
     @action(detail=False, methods=['get'])
     def live_feeds(self, request):

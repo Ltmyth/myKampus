@@ -339,6 +339,16 @@ export default function TestPortalPage() {
         if (parentC) setSelectedCourse(parentC.id);
         if (u.year_of_study) setYearOfStudy(u.year_of_study);
         if (u.semester) setTestSemester(String(u.semester));
+        if (u.name) {
+          setTitle(prev => {
+            const trimmed = prev.trim();
+            if (!trimmed) return `Course Test - ${u.name}`;
+            if (!trimmed.toLowerCase().includes(u.name.toLowerCase())) {
+              return `${trimmed} - ${u.name}`;
+            }
+            return prev;
+          });
+        }
       }
     }
   };
@@ -462,8 +472,14 @@ export default function TestPortalPage() {
     setSubmitting(true);
 
     try {
+      let finalTitle = title.trim();
+      const unitObj = courseUnits.find(u => String(u.id) === String(selectedCourseUnit));
+      if (unitObj && unitObj.name && !finalTitle.toLowerCase().includes(unitObj.name.toLowerCase())) {
+        finalTitle = `${finalTitle} - ${unitObj.name}`;
+      }
+
       const payload = {
-        title,
+        title: finalTitle,
         course: selectedCourse ? parseInt(selectedCourse) : (finalCourseIds[0] || null),
         target_course_ids: finalCourseIds.map(id => parseInt(id)),
         course_unit: selectedCourseUnit ? parseInt(selectedCourseUnit) : null,
@@ -536,7 +552,12 @@ export default function TestPortalPage() {
           setSubmitting(false);
           return;
         }
-        formData.append('title', txtTitle || 'Aiken Imported Test');
+        let testImportTitle = (txtTitle || 'Aiken Imported Test').trim();
+        const cuObj = courseUnits.find(u => String(u.id) === String(txtCourseUnit));
+        if (cuObj && cuObj.name && !testImportTitle.toLowerCase().includes(cuObj.name.toLowerCase())) {
+          testImportTitle = `${testImportTitle} - ${cuObj.name}`;
+        }
+        formData.append('title', testImportTitle);
         formData.append('course_unit', txtCourseUnit);
         formData.append('category', txtCategory);
         formData.append('duration_minutes', txtDuration);
@@ -1371,6 +1392,8 @@ ANSWER: C`;
                       {filteredTests.map((testItem) => {
                         const myAttempt = attempts.find(a => a.test === testItem.id);
                         const isExpanded = expandedTestIds.includes(testItem.id);
+                        const studentTuitionPaid = Number(user?.tuition_paid_percentage ?? user?.effective_tuition_percentage ?? 0);
+                        const isTestCleared = (studentTuitionPaid >= 50.0) || Boolean(user?.is_test_cleared) || Boolean(user?.is_temp_cleared);
 
                         return (
                           <Fragment key={testItem.id}>
@@ -1499,9 +1522,12 @@ ANSWER: C`;
                                     <button
                                       onClick={() => startTestAttempt(testItem.id)}
                                       disabled={testItem.questions_count === 0}
-                                      className="px-2.5 py-1 bg-brand-light hover:bg-brand-medium text-white text-[10px] font-bold rounded-lg shadow-xs transition-all disabled:opacity-50 cursor-pointer"
+                                      className={`px-2.5 py-1 text-white text-[10px] font-bold rounded-lg shadow-xs transition-all disabled:opacity-50 cursor-pointer ${
+                                        !isTestCleared ? 'bg-amber-600 hover:bg-amber-700' : 'bg-brand-light hover:bg-brand-medium'
+                                      }`}
+                                      title={!isTestCleared ? '50% Tuition Clearance Required to attempt continuous tests' : 'Launch Test'}
                                     >
-                                      Launch
+                                      {!isTestCleared ? '🔒 50% Clearance Req.' : 'Launch'}
                                     </button>
                                   )}
                                 </div>

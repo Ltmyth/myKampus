@@ -1240,7 +1240,11 @@ export default function FacultyManagementPage() {
         if (user?.faculty && (fac.id === user.faculty || String(fac.id) === String(user.faculty))) return true;
         if (user?.faculty_code && fac.code === user.faculty_code) return true;
         if (user?.faculty_name && fac.name === user.faculty_name) return true;
-        if (isLecturer && (courses.some(c => (c.faculty === fac.id || c.faculty_code === fac.code)) || courseUnits.some(u => (u.faculty_id === fac.id || u.faculty_code === fac.code)))) return true;
+        if (isLecturer) {
+          if (Array.isArray(user?.assigned_faculties) && user.assigned_faculties.some(f => f === fac.id || f?.id === fac.id)) return true;
+          if (Array.isArray(user?.assigned_faculty_details) && user.assigned_faculty_details.some(f => f.id === fac.id || f.code === fac.code)) return true;
+          if (courses.some(c => (c.faculty === fac.id || c.faculty_code === fac.code)) || courseUnits.some(u => (u.faculty_id === fac.id || u.faculty_code === fac.code))) return true;
+        }
         return false;
       })
     : faculties;
@@ -1258,9 +1262,12 @@ export default function FacultyManagementPage() {
       }
     }
     if (isLecturer) {
-      const lecturerFacCode = user?.faculty_code;
+      const assignedFacCodes = [
+        user?.faculty_code,
+        ...(Array.isArray(user?.assigned_faculty_details) ? user.assigned_faculty_details.map(f => f.code) : [])
+      ].filter(Boolean);
       const isAssignedUnit = u.lecturer_details?.some(l => l.id === user.id) || u.lecturers?.includes(user.id);
-      if (lecturerFacCode && u.faculty_code && u.faculty_code !== lecturerFacCode && !isAssignedUnit) return false;
+      if (assignedFacCodes.length > 0 && u.faculty_code && !assignedFacCodes.includes(u.faculty_code) && !isAssignedUnit) return false;
     }
     const matchesFaculty = selectedUnitFacultyFilter === 'All' ||
       u.faculty_code === selectedUnitFacultyFilter ||
@@ -2276,7 +2283,7 @@ export default function FacultyManagementPage() {
                 >
                   <option value="All">All Lecturers ({lecturers.length})</option>
                   {lecturers.map(l => (
-                    <option key={l.id} value={l.id}>{l.first_name || l.username} {l.last_name || ''}</option>
+                    <option key={l.id} value={l.id}>{l.first_name || l.username} {l.last_name || ''} (@{l.username})</option>
                   ))}
                 </select>
               </div>
@@ -2458,7 +2465,7 @@ export default function FacultyManagementPage() {
                       <option value="">Select Lecturer...</option>
                       {lecturers.map((lec) => (
                         <option key={lec.id} value={lec.id}>
-                          {lec.first_name || lec.username} {lec.last_name} ({lec.email})
+                          {lec.first_name || lec.username} {lec.last_name || ''} (@{lec.username}) {lec.email ? `· ${lec.email}` : ''}
                         </option>
                       ))}
                     </select>
@@ -3146,7 +3153,7 @@ export default function FacultyManagementPage() {
                   <option value="">Select Lecturer...</option>
                   {lecturers.map((lec) => (
                     <option key={lec.id} value={lec.id}>
-                      {lec.first_name || lec.username} {lec.last_name} ({lec.email})
+                      {lec.first_name || lec.username} {lec.last_name || ''} (@{lec.username}) {lec.email ? `· ${lec.email}` : ''}
                     </option>
                   ))}
                 </select>

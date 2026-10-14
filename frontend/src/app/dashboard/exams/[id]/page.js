@@ -37,20 +37,54 @@ export default function TakeExamPage() {
 
   const timerRef = useRef(null);
   const autoSubmittedRef = useRef(false);
+  const attemptRef = useRef(null);
+  const examRef = useRef(null);
+  const tabSwitchesRef = useRef(0);
+
+  // Webcam Proctoring Refs & States
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+  const [cameraActive, setCameraActive] = useState(false);
+
+  useEffect(() => {
+    attemptRef.current = attempt;
+  }, [attempt]);
+
+  useEffect(() => {
+    examRef.current = exam;
+  }, [exam]);
+
+  useEffect(() => {
+    tabSwitchesRef.current = tabSwitches;
+  }, [tabSwitches]);
 
   useEffect(() => {
     if (examId) {
       loadExamAttempt();
     }
 
-    // Security Tab tracking
+    // Security Tab tracking with real-time audit logging
     const handleVisibilityChange = () => {
-      if (document.hidden) {
+      if (document.hidden && !autoSubmittedRef.current) {
         setTabSwitches(prev => {
           const updated = prev + 1;
+          tabSwitchesRef.current = updated;
           setShowSecurityWarning(true);
+
+          // Real-time security event logging to backend proctoring monitor
+          if (attemptRef.current?.id || examId) {
+            api.post('/proctoring-monitor/log_tab_switch/', {
+              exam_id: parseInt(examId),
+              attempt_id: attemptRef.current?.id,
+              tab_switches: updated,
+              title: examRef.current?.title || 'Examination'
+            }).catch(err => {
+              console.warn('Proctoring log tab switch error:', err);
+            });
+          }
+
           if (updated >= 3) {
-            autoSubmitExam(null, null, updated, 'Security Lockdown: Exceeded maximum allowed tab switches (3/3).', 'security logs');
+            autoSubmitExam(attemptRef.current?.id, null, updated, 'Security Lockdown: Exceeded maximum allowed tab switches (3/3).', 'security logs');
           }
           return updated;
         });
@@ -64,6 +98,55 @@ export default function TakeExamPage() {
     };
   }, [examId]);
 
+  // Live Webcam Stream Capture Effect
+  useEffect(() => {
+    if (loading || !attempt || !proctoringSetting.is_proctoring_enabled) return;
+
+    let streamObj = null;
+    let captureInterval = null;
+
+    async function startCamera() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 320, height: 240 } });
+        streamObj = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+        }
+        setCameraActive(true);
+
+        captureInterval = setInterval(() => {
+          if (videoRef.current && canvasRef.current) {
+            const video = videoRef.current;
+            const canvas = canvasRef.current;
+            canvas.width = 320;
+            canvas.height = 240;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(video, 0, 0, 320, 240);
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.5);
+
+            api.post('/proctoring-monitor/stream_snapshot/', {
+              image_data: dataUrl,
+              exam_id: parseInt(examId),
+              tab_switches: tabSwitchesRef.current || tabSwitches,
+              is_camera_active: true
+            }).catch(() => {});
+          }
+        }, 10000);
+      } catch (err) {
+        setCameraActive(false);
+      }
+    }
+
+    startCamera();
+
+    return () => {
+      if (captureInterval) clearInterval(captureInterval);
+      if (streamObj) {
+        streamObj.getTracks().forEach(track => track.stop());
+      }
+    };
+  }, [loading, attempt, proctoringSetting.is_proctoring_enabled, examId, tabSwitches]);
+
   // Timer countdown hook (strictly followed to the dot: auto-submit upon reaching 0)
   useEffect(() => {
     if (timeLeft > 0) {
@@ -71,14 +154,14 @@ export default function TakeExamPage() {
         setTimeLeft(prev => {
           if (prev <= 1) {
             clearInterval(timerRef.current);
-            autoSubmitExam(null, null, tabSwitches, 'Duration Timeout: The allocated examination duration has expired.', 'system');
+            autoSubmitExam(null, null, tabSwitchesRef.current, 'Exam End Time Reached: Assessment duration or scheduled cutoff reached.', 'system');
             return 0;
           }
           return prev - 1;
         });
       }, 1000);
     } else if (timeLeft <= 0 && attempt && !autoSubmittedRef.current && !loading) {
-      autoSubmitExam(null, null, tabSwitches, 'Duration Timeout: The allocated examination duration has expired.', 'system');
+      autoSubmitExam(null, null, tabSwitchesRef.current, 'Exam End Time Reached: Assessment duration or scheduled cutoff reached.', 'system');
     }
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
@@ -119,23 +202,24 @@ export default function TakeExamPage() {
         }
       }
 
-      // Calculate time remaining based on duration and start time
-      const startTime = new Date(attemptData.started_at).getTime();
-      const endTime = startTime + examData.duration_minutes * 60 * 1000;
-      const now = new Date().getTime();
-      const remainingSeconds = Math.max(0, Math.floor((endTime - now) / 1000));
-      const hasDueDate = !!examData.due_date;
-      const dueTimestamp = hasDueDate ? new Date(examData.due_date).getTime() : null;
-      const isPastDueDate = dueTimestamp && now >= dueTimestamp;
+      // Calculate time remaining based on duration, start time, and hard due_date cutoff
+      const startTime = new Date(attemptData.started_at || attemptData.start_time || Date.now()).getTime();
+      const allottedEndTime = startTime + (examData.duration_minutes || 60) * 60 * 1000;
+      const now = Date.now();
+      const dueTimestamp = examData.due_date ? new Date(examData.due_date).getTime() : null;
+      // Late start allowed before due_date, but exam end time is strictly followed to the dot for auto-submission
+      const effectiveEndTime = dueTimestamp ? Math.min(allottedEndTime, dueTimestamp) : allottedEndTime;
+      const remainingSeconds = Math.max(0, Math.floor((effectiveEndTime - now) / 1000));
 
-      if (isPastDueDate) {
-        autoSubmitExam(attemptData.id, attemptData.answers, 0, 'Assessment Window Closed: Final Due Date Reached');
+      if (dueTimestamp && now >= dueTimestamp) {
+        setTimeLeft(0);
+        autoSubmitExam(attemptData.id, attemptData.answers, 0, 'Assessment Window Closed: Final Due Date Reached', 'system');
         return;
       }
 
       if (remainingSeconds <= 0) {
         setTimeLeft(0);
-        autoSubmitExam(attemptData.id, attemptData.answers, 0, 'Duration Timeout: The allocated examination duration has expired.');
+        autoSubmitExam(attemptData.id, attemptData.answers, 0, 'Duration Timeout: The allocated examination duration has expired.', 'system');
         return;
       } else {
         setTimeLeft(remainingSeconds);
@@ -160,14 +244,15 @@ export default function TakeExamPage() {
     setConfirmCheckbox(false);
   };
 
-  const autoSubmitExam = async (attId = null, currentAnswers = null, switches = tabSwitches, reason = 'Duration Timeout: The allocated examination duration has expired.', explicitSubmissionType = null) => {
+  const autoSubmitExam = async (attId = null, currentAnswers = null, switches = null, reason = 'Duration Timeout: The allocated examination duration has expired.', explicitSubmissionType = null) => {
     if (autoSubmittedRef.current) return;
+    const finalAttId = attId || attemptRef.current?.id || attempt?.id;
+    if (!finalAttId) return; // Strict guard: no attempt launched = no auto-submission
     autoSubmittedRef.current = true;
-    const finalAttId = attId || attempt?.id;
     const finalAnswers = currentAnswers || answers;
-    if (!finalAttId) return;
+    const finalSwitches = switches !== null ? switches : (tabSwitchesRef.current || tabSwitches);
 
-    performSubmit(finalAttId, finalAnswers, switches, reason, explicitSubmissionType);
+    performSubmit(finalAttId, finalAnswers, finalSwitches, reason, explicitSubmissionType);
   };
 
   const performSubmit = async (attId, answersPayload, switches = tabSwitches, reason = null, explicitSubmissionType = null) => {
@@ -180,7 +265,7 @@ export default function TakeExamPage() {
       if (!subType) {
         if (reason && (reason.toLowerCase().includes('security') || reason.toLowerCase().includes('tab switch') || reason.toLowerCase().includes('lockdown') || reason.toLowerCase().includes('blur'))) {
           subType = 'security logs';
-        } else if (reason && (reason.toLowerCase().includes('duration') || reason.toLowerCase().includes('timeout') || reason.toLowerCase().includes('window closed') || reason.toLowerCase().includes('deadline'))) {
+        } else if (reason && (reason.toLowerCase().includes('duration') || reason.toLowerCase().includes('timeout') || reason.toLowerCase().includes('window closed') || reason.toLowerCase().includes('deadline') || reason.toLowerCase().includes('end time'))) {
           subType = 'system';
         } else {
           subType = 'manual';
@@ -252,8 +337,20 @@ export default function TakeExamPage() {
             <span className="hidden md:inline text-red-300">| Final Examination stream monitored by Academic Registrar & System Admin</span>
           </div>
           <span className="bg-red-900 px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase border border-red-700">
-            Anti-Cheat ON
+            {cameraActive ? 'Camera Connected 🟢' : 'Anti-Cheat ON'}
           </span>
+        </div>
+      )}
+
+      {/* Floating Proctor Webcam Box */}
+      {proctoringSetting.is_proctoring_enabled && (
+        <div className="fixed bottom-4 right-4 z-40 w-40 h-28 bg-slate-900 border-2 border-red-600 rounded-2xl overflow-hidden shadow-2xl flex items-center justify-center">
+          <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
+          <canvas ref={canvasRef} className="hidden" />
+          <div className="absolute top-1 left-1 px-1.5 py-0.5 bg-black/80 text-white text-[9px] font-bold rounded flex items-center space-x-1">
+            <span className="w-1.5 h-1.5 bg-red-500 rounded-full animate-ping"></span>
+            <span>PROCTOR</span>
+          </div>
         </div>
       )}
 
