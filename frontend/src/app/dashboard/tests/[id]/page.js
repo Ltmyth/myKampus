@@ -23,6 +23,20 @@ export default function TestRunnerPage({ params }) {
   const [flagged, setFlagged] = useState({});
   const [tabSwitches, setTabSwitches] = useState(0);
   const [timeLeftSeconds, setTimeLeftSeconds] = useState(0);
+
+  // 3-Minute Network Grace Period State (Duration Expired)
+  const [inGracePeriod, setInGracePeriod] = useState(false);
+  const [graceTimeLeft, setGraceTimeLeft] = useState(180); // 3 minutes = 180 seconds
+
+  // Ugandan Local Time & Clock Skew Tracking
+  const [serverTimeEAT, setServerTimeEAT] = useState('');
+  const [clockSkewMs, setClockSkewMs] = useState(0);
+  const [showSkewWarning, setShowSkewWarning] = useState(false);
+
+  // Network & Draft Resilience
+  const [isOffline, setIsOffline] = useState(typeof window !== 'undefined' ? !navigator.onLine : false);
+  const [submissionFailed, setSubmissionFailed] = useState(false);
+
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [showLateStartWarning, setShowLateStartWarning] = useState(false);
   const [securityNotice, setSecurityNotice] = useState('');
@@ -57,6 +71,33 @@ export default function TestRunnerPage({ params }) {
     tabSwitchesRef.current = tabSwitches;
   }, [tabSwitches]);
 
+  // Live Kampala EAT Clock Updater
+  useEffect(() => {
+    const updateEAT = () => {
+      try {
+        const d = new Date(Date.now() + clockSkewMs);
+        setServerTimeEAT(d.toLocaleTimeString('en-GB', { timeZone: 'Africa/Kampala', hour12: false }));
+      } catch (_) {
+        setServerTimeEAT(new Date().toLocaleTimeString());
+      }
+    };
+    updateEAT();
+    const interval = setInterval(updateEAT, 1000);
+    return () => clearInterval(interval);
+  }, [clockSkewMs]);
+
+  // Offline / Online Connectivity Listener
+  useEffect(() => {
+    const handleOnline = () => setIsOffline(false);
+    const handleOffline = () => setIsOffline(true);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
   useEffect(() => {
     initTestRunner();
   }, [testId]);
@@ -64,12 +105,24 @@ export default function TestRunnerPage({ params }) {
   async function initTestRunner() {
     try {
       setLoading(true);
-      const [testData, qData, attemptData, procData] = await Promise.all([
+      // Fetch test details, questions, start attempt, proctoring, and official Kampala server time
+      const [testData, qData, attemptData, procData, serverTime] = await Promise.all([
         api.get(`/tests/${testId}/`),
         api.get(`/tests/${testId}/questions/`),
         api.post(`/tests/${testId}/start_attempt/`),
-        api.get('/proctoring-settings/').catch(() => ({ is_proctoring_enabled: true }))
+        api.get('/proctoring-settings/').catch(() => ({ is_proctoring_enabled: true })),
+        api.get('/server-time/').catch(() => null)
       ]);
+
+      if (serverTime?.iso_timestamp) {
+        const sNow = new Date(serverTime.iso_timestamp).getTime();
+        const cNow = Date.now();
+        const diff = sNow - cNow;
+        setClockSkewMs(diff);
+        if (Math.abs(diff) > 120000) { // > 2 minutes drift
+          setShowSkewWarning(true);
+        }
+      }
 
       setTestObj(testData);
       setQuestions(qData || []);
@@ -86,7 +139,8 @@ export default function TestRunnerPage({ params }) {
         const scheduledStartMs = new Date(testData.scheduled_start).getTime();
         const durationMs = (testData.duration_minutes || 30) * 60 * 1000;
         const oneThirdDurationMs = durationMs / 3;
-        const delayFromStart = Date.now() - scheduledStartMs;
+        const nowEAT = Date.now() + (serverTime?.iso_timestamp ? (new Date(serverTime.iso_timestamp).getTime() - Date.now()) : 0);
+        const delayFromStart = nowEAT - scheduledStartMs;
         if (delayFromStart > oneThirdDurationMs) {
           setShowLateStartWarning(true);
         }
@@ -103,27 +157,28 @@ export default function TestRunnerPage({ params }) {
         } catch (e) {}
       }
 
-      // Calculate initial timer value (in seconds)
-      const startedAt = new Date(attemptData.started_at || attemptData.start_time || Date.now()).getTime();
+      // Calculate initial timer value (in seconds) synchronized with server time
+      const now = Date.now() + (serverTime?.iso_timestamp ? (new Date(serverTime.iso_timestamp).getTime() - Date.now()) : 0);
+      const startedAt = new Date(attemptData.started_at || attemptData.start_time || now).getTime();
       const allottedEndTime = startedAt + (testData.duration_minutes || 30) * 60 * 1000;
-      const now = Date.now();
       const dueTimestamp = testData.due_date ? new Date(testData.due_date).getTime() : null;
-      // Late start allowed before due_date, but test end time is strictly followed to the dot for auto-submission
       const effectiveEndTime = dueTimestamp ? Math.min(allottedEndTime, dueTimestamp) : allottedEndTime;
-      const remainingSecs = Math.max(0, Math.floor((effectiveEndTime - now) / 1000));
+      const remainingSecs = Math.floor((effectiveEndTime - now) / 1000);
 
-      if (dueTimestamp && now >= dueTimestamp) {
-        setTimeLeftSeconds(0);
-        handleAutoSubmit('Test Window Closed: Final Due Date Reached', null, 'system');
-        return;
-      }
+      const GRACE_PERIOD_SECONDS = 180; // 3 minutes
 
-      if (remainingSecs <= 0) {
+      if (remainingSecs <= -GRACE_PERIOD_SECONDS) {
         setTimeLeftSeconds(0);
-        handleAutoSubmit('Duration Timeout: The allocated test duration has expired.', null, 'system');
+        setInGracePeriod(false);
+        handleAutoSubmit('Test Window Closed: Final Due Date & Grace Period Expired', null, 'system');
         return;
+      } else if (remainingSecs <= 0) {
+        setTimeLeftSeconds(0);
+        setInGracePeriod(true);
+        setGraceTimeLeft(Math.max(1, GRACE_PERIOD_SECONDS + remainingSecs));
       } else {
         setTimeLeftSeconds(remainingSecs);
+        setInGracePeriod(false);
       }
     } catch (err) {
       setSecurityNotice(err.message || 'Unable to launch test session.');
@@ -182,28 +237,49 @@ export default function TestRunnerPage({ params }) {
     };
   }, [loading, activeAttempt, proctoringSetting.is_proctoring_enabled, testId, tabSwitches]);
 
-  // 1. Strict Timer Countdown to the Dot (Immediate auto-submit upon reaching 0)
+  // 1. Regular Timer Countdown
   useEffect(() => {
-    if (loading || !activeAttempt) return;
+    if (loading || !activeAttempt || inGracePeriod) return;
 
     if (timeLeftSeconds > 0) {
       const timerInterval = setInterval(() => {
         setTimeLeftSeconds((prev) => {
           if (prev <= 1) {
             clearInterval(timerInterval);
-            handleAutoSubmit('Test End Time Reached: Assessment duration or scheduled cutoff reached.', null, 'system');
+            // Transition into 3-minute network grace period!
+            setInGracePeriod(true);
+            setGraceTimeLeft(180);
             return 0;
           }
           return prev - 1;
         });
       }, 1000);
       return () => clearInterval(timerInterval);
-    } else if (timeLeftSeconds <= 0 && activeAttempt && !autoSubmittedRef.current) {
-      handleAutoSubmit('Test End Time Reached: Assessment duration or scheduled cutoff reached.', null, 'system');
+    } else if (timeLeftSeconds <= 0 && activeAttempt && !autoSubmittedRef.current && !inGracePeriod) {
+      setInGracePeriod(true);
+      setGraceTimeLeft(180);
     }
-  }, [loading, activeAttempt, timeLeftSeconds]);
+  }, [loading, activeAttempt, timeLeftSeconds, inGracePeriod]);
 
-  // 2. Security Tab Switch & Focus Blur Monitoring with real-time audit logging
+  // 2. 3-Minute Network Grace Period Countdown
+  useEffect(() => {
+    if (loading || !inGracePeriod || autoSubmittedRef.current) return;
+
+    const graceTimer = setInterval(() => {
+      setGraceTimeLeft(prev => {
+        if (prev <= 1) {
+          clearInterval(graceTimer);
+          handleAutoSubmit('Test Duration Timeout (3-Minute Network Grace Period Expired): Auto-submitted with accurate student progress.', null, 'system');
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(graceTimer);
+  }, [loading, inGracePeriod]);
+
+  // 3. Security Tab Switch & Focus Blur Monitoring with real-time audit logging
   useEffect(() => {
     if (loading || !activeAttempt) return;
 
@@ -239,7 +315,7 @@ export default function TestRunnerPage({ params }) {
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
   }, [loading, activeAttempt, testId]);
 
-  // 3. LocalStorage Auto-Sync Backup
+  // 4. LocalStorage Auto-Sync Backup
   useEffect(() => {
     if (!testId || !user) return;
     const draftKey = `ciu_test_draft_${testId}_${user.id}`;
@@ -247,6 +323,7 @@ export default function TestRunnerPage({ params }) {
   }, [answers, flagged, testId, user]);
 
   const handleSelectAnswer = (qId, optionVal) => {
+    if (inGracePeriod) return; // Inputs locked during 3-minute grace period
     setAnswers((prev) => ({
       ...prev,
       [qId]: optionVal
@@ -273,12 +350,13 @@ export default function TestRunnerPage({ params }) {
     setSubmitting(true);
     setSubmitError('');
     setSubmitSuccess('');
+    setSubmissionFailed(false);
 
     let subType = explicitSubmissionType;
     if (!subType) {
       if (reason && (reason.toLowerCase().includes('security') || reason.toLowerCase().includes('tab switch') || reason.toLowerCase().includes('lockdown') || reason.toLowerCase().includes('blur'))) {
         subType = 'security logs';
-      } else if (reason && (reason.toLowerCase().includes('duration') || reason.toLowerCase().includes('timeout') || reason.toLowerCase().includes('window closed') || reason.toLowerCase().includes('deadline') || reason.toLowerCase().includes('end time'))) {
+      } else if (reason && (reason.toLowerCase().includes('duration') || reason.toLowerCase().includes('timeout') || reason.toLowerCase().includes('window closed') || reason.toLowerCase().includes('deadline') || reason.toLowerCase().includes('end time') || reason.toLowerCase().includes('grace'))) {
         subType = 'system';
       } else {
         subType = 'manual';
@@ -305,10 +383,11 @@ export default function TestRunnerPage({ params }) {
         router.push(`/dashboard/tests/${testId}/results?attemptId=${finalAtt.id}`);
       }, 700);
     } catch (err) {
-      const msg = err.message || 'Test submission failed. Please check network connection and try again.';
+      const msg = err.message || 'Test submission failed due to network interruption. Your answers are safely backed up locally. Click "Retry Submission" below.';
       setSubmitError(`⚠️ Submission Error: ${msg}`);
       setSecurityNotice(msg);
-      autoSubmittedRef.current = false;
+      setSubmissionFailed(true);
+      autoSubmittedRef.current = false; // Allow retry!
       setSubmitting(false);
     }
   };
@@ -382,6 +461,74 @@ export default function TestRunnerPage({ params }) {
         </div>
       )}
 
+      {/* Offline Connectivity Warning */}
+      {isOffline && (
+        <div className="bg-red-600 text-white p-3.5 rounded-2xl flex items-center justify-between text-xs font-bold animate-pulse shadow-md">
+          <div className="flex items-center space-x-2">
+            <span className="text-base">📡</span>
+            <span>OFFLINE WARNING: Internet connection lost. All your answers are safely cached locally in your browser. Do not reload or close this tab. Reconnect to submit.</span>
+          </div>
+          <span className="bg-black/30 px-2 py-0.5 rounded text-[10px]">Saved to Local Draft</span>
+        </div>
+      )}
+
+      {/* Clock Skew Warning */}
+      {showSkewWarning && (
+        <div className="bg-amber-500 text-slate-950 p-3 rounded-2xl flex items-center justify-between text-xs font-bold shadow-md animate-fade-in">
+          <div className="flex items-center space-x-2">
+            <span className="text-base">⏰</span>
+            <span>
+              DEVICE CLOCK DRIFT: Your computer clock differs from Ugandan Official Time (Kampala EAT UTC+3) by ~{Math.round(Math.abs(clockSkewMs)/60000)} min. Assessment timing is locked to official university server time.
+            </span>
+          </div>
+          <button onClick={() => setShowSkewWarning(false)} className="px-2 py-0.5 bg-black/20 hover:bg-black/30 rounded text-[11px] cursor-pointer">
+            Dismiss
+          </button>
+        </div>
+      )}
+
+      {/* 3-Minute Network Grace Period Active Banner */}
+      {inGracePeriod && (
+        <div className="bg-amber-50 border-2 border-amber-500 text-amber-950 p-4 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-3 shadow-lg animate-pulse">
+          <div className="flex items-center space-x-3">
+            <span className="text-3xl">⏳</span>
+            <div>
+              <p className="font-extrabold text-sm uppercase text-amber-950">
+                Regular Test Duration Ended · 3-Minute Network Grace Period Active
+              </p>
+              <p className="text-xs text-amber-800 font-medium">
+                Questions are locked. Please submit your answers now. The system will automatically record and finalize all your answered progress in <span className="font-mono font-extrabold text-red-600 text-sm">{formatTime(graceTimeLeft)}</span>.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => handleAutoSubmit('Submitted during 3-Minute Network Grace Period', null, 'manual')}
+            className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs rounded-xl shadow-md transition-all shrink-0 cursor-pointer"
+          >
+            ⚡ Submit Test Now ({formatTime(graceTimeLeft)})
+          </button>
+        </div>
+      )}
+
+      {/* Submission Failure / Retry Banner */}
+      {submissionFailed && (
+        <div className="bg-red-50 border-2 border-red-500 text-red-950 p-4 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-3 shadow-lg">
+          <div className="flex items-center space-x-3">
+            <span className="text-2xl">⚠️</span>
+            <div>
+              <p className="font-bold text-xs text-red-900">{submitError}</p>
+              <p className="text-[11px] text-red-700">All your answers are safely preserved in browser local storage. Click below to retry submission now.</p>
+            </div>
+          </div>
+          <button
+            onClick={() => handleAutoSubmit('Retried Submission after Network Interruption', null, 'manual')}
+            className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white font-bold text-xs rounded-xl shadow transition-all shrink-0 cursor-pointer"
+          >
+            🔄 Retry Submission Now
+          </button>
+        </div>
+      )}
+
       {/* Late Start Warning Alert (1/3 duration exceeded) */}
       {showLateStartWarning && (
         <div className="p-4 bg-amber-50 border-2 border-amber-400 rounded-2xl flex items-center justify-between text-amber-900 text-xs shadow-sm animate-fade-in">
@@ -411,11 +558,16 @@ export default function TestRunnerPage({ params }) {
         </div>
 
         {/* Security Alerts & Timer */}
-        <div className="flex items-center space-x-4">
-          <div className={`px-3 py-1.5 rounded-xl flex items-center space-x-2 border ${isLate ? 'bg-amber-100 text-amber-900 border-amber-300 font-extrabold' : 'bg-red-50 text-red-700 border-red-100'}`}>
-            <span className={`w-2 h-2 rounded-full ${isLate ? 'bg-amber-500' : 'bg-red-500'} animate-ping`}></span>
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="hidden sm:flex items-center space-x-1.5 px-3 py-2 bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 rounded-xl text-xs font-mono font-bold shadow-sm">
+            <span>🇺🇬 Kampala EAT:</span>
+            <span>{serverTimeEAT || '00:00:00'}</span>
+          </div>
+
+          <div className={`px-3 py-1.5 rounded-xl flex items-center space-x-2 border ${inGracePeriod ? 'bg-amber-600 text-white border-amber-300 animate-pulse' : (isLate ? 'bg-amber-100 text-amber-900 border-amber-300 font-extrabold' : 'bg-red-50 text-red-700 border-red-100')}`}>
+            <span className={`w-2 h-2 rounded-full ${inGracePeriod ? 'bg-white' : (isLate ? 'bg-amber-500' : 'bg-red-500')} animate-ping`}></span>
             <span className="font-mono font-bold text-sm">
-              {isLate ? (dueRemainingSeconds !== null ? `Due: ${formatTime(dueRemainingSeconds)}` : 'OVERTIME') : formatTime(timeLeftSeconds)}
+              {inGracePeriod ? `Grace: ${formatTime(graceTimeLeft)}` : (isLate ? (dueRemainingSeconds !== null ? `Due: ${formatTime(dueRemainingSeconds)}` : 'OVERTIME') : formatTime(timeLeftSeconds))}
             </span>
           </div>
 
@@ -515,8 +667,10 @@ export default function TestRunnerPage({ params }) {
                     return (
                       <button
                         key={opt.key}
+                        disabled={inGracePeriod}
                         onClick={() => handleSelectAnswer(currentQuestion.id, opt.key)}
-                        className={`w-full p-4 rounded-xl border text-left text-xs font-medium transition-all flex items-center space-x-3 ${isSelected ? 'bg-emerald-50 border-brand-emerald text-brand-dark shadow-sm ring-1 ring-brand-emerald' : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'}`}
+                        title={inGracePeriod ? 'Answers locked during 3-minute grace period' : ''}
+                        className={`w-full p-4 rounded-xl border text-left text-xs font-medium transition-all flex items-center space-x-3 ${inGracePeriod ? 'cursor-not-allowed opacity-80 ' : ''}${isSelected ? 'bg-emerald-50 border-brand-emerald text-brand-dark shadow-sm ring-1 ring-brand-emerald' : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'}`}
                       >
                         <span className={`w-6 h-6 rounded-full flex items-center justify-center font-bold text-xs ${isSelected ? 'bg-brand-light text-white' : 'bg-slate-200 text-slate-600'}`}>
                           {opt.key}
@@ -536,8 +690,10 @@ export default function TestRunnerPage({ params }) {
                     return (
                       <button
                         key={tfVal}
+                        disabled={inGracePeriod}
                         onClick={() => handleSelectAnswer(currentQuestion.id, tfVal)}
-                        className={`p-6 rounded-2xl border text-center font-bold text-sm transition-all ${isSelected ? 'bg-emerald-50 border-brand-emerald text-brand-dark ring-2 ring-brand-emerald shadow-sm' : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'}`}
+                        title={inGracePeriod ? 'Answers locked during 3-minute grace period' : ''}
+                        className={`p-6 rounded-2xl border text-center font-bold text-sm transition-all ${inGracePeriod ? 'cursor-not-allowed opacity-80 ' : ''}${isSelected ? 'bg-emerald-50 border-brand-emerald text-brand-dark ring-2 ring-brand-emerald shadow-sm' : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'}`}
                       >
                         {tfVal}
                       </button>
@@ -552,10 +708,11 @@ export default function TestRunnerPage({ params }) {
                   <label className="block text-xs font-bold text-slate-700 uppercase">Type your answer below:</label>
                   <input
                     type="text"
+                    disabled={inGracePeriod}
                     value={answers[currentQuestion.id] || ''}
                     onChange={(e) => handleSelectAnswer(currentQuestion.id, e.target.value)}
-                    placeholder="Enter answer key..."
-                    className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-brand-light"
+                    placeholder={inGracePeriod ? 'Locked during 3-minute grace period' : 'Enter answer key...'}
+                    className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-brand-light disabled:opacity-80 disabled:cursor-not-allowed"
                   />
                 </div>
               )}

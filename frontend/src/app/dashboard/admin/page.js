@@ -156,7 +156,7 @@ export default function AdminPage() {
   const [loadingCleared, setLoadingCleared] = useState(false);
   const [selectedExamType, setSelectedExamType] = useState('ALL'); // 'ALL', 'EXAMS', 'TESTS'
   const [selectedClearanceAcad, setSelectedClearanceAcad] = useState('2026/2027');
-  const [selectedClearanceSem, setSelectedClearanceSem] = useState('1'); // '1' or '2'
+  const [selectedClearanceSem, setSelectedClearanceSem] = useState('both'); // '1', '2', or 'both'
   const [selectedFacultyClearanceLevel, setSelectedFacultyClearanceLevel] = useState('ALL'); // 'ALL', '100', '50', '0'
 
   // Universal Confirmation Modal State
@@ -805,7 +805,7 @@ export default function AdminPage() {
     }
   };
 
-  const handleSyncCIUClearance = async (acad = '2026/2027', sem = selectedClearanceSem) => {
+  const handleSyncCIUClearance = async (acad = '2026/2027', sem = selectedClearanceSem || 'both') => {
     setErrorMsg('');
     setSuccessMsg('');
     setSubmitting(true);
@@ -1351,11 +1351,12 @@ export default function AdminPage() {
 
         <div className="flex items-center space-x-3">
           <button
-            onClick={handleSyncCIUClearance}
+            onClick={() => handleSyncCIUClearance('2026/2027', 'both')}
             disabled={submitting}
             className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-sm transition-all flex items-center space-x-1"
+            title="Synchronize student clearance across all current year semesters (1 & 2) live APIs for strict test/exam access"
           >
-            <span>⚡ Sync CIU API</span>
+            <span>⚡ Sync Current Year Clearance (Sem 1 & 2)</span>
           </button>
 
           <div className={`px-3 py-1.5 rounded-xl border flex items-center space-x-2 ${proctoringSetting.is_proctoring_enabled ? 'bg-red-50 text-red-700 border-red-200 animate-pulse' : 'bg-slate-100 text-slate-600 border-slate-200'}`}>
@@ -1512,11 +1513,12 @@ export default function AdminPage() {
                 </button>
                 <button
                   type="button"
-                  onClick={handleSyncCIUClearance}
+                  onClick={() => handleSyncCIUClearance('2026/2027', 'both')}
                   disabled={submitting}
                   className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-sm transition-all flex items-center space-x-1 hidden sm:flex"
+                  title="Synchronize student clearance across all current year semesters (1 & 2) live APIs for strict test/exam access"
                 >
-                  <span>⚡ Refresh Clearance Levels</span>
+                  <span>⚡ Sync Current Year Clearance (Sem 1 & 2)</span>
                 </button>
               </div>
             </div>

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import Link from 'next/link';
 
@@ -10,6 +10,14 @@ export default function StaffLoginPage() {
   const [password, setPassword] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    const termReason = sessionStorage.getItem('ciu_session_termination_reason');
+    if (termReason) {
+      setErrorMsg(termReason);
+      sessionStorage.removeItem('ciu_session_termination_reason');
+    }
+  }, []);
 
   const handleSubmit = async (e) => {
     e.preventDefault();

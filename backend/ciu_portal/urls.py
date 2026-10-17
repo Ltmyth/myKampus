@@ -3,12 +3,12 @@ from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenRefreshView
 from .views import (
     MyTokenObtainPairView, RegisterView, ProfileView, ChangePasswordView, VerifyPasswordView,
-    AdminUserViewSet, InvitationViewSet, FacultyViewSet, CourseViewSet, CourseUnitViewSet, 
+    ServerTimeView, AdminUserViewSet, InvitationViewSet, FacultyViewSet, CourseViewSet, CourseUnitViewSet, 
     ApplicationViewSet, ExamViewSet, ExamAttemptViewSet, TestViewSet, TestAttemptViewSet,
     ClassContentViewSet, AttendanceSessionViewSet, ReportsViewSet,
     ClassTimetableViewSet, ExamTimetableViewSet, SystemLogViewSet, ProctoringSettingViewSet,
     TemporaryClearanceViewSet, QuestionBankViewSet, QuestionBankItemViewSet, ProctoringMonitorViewSet,
-    TestQuestionViewSet, QuestionViewSet
+    TestQuestionViewSet, QuestionViewSet, DashboardOverviewView
 )
 
 router = DefaultRouter()
@@ -43,6 +43,8 @@ urlpatterns = [
     path('auth/profile/', ProfileView.as_view(), name='auth_profile'),
     path('auth/change_password/', ChangePasswordView.as_view(), name='auth_change_password'),
     path('auth/verify_password/', VerifyPasswordView.as_view(), name='auth_verify_password'),
+    path('server-time/', ServerTimeView.as_view(), name='server_time'),
+    path('dashboard/overview/', DashboardOverviewView.as_view(), name='dashboard_overview'),
     path('auth/change-password/', ChangePasswordView.as_view()),
     path('change-password/', ChangePasswordView.as_view()),
     path('change_password/', ChangePasswordView.as_view()),

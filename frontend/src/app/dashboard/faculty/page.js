@@ -86,9 +86,22 @@ export default function FacultyManagementPage() {
     duration_years: 3
   });
 
-  // Bulk Deletion State for Courses & Course Units
+  // Bulk Deletion & Assignment State for Courses & Course Units
   const [selectedCourseIds, setSelectedCourseIds] = useState([]);
   const [selectedUnitIds, setSelectedUnitIds] = useState([]);
+  const [bulkLecturerSearch, setBulkLecturerSearch] = useState('');
+  const [bulkSelectedLecturerId, setBulkSelectedLecturerId] = useState('');
+  const [singleLecturerSearch, setSingleLecturerSearch] = useState('');
+
+  // Lecturer-Centric Course Assignment Console State
+  const [consoleLecturerSearch, setConsoleLecturerSearch] = useState('');
+  const [consoleSelectedLecturerId, setConsoleSelectedLecturerId] = useState('');
+  const [consoleUnitSearch, setConsoleUnitSearch] = useState('');
+  const [consoleSelectedUnitIds, setConsoleSelectedUnitIds] = useState([]);
+  const [consoleYearFilter, setConsoleYearFilter] = useState('All');
+  const [consoleSemesterFilter, setConsoleSemesterFilter] = useState('All');
+  const [consoleFacultyFilter, setConsoleFacultyFilter] = useState('All');
+  const [consoleAssigning, setConsoleAssigning] = useState(false);
 
   // Course Filtering & List Expansion State
   const [courseFacultyFilter, setCourseFacultyFilter] = useState('All');
@@ -1117,6 +1130,85 @@ export default function FacultyManagementPage() {
         }
       }
     });
+  };
+
+  const handleBulkAssignLecturer = async (actionType = 'assign') => {
+    if (!bulkSelectedLecturerId) {
+      setErrorMsg('Please select a lecturer to bulk assign the selected course units.');
+      return;
+    }
+    if (selectedUnitIds.length === 0) {
+      setErrorMsg('Please select at least one course unit.');
+      return;
+    }
+    setBulkAssigning(true);
+    setErrorMsg('');
+    setSuccessMsg('');
+    try {
+      const res = await api.post('/course-units/bulk_assign_lecturer/', {
+        unit_ids: selectedUnitIds,
+        lecturer_id: bulkSelectedLecturerId,
+        action: actionType
+      });
+      setSuccessMsg(res?.detail || 'Successfully updated lecturer allocations!');
+      setSelectedUnitIds([]);
+      setBulkSelectedLecturerId('');
+      loadFacultyData();
+    } catch (err) {
+      setErrorMsg(err.response?.data?.detail || err.message || 'Failed to bulk assign course units to lecturer.');
+    } finally {
+      setBulkAssigning(false);
+    }
+  };
+
+  const handleConsoleAssignSelected = async (actionType = 'assign') => {
+    if (!consoleSelectedLecturerId) {
+      setErrorMsg('Please select a lecturer from the search list.');
+      return;
+    }
+    if (consoleSelectedUnitIds.length === 0) {
+      setErrorMsg('Please select at least one course unit to assign.');
+      return;
+    }
+    setConsoleAssigning(true);
+    setErrorMsg('');
+    setSuccessMsg('');
+    try {
+      const res = await api.post('/course-units/bulk_assign_lecturer/', {
+        unit_ids: consoleSelectedUnitIds,
+        lecturer_id: parseInt(consoleSelectedLecturerId),
+        action: actionType
+      });
+      setSuccessMsg(res?.detail || `Successfully ${actionType === 'assign' ? 'assigned' : 'unassigned'} course units!`);
+      setConsoleSelectedUnitIds([]);
+      loadFacultyData();
+    } catch (err) {
+      setErrorMsg(err.response?.data?.detail || err.message || 'Failed to update course unit assignments.');
+    } finally {
+      setConsoleAssigning(false);
+    }
+  };
+
+  const handleConsoleSingleUnitAssign = async (unitId, actionType = 'assign') => {
+    if (!consoleSelectedLecturerId) {
+      setErrorMsg('Please select a lecturer first.');
+      return;
+    }
+    setConsoleAssigning(true);
+    setErrorMsg('');
+    setSuccessMsg('');
+    try {
+      const res = await api.post(`/course-units/${unitId}/assign_lecturer/`, {
+        lecturer_id: parseInt(consoleSelectedLecturerId),
+        action: actionType
+      });
+      setSuccessMsg(res?.detail || `Successfully ${actionType === 'assign' ? 'assigned' : 'unassigned'} course unit!`);
+      loadFacultyData();
+    } catch (err) {
+      setErrorMsg(err.response?.data?.detail || err.message || 'Failed to update unit assignment.');
+    } finally {
+      setConsoleAssigning(false);
+    }
   };
 
   // --- Lecturer Assignment & Timetable Handlers ---
@@ -2157,7 +2249,7 @@ export default function FacultyManagementPage() {
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <h3 className="text-sm font-bold text-slate-850 uppercase tracking-wider">Faculty Course Units & Assigned Lecturers</h3>
               <div className="flex items-center gap-2">
-                {isStrictSystemAdmin && filteredCourseUnits.length > 0 && (
+                {(canAssignLecturer || isStrictSystemAdmin) && filteredCourseUnits.length > 0 && (
                   <button
                     type="button"
                     onClick={() => handleToggleSelectAllFilteredUnits(filteredCourseUnits)}
@@ -2187,35 +2279,91 @@ export default function FacultyManagementPage() {
             </div>
 
             {/* Sticky Bulk Action Bar for Course Units */}
-            {isStrictSystemAdmin && selectedUnitIds.length > 0 && (
-              <div className="sticky top-2 z-20 bg-gradient-to-r from-red-600 via-rose-600 to-red-700 text-white p-3.5 rounded-2xl shadow-xl border border-red-500/50 flex flex-wrap items-center justify-between gap-3 animate-fade-in">
+            {(canAssignLecturer || isStrictSystemAdmin) && selectedUnitIds.length > 0 && (
+              <div className="sticky top-2 z-20 bg-gradient-to-r from-emerald-900 via-teal-900 to-slate-900 text-white p-4 rounded-2xl shadow-2xl border border-emerald-500/40 flex flex-wrap items-center justify-between gap-3 animate-fade-in">
                 <div className="flex items-center space-x-3">
-                  <span className="w-8 h-8 rounded-xl bg-white/20 flex items-center justify-center text-sm font-bold shadow-inner">
-                    📖
+                  <span className="w-9 h-9 rounded-xl bg-white/15 border border-white/20 flex items-center justify-center text-sm font-bold shadow-inner">
+                    📚
                   </span>
                   <div>
-                    <p className="text-xs font-black tracking-wide uppercase">
+                    <p className="text-xs font-black tracking-wide uppercase text-emerald-300">
                       {selectedUnitIds.length} Course Unit{selectedUnitIds.length > 1 ? 's' : ''} Selected
                     </p>
-                    <p className="text-[11px] text-red-100 font-medium">
-                      Ready for bulk administrative deletion across degree programs.
+                    <p className="text-[11px] text-emerald-100 font-medium">
+                      Filter lecturers by name & bulk assign at a single button click.
                     </p>
                   </div>
                 </div>
-                <div className="flex items-center space-x-2">
+
+                <div className="flex flex-wrap items-center gap-2">
+                  {/* Lecturer filter by name or username */}
+                  <input
+                    type="text"
+                    placeholder="🔍 Filter lecturer name..."
+                    value={bulkLecturerSearch}
+                    onChange={(e) => setBulkLecturerSearch(e.target.value)}
+                    className="w-40 sm:w-48 px-3 py-1.5 bg-white/10 hover:bg-white/15 focus:bg-white text-white focus:text-slate-900 rounded-xl border border-white/20 placeholder-white/60 focus:placeholder-slate-400 text-xs font-medium outline-none transition-all"
+                  />
+
+                  {/* Lecturer Selector */}
+                  <select
+                    value={bulkSelectedLecturerId}
+                    onChange={(e) => setBulkSelectedLecturerId(e.target.value)}
+                    className="px-3 py-1.5 bg-white text-slate-900 font-bold rounded-xl border border-white/30 text-xs outline-none shadow-sm max-w-[210px]"
+                  >
+                    <option value="">-- Choose Lecturer --</option>
+                    {lecturers
+                      .filter(l => {
+                        if (!bulkLecturerSearch.trim()) return true;
+                        const term = bulkLecturerSearch.toLowerCase().trim();
+                        const fullName = `${l.first_name || ''} ${l.last_name || ''}`.toLowerCase();
+                        const uname = (l.username || '').toLowerCase();
+                        return fullName.includes(term) || uname.includes(term);
+                      })
+                      .map(l => (
+                        <option key={l.id} value={l.id}>
+                          {l.first_name || l.username} {l.last_name || ''} (@{l.username})
+                        </option>
+                      ))}
+                  </select>
+
                   <button
                     type="button"
-                    onClick={() => setSelectedUnitIds([])}
-                    className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-bold transition-all border border-white/20"
+                    disabled={bulkAssigning || !bulkSelectedLecturerId}
+                    onClick={() => handleBulkAssignLecturer('assign')}
+                    className="px-4 py-1.5 bg-brand-emerald hover:bg-brand-emerald/90 text-brand-dark rounded-xl text-xs font-black shadow-md transition-all flex items-center space-x-1.5 disabled:opacity-50 active:scale-95 cursor-pointer"
+                    title="Bulk assign selected units to this lecturer at a single button click"
                   >
-                    Deselect All
+                    <span>⚡ {bulkAssigning ? 'Assigning...' : `Bulk Assign (${selectedUnitIds.length})`}</span>
                   </button>
+
                   <button
                     type="button"
-                    onClick={handleBulkDeleteCourseUnits}
-                    className="px-4 py-1.5 bg-white text-red-700 hover:bg-red-50 rounded-xl text-xs font-black shadow-md hover:shadow transition-all flex items-center space-x-1.5"
+                    disabled={bulkAssigning || !bulkSelectedLecturerId}
+                    onClick={() => handleBulkAssignLecturer('unassign')}
+                    className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-bold transition-all border border-white/20 disabled:opacity-50 cursor-pointer"
+                    title="Bulk unassign selected units from this lecturer"
                   >
-                    <span>🗑️ Delete Selected Units ({selectedUnitIds.length})</span>
+                    ✕ Unassign
+                  </button>
+
+                  {isStrictSystemAdmin && (
+                    <button
+                      type="button"
+                      onClick={handleBulkDeleteCourseUnits}
+                      className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold shadow-md transition-all cursor-pointer"
+                      title="Permanently delete selected course units"
+                    >
+                      🗑️ Delete
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => { setSelectedUnitIds([]); setBulkSelectedLecturerId(''); }}
+                    className="px-2.5 py-1.5 text-white/70 hover:text-white text-xs font-medium cursor-pointer"
+                  >
+                    Clear
                   </button>
                 </div>
               </div>
@@ -2326,7 +2474,7 @@ export default function FacultyManagementPage() {
                 <table className="w-full text-left text-xs border-collapse">
                   <thead>
                     <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 uppercase font-semibold">
-                      {isStrictSystemAdmin && (
+                      {(canAssignLecturer || isStrictSystemAdmin) && (
                         <th className="px-3 py-3 w-10 text-center">
                           <input
                             type="checkbox"
@@ -2356,7 +2504,7 @@ export default function FacultyManagementPage() {
                             isSelected ? 'bg-red-50/50 hover:bg-red-50/70 border-l-4 border-l-red-500' : 'hover:bg-slate-50'
                           }`}
                         >
-                          {isStrictSystemAdmin && (
+                          {(canAssignLecturer || isStrictSystemAdmin) && (
                             <td className="px-3 py-3 text-center" onClick={(e) => e.stopPropagation()}>
                               <input
                                 type="checkbox"
@@ -2442,57 +2590,356 @@ export default function FacultyManagementPage() {
             )}
           </div>
 
-          {/* Assign Lecturer Form Modal/Card */}
-          <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-4 h-fit">
-            <h3 className="text-sm font-bold text-slate-850 uppercase tracking-wider">Assign Lecturer to Unit</h3>
-            
+          {/* Right Column: Search Lecturers by Name & Course Assignment Console */}
+          <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-5 h-fit">
+            <div className="border-b border-slate-100 pb-3">
+              <h3 className="text-sm font-black text-slate-850 uppercase tracking-wider flex items-center gap-2">
+                <span>👨‍🏫 Lecturer Course Unit Assignment Console</span>
+              </h3>
+              <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
+                Search existing lecturers by name, inspect their assigned faculties & units, and manage single or bulk course unit assignment with 1-click.
+              </p>
+            </div>
+
             {canAssignLecturer ? (
-              selectedUnit ? (
-                <form onSubmit={handleAssignLecturer} className="space-y-4 animate-slide-up">
-                  <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 text-xs space-y-1">
-                    <p className="font-bold text-slate-800">Unit: {selectedUnit.name}</p>
-                    <p className="text-slate-500">Code: {selectedUnit.code} · Program: {selectedUnit.course_code}</p>
+              <div className="space-y-4">
+                {/* Optional Selected Unit Banner from Table */}
+                {selectedUnit && (
+                  <div className="p-3 bg-amber-50/80 border border-amber-200 rounded-xl text-xs space-y-1 animate-slide-up">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-amber-900 text-[10px] uppercase tracking-wider">Table Unit Selected</span>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedUnit(null)}
+                        className="text-amber-700 hover:text-amber-950 font-bold text-[10px]"
+                      >
+                        ✕ Clear
+                      </button>
+                    </div>
+                    <p className="font-extrabold text-slate-850 text-xs">{selectedUnit.code} - {selectedUnit.name}</p>
+                    <p className="text-slate-500 text-[10px]">Program: {selectedUnit.course_code} · Yr {selectedUnit.year_of_study}, Sem {selectedUnit.semester}</p>
+                    {consoleSelectedLecturerId && (
+                      <button
+                        type="button"
+                        disabled={consoleAssigning}
+                        onClick={() => handleConsoleSingleUnitAssign(selectedUnit.id, 'assign')}
+                        className="mt-1.5 w-full py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-[11px] font-bold shadow-xs transition-all flex items-center justify-center space-x-1"
+                      >
+                        <span>⚡ Assign This Unit to Selected Lecturer</span>
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {/* 1. Search Lecturer by Name */}
+                <div>
+                  <label className="block text-slate-700 text-xs font-bold uppercase mb-1">
+                    🔍 Search Existing Lecturer by Name
+                  </label>
+                  <div className="relative">
+                    <input
+                      type="text"
+                      placeholder="Type lecturer's first or last name, username, or email..."
+                      value={consoleLecturerSearch}
+                      onChange={(e) => setConsoleLecturerSearch(e.target.value)}
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-brand-light/30 focus:border-brand-light outline-none transition-all"
+                    />
+                    {consoleLecturerSearch && (
+                      <button
+                        type="button"
+                        onClick={() => setConsoleLecturerSearch('')}
+                        className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600 text-xs font-bold"
+                      >
+                        ✕
+                      </button>
+                    )}
                   </div>
 
-                  <div>
-                    <label className="block text-slate-700 text-xs font-bold uppercase mb-1">Select Lecturer</label>
+                  {/* Lecturer Select list / quick picker */}
+                  <div className="mt-2">
                     <select
-                      value={selectedLecturerId}
-                      onChange={(e) => setSelectedLecturerId(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
-                      required
+                      value={consoleSelectedLecturerId}
+                      onChange={(e) => {
+                        setConsoleSelectedLecturerId(e.target.value);
+                        setConsoleSelectedUnitIds([]);
+                      }}
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:bg-white outline-none cursor-pointer"
                     >
-                      <option value="">Select Lecturer...</option>
-                      {lecturers.map((lec) => (
-                        <option key={lec.id} value={lec.id}>
-                          {lec.first_name || lec.username} {lec.last_name || ''} (@{lec.username}) {lec.email ? `· ${lec.email}` : ''}
-                        </option>
-                      ))}
+                      <option value="">-- Choose Lecturer ({lecturers.filter(l => {
+                        if (!consoleLecturerSearch.trim()) return true;
+                        const term = consoleLecturerSearch.toLowerCase().trim();
+                        const fullName = `${l.first_name || ''} ${l.last_name || ''}`.toLowerCase();
+                        const uname = (l.username || '').toLowerCase();
+                        const mail = (l.email || '').toLowerCase();
+                        return fullName.includes(term) || uname.includes(term) || mail.includes(term);
+                      }).length} matching) --</option>
+                      {lecturers
+                        .filter(l => {
+                          if (!consoleLecturerSearch.trim()) return true;
+                          const term = consoleLecturerSearch.toLowerCase().trim();
+                          const fullName = `${l.first_name || ''} ${l.last_name || ''}`.toLowerCase();
+                          const uname = (l.username || '').toLowerCase();
+                          const mail = (l.email || '').toLowerCase();
+                          return fullName.includes(term) || uname.includes(term) || mail.includes(term);
+                        })
+                        .map(l => (
+                          <option key={l.id} value={l.id}>
+                            {l.first_name || l.username} {l.last_name || ''} (@{l.username}) {l.faculty_code ? `· [${l.faculty_code}]` : ''}
+                          </option>
+                        ))}
                     </select>
                   </div>
+                </div>
 
-                  <div className="flex items-center justify-end space-x-2">
-                    <button
-                      type="button"
-                      onClick={() => setSelectedUnit(null)}
-                      className="px-3 py-1.5 bg-slate-100 text-slate-600 text-xs font-bold rounded-lg hover:bg-slate-200"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="submit"
-                      disabled={submitting}
-                      className="px-4 py-1.5 bg-brand-light hover:bg-brand-medium text-white text-xs font-bold rounded-lg shadow-sm"
-                    >
-                      {submitting ? 'Assigning...' : 'Confirm Assignment'}
-                    </button>
-                  </div>
-                </form>
-              ) : (
-                <p className="text-slate-400 text-xs text-center py-10">
-                  Select a Course Unit from the list on the left to assign a Lecturer.
-                </p>
-              )
+                {/* If Lecturer is Selected: Show Profile Card, Currently Assigned Units, and Course Assignment Picker */}
+                {(() => {
+                  const selLecturer = lecturers.find(l => String(l.id) === String(consoleSelectedLecturerId));
+                  if (!selLecturer) {
+                    return (
+                      <div className="p-6 bg-slate-50/70 border border-dashed border-slate-200 rounded-2xl text-center space-y-2">
+                        <span className="text-2xl">👨‍🏫</span>
+                        <p className="text-xs font-bold text-slate-750">No Lecturer Selected</p>
+                        <p className="text-[11px] text-slate-400">
+                          Search by name above and choose a lecturer to inspect their assigned units and manage single or bulk course unit assignment.
+                        </p>
+                      </div>
+                    );
+                  }
+
+                  // Find course units currently taught by this lecturer
+                  const currentlyAssignedUnits = courseUnits.filter(u =>
+                    (u.lecturers || []).some(lecId => String(lecId) === String(selLecturer.id)) ||
+                    (u.lecturer_details || []).some(ld => String(ld.id) === String(selLecturer.id))
+                  );
+
+                  // Find available course units that can be assigned (or all units filtered)
+                  const filteredUnitsForLecturer = courseUnits.filter(u => {
+                    const matchesSearch = !consoleUnitSearch.trim() ||
+                      (u.name || '').toLowerCase().includes(consoleUnitSearch.toLowerCase()) ||
+                      (u.code || '').toLowerCase().includes(consoleUnitSearch.toLowerCase()) ||
+                      (u.course_code || '').toLowerCase().includes(consoleUnitSearch.toLowerCase()) ||
+                      (u.course_name || '').toLowerCase().includes(consoleUnitSearch.toLowerCase());
+                    const matchesYear = consoleYearFilter === 'All' || String(u.year_of_study) === String(consoleYearFilter);
+                    const matchesSem = consoleSemesterFilter === 'All' || String(u.semester) === String(consoleSemesterFilter);
+                    const matchesFac = consoleFacultyFilter === 'All' || String(u.faculty_id) === String(consoleFacultyFilter) || u.faculty_code === consoleFacultyFilter;
+                    return matchesSearch && matchesYear && matchesSem && matchesFac;
+                  });
+
+                  return (
+                    <div className="space-y-4 animate-fade-in">
+                      {/* Lecturer Profile Badge */}
+                      <div className="p-3.5 bg-gradient-to-r from-emerald-950 via-teal-900 to-slate-900 rounded-xl text-white space-y-2 shadow-sm border border-emerald-800/40">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center space-x-2.5">
+                            <div className="w-8 h-8 rounded-lg bg-white/20 flex items-center justify-center font-bold text-emerald-300 text-xs">
+                              {selLecturer.username.slice(0, 2).toUpperCase()}
+                            </div>
+                            <div>
+                              <p className="text-xs font-bold text-white">
+                                {selLecturer.first_name || selLecturer.username} {selLecturer.last_name || ''}
+                              </p>
+                              <p className="text-[10px] text-emerald-300 font-mono">@{selLecturer.username} {selLecturer.email ? `· ${selLecturer.email}` : ''}</p>
+                            </div>
+                          </div>
+                          <span className="px-2 py-0.5 bg-brand-emerald text-brand-dark rounded text-[10px] font-black uppercase">
+                            Lecturer
+                          </span>
+                        </div>
+                        {selLecturer.assigned_faculty_details && selLecturer.assigned_faculty_details.length > 0 && (
+                          <div className="pt-1 flex flex-wrap gap-1">
+                            <span className="text-[10px] text-emerald-200/70 font-semibold mr-1">Faculties:</span>
+                            {selLecturer.assigned_faculty_details.map(f => (
+                              <span key={f.id || f.code} className="px-1.5 py-0.5 bg-white/10 rounded text-[9px] font-bold text-white">
+                                [{f.code}] {f.name}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Currently Assigned Course Units */}
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wider">
+                            Currently Assigned Units ({currentlyAssignedUnits.length})
+                          </span>
+                        </div>
+                        {currentlyAssignedUnits.length === 0 ? (
+                          <p className="text-[11px] text-slate-400 italic bg-slate-50 p-2.5 rounded-lg border border-slate-100 text-center">
+                            No course units currently assigned to this lecturer.
+                          </p>
+                        ) : (
+                          <div className="max-h-36 overflow-y-auto space-y-1.5 pr-1 custom-scrollbar">
+                            {currentlyAssignedUnits.map(u => (
+                              <div key={u.id} className="flex items-center justify-between p-2 bg-emerald-50/60 border border-emerald-200/60 rounded-lg text-xs">
+                                <div className="min-w-0 pr-2">
+                                  <p className="font-bold text-slate-800 text-[11px] truncate">{u.code} - {u.name}</p>
+                                  <p className="text-[10px] text-slate-500">Yr {u.year_of_study}, Sem {u.semester} · {u.course_code || 'Course'}</p>
+                                </div>
+                                <button
+                                  type="button"
+                                  disabled={consoleAssigning}
+                                  onClick={() => handleConsoleSingleUnitAssign(u.id, 'unassign')}
+                                  className="px-2 py-1 bg-red-50 hover:bg-red-100 text-red-600 hover:text-red-800 text-[10px] font-bold rounded border border-red-200 transition-all disabled:opacity-50 shrink-0 cursor-pointer"
+                                  title="Unassign this course unit from lecturer"
+                                >
+                                  ✕ Remove
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Course Unit Selection for Single or Bulk Assignment */}
+                      <div className="border-t border-slate-100 pt-3 space-y-2.5">
+                        <div className="flex items-center justify-between">
+                          <label className="text-slate-700 text-xs font-bold uppercase">
+                            Assign Units (Single or Bulk)
+                          </label>
+                          <div className="flex items-center gap-1.5">
+                            {filteredUnitsForLecturer.length > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const unassignedFiltered = filteredUnitsForLecturer
+                                    .filter(u => !(u.lecturers || []).some(lecId => String(lecId) === String(selLecturer.id)))
+                                    .map(u => u.id);
+                                  const allSelected = unassignedFiltered.length > 0 && unassignedFiltered.every(id => consoleSelectedUnitIds.includes(id));
+                                  if (allSelected) {
+                                    setConsoleSelectedUnitIds(prev => prev.filter(id => !unassignedFiltered.includes(id)));
+                                  } else {
+                                    setConsoleSelectedUnitIds(prev => Array.from(new Set([...prev, ...unassignedFiltered])));
+                                  }
+                                }}
+                                className="text-[10px] text-teal-700 hover:text-teal-900 font-bold px-1.5 py-0.5 rounded bg-teal-50 border border-teal-200 cursor-pointer"
+                              >
+                                {filteredUnitsForLecturer
+                                  .filter(u => !(u.lecturers || []).some(lecId => String(lecId) === String(selLecturer.id)))
+                                  .every(u => consoleSelectedUnitIds.includes(u.id))
+                                  ? 'Deselect All'
+                                  : 'Select All Unassigned'}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Search & Filters for Course Units */}
+                        <div className="space-y-1.5">
+                          <input
+                            type="text"
+                            placeholder="🔍 Filter course units by code or title..."
+                            value={consoleUnitSearch}
+                            onChange={(e) => setConsoleUnitSearch(e.target.value)}
+                            className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs placeholder:text-slate-400 focus:bg-white outline-none"
+                          />
+                          <div className="grid grid-cols-2 gap-1.5">
+                            <select
+                              value={consoleYearFilter}
+                              onChange={(e) => setConsoleYearFilter(e.target.value)}
+                              className="px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg text-[10px] font-bold text-slate-700 cursor-pointer"
+                            >
+                              <option value="All">All Years</option>
+                              <option value="1">Year 1</option>
+                              <option value="2">Year 2</option>
+                              <option value="3">Year 3</option>
+                              <option value="4">Year 4</option>
+                            </select>
+                            <select
+                              value={consoleSemesterFilter}
+                              onChange={(e) => setConsoleSemesterFilter(e.target.value)}
+                              className="px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg text-[10px] font-bold text-slate-700 cursor-pointer"
+                            >
+                              <option value="All">All Semesters</option>
+                              <option value="1">Semester 1</option>
+                              <option value="2">Semester 2</option>
+                            </select>
+                          </div>
+                        </div>
+
+                        {/* Units List */}
+                        <div className="max-h-52 overflow-y-auto space-y-1 pr-1 custom-scrollbar border border-slate-100 rounded-xl p-2 bg-slate-50/50">
+                          {filteredUnitsForLecturer.length === 0 ? (
+                            <p className="text-[11px] text-slate-400 text-center py-3">No matching course units found.</p>
+                          ) : (
+                            filteredUnitsForLecturer.map(u => {
+                              const isAlreadyAssigned = (u.lecturers || []).some(lecId => String(lecId) === String(selLecturer.id));
+                              const isChecked = consoleSelectedUnitIds.includes(u.id);
+
+                              return (
+                                <div
+                                  key={u.id}
+                                  className={`flex items-center justify-between p-2 rounded-lg text-xs transition-all border ${
+                                    isAlreadyAssigned
+                                      ? 'bg-slate-100/60 border-slate-200/60 opacity-60'
+                                      : isChecked
+                                      ? 'bg-emerald-50 border-emerald-300 font-bold'
+                                      : 'bg-white border-slate-200 hover:border-emerald-300'
+                                  }`}
+                                >
+                                  <label className="flex items-center space-x-2 cursor-pointer flex-1 min-w-0">
+                                    <input
+                                      type="checkbox"
+                                      disabled={isAlreadyAssigned || consoleAssigning}
+                                      checked={isChecked}
+                                      onChange={() => {
+                                        setConsoleSelectedUnitIds(prev =>
+                                          prev.includes(u.id) ? prev.filter(id => id !== u.id) : [...prev, u.id]
+                                        );
+                                      }}
+                                      className="rounded text-brand-emerald focus:ring-brand-emerald cursor-pointer"
+                                    />
+                                    <div className="min-w-0">
+                                      <p className="text-[11px] font-bold text-slate-800 truncate">
+                                        {u.code} - {u.name}
+                                      </p>
+                                      <p className="text-[10px] text-slate-400">
+                                        Yr {u.year_of_study}, Sem {u.semester} · {u.course_code || 'Course'}
+                                      </p>
+                                    </div>
+                                  </label>
+
+                                  <div className="ml-2 shrink-0">
+                                    {isAlreadyAssigned ? (
+                                      <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded">
+                                        ✓ Assigned
+                                      </span>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        disabled={consoleAssigning}
+                                        onClick={() => handleConsoleSingleUnitAssign(u.id, 'assign')}
+                                        className="px-2 py-0.5 bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-bold rounded shadow-xs transition-all cursor-pointer"
+                                        title="Quick assign single unit"
+                                      >
+                                        + Assign
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })
+                          )}
+                        </div>
+
+                        {/* Bulk Assign Action Bar */}
+                        {consoleSelectedUnitIds.length > 0 && (
+                          <div className="pt-2 animate-slide-up">
+                            <button
+                              type="button"
+                              disabled={consoleAssigning}
+                              onClick={() => handleConsoleAssignSelected('assign')}
+                              className="w-full py-2.5 bg-brand-emerald hover:bg-brand-emerald/90 text-brand-dark rounded-xl text-xs font-black shadow-md transition-all active:scale-[0.99] flex items-center justify-center space-x-2 cursor-pointer"
+                            >
+                              <span>⚡ {consoleAssigning ? 'Assigning Units...' : `Bulk Assign ${consoleSelectedUnitIds.length} Selected Unit(s)`}</span>
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
             ) : (
               <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl text-center text-xs text-slate-500 font-medium">
                 🔒 Lecturer assignments are managed exclusively by System Administrators and Faculty Secretaries.

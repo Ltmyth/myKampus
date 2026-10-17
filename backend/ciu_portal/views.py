@@ -1,3 +1,4 @@
+import uuid
 import csv
 import re
 import random
@@ -50,6 +51,18 @@ def authenticate_token_param(request):
 
 # 1. Custom JWT Token Auth to return role & profile info directly on login
 class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
+    @classmethod
+    def get_token(cls, user):
+        token = super().get_token(user)
+        # Generate new unique session key to enforce single user device session
+        session_key = uuid.uuid4().hex
+        user.active_session_key = session_key
+        user.save(update_fields=['active_session_key'])
+        token['session_key'] = session_key
+        token['role'] = user.role
+        token['username'] = user.username
+        return token
+
     def validate(self, attrs):
         username_input = attrs.get(self.username_field, '').strip()
         password = attrs.get('password')
@@ -82,6 +95,8 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
 
         data = super().validate(attrs)
         clearance_info = check_student_clearance(self.user)
+        faculties = get_user_assigned_faculties(self.user)
+        faculty_details = [{'id': f.id, 'code': f.code, 'name': f.name} for f in faculties]
 
         data['user'] = {
             'id': self.user.id,
@@ -94,6 +109,11 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
             'last_name': self.user.last_name,
             'reg_number': self.user.reg_number or self.user.registration_number,
             'registration_number': self.user.registration_number,
+            'faculty': self.user.faculty_id,
+            'faculty_code': self.user.faculty.code if self.user.faculty else (faculty_details[0]['code'] if faculty_details else None),
+            'faculty_name': self.user.faculty.name if self.user.faculty else (faculty_details[0]['name'] if faculty_details else None),
+            'assigned_faculties': [f.id for f in faculties],
+            'assigned_faculty_details': faculty_details,
             'year_of_study': self.user.year_of_study,
             'semester': self.user.semester,
             'entry_year': self.user.entry_year,
@@ -103,7 +123,8 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
             'is_test_cleared': clearance_info['is_test_cleared'],
             'clearance_source': clearance_info['source'],
             'must_change_password': self.user.must_change_password,
-            'is_active': self.user.is_active
+            'is_active': self.user.is_active,
+            'active_session_key': self.user.active_session_key
         }
         log_system_event(self.user, f"User Login Success ({self.user.role})", level="INFO")
         return data
@@ -167,6 +188,27 @@ class VerifyPasswordView(APIView):
         log_system_event(user, "IDLE_REAUTH_SUCCESS", level="INFO", details=f"User {user.username} re-authenticated successfully after idle timeout.")
         return Response({'detail': 'Password verified successfully.', 'verified': True})
 
+class ServerTimeView(APIView):
+    """
+    Returns live Ugandan Local Time (Africa/Kampala, UTC+3, EAT)
+    Used by clients to detect clock skew and enforce strict assessment timing.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        now = timezone.now()
+        local_now = timezone.localtime(now)
+        return Response({
+            'server_time': local_now.isoformat(),
+            'timestamp': int(local_now.timestamp()),
+            'timezone': 'Africa/Kampala',
+            'tz_name': 'EAT',
+            'utc_offset': '+03:00',
+            'formatted': local_now.strftime('%A, %d %B %Y, %H:%M:%S EAT'),
+            'date': local_now.strftime('%Y-%m-%d'),
+            'time': local_now.strftime('%H:%M:%S'),
+        })
+
 def get_user_assigned_faculties(user):
     if not user or not user.is_authenticated:
         return Faculty.objects.none()
@@ -181,6 +223,17 @@ def get_user_assigned_faculties(user):
         ).distinct()
         return facs
 
+    if user.role == 'student':
+        facs = Faculty.objects.filter(
+            models.Q(id=user.faculty_id) |
+            models.Q(assigned_lecturers=user) |
+            models.Q(courses__assigned_students=user) |
+            models.Q(courses__applications__student=user, courses__applications__status='approved')
+        ).distinct()
+        if not facs.exists() and getattr(user, 'faculty', None):
+            facs = Faculty.objects.filter(id=user.faculty.id)
+        return facs
+
     facs = Faculty.objects.filter(
         models.Q(id=user.faculty_id) |
         models.Q(dean=user) |
@@ -192,6 +245,218 @@ def get_user_assigned_faculties(user):
         facs = Faculty.objects.filter(id=user.faculty.id)
 
     return facs
+
+class DashboardOverviewView(APIView):
+    """
+    High-performance pre-aggregated overview endpoint.
+    Eliminates multi-endpoint waterfalls for users with large datasets by computing
+    counts and stats directly via database queries and returning top recent items.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        assigned_facs = get_user_assigned_faculties(user)
+
+        # Scoped Courses
+        if user.role in ['dean', 'faculty_admin', 'faculty_secretary']:
+            courses_qs = Course.objects.filter(faculty__in=assigned_facs)
+        elif user.role == 'lecturer':
+            courses_qs = Course.objects.filter(
+                models.Q(faculty__in=assigned_facs) |
+                models.Q(units__lecturers=user) |
+                models.Q(id__in=user.assigned_courses.values_list('id', flat=True))
+            )
+            if assigned_facs.exists():
+                courses_qs = courses_qs.filter(faculty__in=assigned_facs)
+            courses_qs = courses_qs.distinct()
+        elif user.role == 'student':
+            courses_qs = Course.objects.filter(
+                models.Q(assigned_students=user) | models.Q(applications__student=user, applications__status='approved')
+            ).distinct()
+            if not courses_qs.exists() and assigned_facs.exists():
+                courses_qs = Course.objects.filter(faculty__in=assigned_facs).distinct()
+        else:
+            courses_qs = Course.objects.all()
+
+        # Scoped Exams
+        if user.role in ['dean', 'faculty_admin', 'faculty_secretary']:
+            exams_qs = Exam.objects.filter(
+                models.Q(course__faculty__in=assigned_facs) | models.Q(course_unit__course__faculty__in=assigned_facs)
+            ).distinct()
+        elif user.role == 'student':
+            student_courses = courses_qs
+            student_year = getattr(user, 'year_of_study', 1) or 1
+            student_sem = getattr(user, 'semester', 1) or 1
+            student_acad = getattr(user, 'academic_year', '2026/2027') or '2026/2027'
+            exams_qs = Exam.objects.filter(
+                models.Q(is_active=True) | models.Q(is_published=True)
+            ).filter(
+                models.Q(course__in=student_courses) |
+                models.Q(additional_courses__in=student_courses) |
+                models.Q(additional_course_units__course__in=student_courses)
+            ).filter(
+                models.Q(year_of_study=student_year) | models.Q(year_of_study=0) |
+                models.Q(course_unit__year_of_study=student_year) |
+                models.Q(additional_course_units__year_of_study=student_year)
+            ).filter(
+                models.Q(semester=student_sem) | models.Q(semester=0) |
+                models.Q(course_unit__semester=student_sem) |
+                models.Q(additional_course_units__semester=student_sem)
+            ).filter(
+                models.Q(academic_year__iexact=student_acad) | models.Q(academic_year__isnull=True) | models.Q(academic_year__iexact='All') | models.Q(academic_year='')
+            ).filter(
+                models.Q(is_special=False) | models.Q(special_students=user)
+            ).distinct()
+        elif user.role == 'lecturer':
+            exams_qs = Exam.objects.filter(
+                models.Q(lecturer=user) |
+                models.Q(course__units__lecturers=user) |
+                models.Q(course_unit__lecturers=user) |
+                models.Q(additional_course_units__lecturers=user) |
+                models.Q(course__faculty__in=assigned_facs) |
+                models.Q(course_unit__course__faculty__in=assigned_facs)
+            )
+            if assigned_facs.exists():
+                exams_qs = exams_qs.filter(
+                    models.Q(course__faculty__in=assigned_facs) |
+                    models.Q(course_unit__course__faculty__in=assigned_facs)
+                )
+            exams_qs = exams_qs.distinct()
+        else:
+            exams_qs = Exam.objects.all()
+
+        # Scoped Tests
+        if user.role in ['dean', 'faculty_admin', 'faculty_secretary']:
+            tests_qs = Test.objects.filter(
+                models.Q(course__faculty__in=assigned_facs) | models.Q(course_unit__course__faculty__in=assigned_facs)
+            ).distinct()
+        elif user.role == 'student':
+            student_courses = courses_qs
+            student_year = getattr(user, 'year_of_study', 1) or 1
+            student_sem = getattr(user, 'semester', 1) or 1
+            student_acad = getattr(user, 'academic_year', '2026/2027') or '2026/2027'
+            tests_qs = Test.objects.filter(
+                is_published=True
+            ).filter(
+                models.Q(course__in=student_courses) |
+                models.Q(additional_courses__in=student_courses) |
+                models.Q(additional_course_units__course__in=student_courses)
+            ).filter(
+                models.Q(year_of_study=student_year) | models.Q(year_of_study=0) |
+                models.Q(course_unit__year_of_study=student_year) |
+                models.Q(additional_course_units__year_of_study=student_year)
+            ).filter(
+                models.Q(semester=student_sem) | models.Q(semester=0) |
+                models.Q(course_unit__semester=student_sem) |
+                models.Q(additional_course_units__semester=student_sem)
+            ).filter(
+                models.Q(academic_year__iexact=student_acad) | models.Q(academic_year__isnull=True) | models.Q(academic_year__iexact='All') | models.Q(academic_year='')
+            ).filter(
+                models.Q(is_special=False) | models.Q(special_students=user)
+            ).distinct()
+        elif user.role == 'lecturer':
+            tests_qs = Test.objects.filter(
+                models.Q(lecturer=user) |
+                models.Q(course__units__lecturers=user) |
+                models.Q(course_unit__lecturers=user) |
+                models.Q(additional_course_units__lecturers=user) |
+                models.Q(course__faculty__in=assigned_facs) |
+                models.Q(course_unit__course__faculty__in=assigned_facs)
+            )
+            if assigned_facs.exists():
+                tests_qs = tests_qs.filter(
+                    models.Q(course__faculty__in=assigned_facs) |
+                    models.Q(course_unit__course__faculty__in=assigned_facs)
+                )
+            tests_qs = tests_qs.distinct()
+        else:
+            tests_qs = Test.objects.all()
+
+        # Timetables
+        if user.role in ['dean', 'faculty_admin', 'faculty_secretary']:
+            class_tt_qs = ClassTimetable.objects.filter(course__faculty__in=assigned_facs).distinct()
+            exam_tt_qs = ExamTimetable.objects.filter(course__faculty__in=assigned_facs).distinct()
+        elif user.role == 'student':
+            class_tt_qs = ClassTimetable.objects.filter(course__in=courses_qs).distinct()
+            exam_tt_qs = ExamTimetable.objects.filter(course__in=courses_qs).distinct()
+        elif user.role == 'lecturer':
+            class_tt_qs = ClassTimetable.objects.filter(
+                models.Q(course_unit__lecturers=user) | models.Q(course__faculty__in=assigned_facs)
+            ).distinct()
+            exam_tt_qs = ExamTimetable.objects.filter(
+                models.Q(course_unit__lecturers=user) | models.Q(course__faculty__in=assigned_facs)
+            ).distinct()
+        else:
+            class_tt_qs = ClassTimetable.objects.all()
+            exam_tt_qs = ExamTimetable.objects.all()
+
+        # Database counts
+        courses_count = courses_qs.count()
+        exams_count = exams_qs.count()
+        tests_count = tests_qs.count()
+        class_tt_count = class_tt_qs.count()
+        exam_tt_count = exam_tt_qs.count()
+        sessions_count = AttendanceSession.objects.filter(lecturer=user).count() if user.role == 'lecturer' else AttendanceSession.objects.count()
+
+        users_count = 0
+        invites_count = 0
+        if user.role in ['admin', 'platform_coordinator']:
+            users_count = User.objects.count()
+            invites_count = Invitation.objects.count()
+
+        # User Assigned Faculties Details (from DB)
+        db_facs = list(user.assigned_faculties.all())
+        if not db_facs and user.faculty:
+            db_facs = [user.faculty]
+        if not db_facs and user.role in ['admin', 'platform_coordinator', 'registrar', 'dvc', 'vc']:
+            db_facs = list(Faculty.objects.all())
+        if not db_facs:
+            db_facs = list(assigned_facs)
+        user_facs = [{'id': f.id, 'code': f.code, 'name': f.name} for f in db_facs]
+
+        # Faculty Stats
+        faculty_stats = []
+        for fac in user_facs:
+            f_id = fac.get('id')
+            f_code = fac.get('code')
+            fac_courses = Course.objects.filter(models.Q(faculty_id=f_id) | models.Q(faculty__code=f_code))
+            fac_c_count = fac_courses.count()
+            fac_exams_count = Exam.objects.filter(models.Q(course__in=fac_courses) | models.Q(course_unit__course__in=fac_courses)).count()
+            fac_tests_count = Test.objects.filter(models.Q(course__in=fac_courses) | models.Q(course_unit__course__in=fac_courses)).count()
+            faculty_stats.append({
+                'id': f_id,
+                'code': f_code,
+                'name': fac.get('name'),
+                'coursesCount': fac_c_count,
+                'examsCount': fac_exams_count,
+                'testsCount': fac_tests_count,
+                'totalAssessments': fac_exams_count + fac_tests_count
+            })
+
+        # Top 3 recent items
+        recent_exams = ExamSerializer(exams_qs.order_by('-created_at')[:3], many=True, context={'request': request}).data
+        recent_class_tt = ClassTimetableSerializer(class_tt_qs.order_by('-id')[:3], many=True).data
+        recent_exam_tt = ExamTimetableSerializer(exam_tt_qs.order_by('-id')[:3], many=True).data
+
+        return Response({
+            'stats': {
+                'courses': courses_count,
+                'exams': exams_count,
+                'tests': tests_count,
+                'classTimetables': class_tt_count,
+                'examTimetables': exam_tt_count,
+                'users': users_count,
+                'invites': invites_count,
+                'sessions': sessions_count
+            },
+            'assigned_faculties': user_facs,
+            'faculty_stats': faculty_stats,
+            'recent_exams': recent_exams,
+            'recent_class_timetables': recent_class_tt,
+            'recent_exam_timetables': recent_exam_tt
+        })
+
 
 def clean_sheet_cell(val):
     if val is None:
@@ -2225,11 +2490,14 @@ class CourseViewSet(viewsets.ModelViewSet):
                 qs = qs.filter(faculty__in=assigned_facs)
             qs = qs.distinct()
         elif user.role == 'student':
+            assigned_facs = get_user_assigned_faculties(user)
             assigned_courses_qs = Course.objects.filter(
                 models.Q(assigned_students=user) | models.Q(applications__student=user, applications__status='approved')
             ).distinct()
             if assigned_courses_qs.exists():
                 qs = assigned_courses_qs
+            elif assigned_facs.exists():
+                qs = Course.objects.filter(faculty__in=assigned_facs).distinct()
             elif user.faculty_id:
                 qs = Course.objects.filter(faculty_id=user.faculty_id).distinct()
             else:
@@ -2295,6 +2563,31 @@ class CourseViewSet(viewsets.ModelViewSet):
         course = self.get_object()
         units = course.units.all().order_by('year_of_study', 'code')
         return Response(CourseUnitSerializer(units, many=True).data)
+
+    @action(detail=True, methods=['get'], permission_classes=[permissions.IsAuthenticated])
+    def enrolled_students(self, request, pk=None):
+        course = self.get_object()
+        user = request.user
+        if user.role == 'student':
+            return Response({'detail': 'Students cannot view enrolled student roster.'}, status=status.HTTP_403_FORBIDDEN)
+        
+        students = User.objects.filter(role='student').filter(
+            models.Q(assigned_courses=course) |
+            models.Q(course_applications__course=course, course_applications__status='approved') |
+            (models.Q(faculty=course.faculty) if course.faculty else models.Q())
+        ).distinct().order_by('first_name', 'last_name', 'username')
+
+        data = [{
+            'id': s.id,
+            'username': s.username,
+            'name': s.get_full_name() or s.username,
+            'reg_number': s.registration_number,
+            'year_of_study': s.year_of_study,
+            'semester': s.semester,
+            'academic_year': s.academic_year,
+            'email': s.email
+        } for s in students]
+        return Response(data)
 
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, (IsAdmin | IsPlatformCoordinator | IsFacultyAdmin)])
     def attach_units(self, request, pk=None):
@@ -2455,7 +2748,7 @@ class CourseUnitViewSet(viewsets.ModelViewSet):
             return [permissions.AllowAny()]
         if self.action in ['update', 'partial_update', 'destroy', 'bulk_delete']:
             return [permissions.IsAuthenticated(), IsStrictSystemAdmin()]
-        if self.action in ['upload_csv', 'bulk_upload', 'assign_lecturer']:
+        if self.action in ['upload_csv', 'bulk_upload', 'assign_lecturer', 'bulk_assign_lecturer']:
             return [permissions.IsAuthenticated(), (IsAdmin | IsPlatformCoordinator | IsFacultyAdmin | IsDean | IsRegistrar)()]
         return [permissions.IsAuthenticated(), (IsAdmin | IsPlatformCoordinator | IsFacultyAdmin)()]
 
@@ -2548,15 +2841,10 @@ class CourseUnitViewSet(viewsets.ModelViewSet):
         try:
             lecturer = User.objects.get(id=int(lecturer_id))
             if request.user.role in ['faculty_admin', 'dean']:
-                sec_faculty = request.user.faculty
-                if not sec_faculty and hasattr(request.user, 'administered_faculties'):
-                    sec_faculty = request.user.administered_faculties.first()
-                if not sec_faculty and hasattr(request.user, 'managed_faculties'):
-                    sec_faculty = request.user.managed_faculties.first()
-
-                if lecturer.faculty and sec_faculty and lecturer.faculty != sec_faculty:
+                user_facs = get_user_assigned_faculties(request.user)
+                if unit.course and unit.course.faculty and unit.course.faculty not in user_facs:
                     return Response({
-                        'detail': f"Permission Denied: As a Faculty Secretary for {sec_faculty.code}, you cannot assign/unassign lecturer {lecturer.get_full_name() or lecturer.username} who is assigned to faculty '{lecturer.faculty.code}'."
+                        'detail': f"Permission Denied: Course unit {unit.code} does not belong to your managed faculty."
                     }, status=status.HTTP_403_FORBIDDEN)
 
             if action_type == 'unassign':
@@ -2564,6 +2852,8 @@ class CourseUnitViewSet(viewsets.ModelViewSet):
                 msg = f'Unassigned lecturer {lecturer.get_full_name() or lecturer.username} from {unit.code}.'
             else:
                 unit.lecturers.add(lecturer)
+                if unit.course and unit.course.faculty:
+                    lecturer.assigned_faculties.add(unit.course.faculty)
                 msg = f'Assigned lecturer {lecturer.get_full_name() or lecturer.username} to {unit.code}.'
             log_system_event(request.user, msg, level='INFO')
             return Response({'detail': msg, 'unit': CourseUnitSerializer(unit).data})
@@ -2571,6 +2861,79 @@ class CourseUnitViewSet(viewsets.ModelViewSet):
             return Response({'detail': 'Lecturer user not found.'}, status=status.HTTP_404_NOT_FOUND)
         except (ValueError, TypeError):
             return Response({'detail': 'Invalid lecturer_id format.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsAdmin | IsPlatformCoordinator | IsFacultyAdmin | IsDean])
+    def bulk_assign_lecturer(self, request):
+        raw_unit_ids = request.data.get('unit_ids') or request.data.get('course_unit_ids') or request.data.get('ids') or []
+        lecturer_id = request.data.get('lecturer_id')
+        action_type = request.data.get('action', 'assign')
+
+        if not raw_unit_ids:
+            return Response({'detail': 'Please select at least one course unit.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not lecturer_id:
+            return Response({'detail': 'Please select a lecturer.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            lecturer = User.objects.get(id=int(lecturer_id), role='lecturer')
+        except User.DoesNotExist:
+            return Response({'detail': 'Lecturer not found.'}, status=status.HTTP_404_NOT_FOUND)
+        except (ValueError, TypeError):
+            return Response({'detail': 'Invalid lecturer ID format.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        unit_ids = [int(u) for u in raw_unit_ids if str(u).isdigit()]
+        units = CourseUnit.objects.filter(id__in=unit_ids)
+        if request.user.role in ['faculty_admin', 'dean']:
+            user_facs = get_user_assigned_faculties(request.user)
+            units = units.filter(course__faculty__in=user_facs)
+
+        count = units.count()
+        if count == 0:
+            return Response({'detail': 'No authorized course units found to update.'}, status=status.HTTP_404_NOT_FOUND)
+
+        for u in units:
+            if action_type == 'unassign':
+                u.lecturers.remove(lecturer)
+            else:
+                u.lecturers.add(lecturer)
+                if u.course and u.course.faculty:
+                    lecturer.assigned_faculties.add(u.course.faculty)
+
+        lec_name = lecturer.get_full_name() or lecturer.username
+        verb = "unassigned from" if action_type == 'unassign' else "assigned to"
+        msg = f"Successfully {verb} {count} course unit(s) for lecturer {lec_name} (@{lecturer.username})."
+        log_system_event(request.user, "BULK_LECTURER_UNIT_ASSIGN_SUCCESS", level='AUDIT', details=msg)
+        return Response({
+            'detail': msg,
+            'count': count,
+            'action': action_type,
+            'lecturer_id': lecturer.id,
+            'lecturer_name': lec_name
+        })
+
+    @action(detail=True, methods=['get'], permission_classes=[permissions.IsAuthenticated])
+    def enrolled_students(self, request, pk=None):
+        unit = self.get_object()
+        user = request.user
+        if user.role == 'student':
+            return Response({'detail': 'Students cannot view enrolled student roster.'}, status=status.HTTP_403_FORBIDDEN)
+        
+        students = User.objects.filter(role='student').filter(
+            models.Q(assigned_courses=unit.course) |
+            models.Q(course_applications__course=unit.course, course_applications__status='approved') |
+            (models.Q(faculty=unit.course.faculty) if unit.course.faculty else models.Q())
+        ).distinct().order_by('first_name', 'last_name', 'username')
+
+        data = [{
+            'id': s.id,
+            'username': s.username,
+            'name': s.get_full_name() or s.username,
+            'reg_number': s.registration_number,
+            'year_of_study': s.year_of_study,
+            'semester': s.semester,
+            'academic_year': s.academic_year,
+            'email': s.email
+        } for s in students]
+        return Response(data)
 
     def perform_update(self, serializer):
         user = self.request.user
@@ -3065,6 +3428,8 @@ class ExamViewSet(viewsets.ModelViewSet):
                 models.Q(additional_course_units__semester=student_sem)
             ).filter(
                 models.Q(academic_year__iexact=student_acad) | models.Q(academic_year__isnull=True) | models.Q(academic_year__iexact='All') | models.Q(academic_year='')
+            ).filter(
+                models.Q(is_special=False) | models.Q(special_students=user)
             ).distinct().order_by('-created_at')
         elif user.role == 'lecturer':
             assigned_facs = get_user_assigned_faculties(user)
@@ -3181,19 +3546,25 @@ class ExamViewSet(viewsets.ModelViewSet):
 
         if user.role == 'lecturer':
             course = serializer.validated_data.get('course')
+            assigned_facs = get_user_assigned_faculties(user)
             is_assigned = False
             if course_unit and course_unit.lecturers.filter(id=user.id).exists():
                 is_assigned = True
             elif course and course.units.filter(lecturers=user).exists():
                 is_assigned = True
+            elif course_unit and course_unit.course and course_unit.course.faculty in assigned_facs:
+                is_assigned = True
+            elif course and course.faculty in assigned_facs:
+                is_assigned = True
+
             if not is_assigned:
-                raise serializers.ValidationError({"detail": "Permission Denied: You can only set exams for your assigned course units."})
+                raise serializers.ValidationError({"detail": "Permission Denied: You can only set exams for course units within your assigned faculties or assigned course units."})
             
             # Validate additional course units
             add_units = serializer.validated_data.get('additional_course_units', [])
             for u in add_units:
-                if not u.lecturers.filter(id=user.id).exists():
-                    raise serializers.ValidationError({"additional_course_units": f"Permission Denied: Course unit {u.code} is not assigned to you."})
+                if not (u.lecturers.filter(id=user.id).exists() or (u.course and u.course.faculty in assigned_facs)):
+                    raise serializers.ValidationError({"additional_course_units": f"Permission Denied: Course unit {u.code} does not belong to any of your assigned faculties."})
 
         exam = serializer.save(lecturer=user)
         log_system_event(user, f"Exam Created: {exam.title} ({exam.course.code})", level="INFO")
@@ -3583,10 +3954,64 @@ class ExamViewSet(viewsets.ModelViewSet):
             'card_type': 'exam_scorecard'
         })
 
+    @action(detail=True, methods=['get'], permission_classes=[permissions.IsAuthenticated])
+    def export_txt(self, request, pk=None):
+        if request.user.role == 'student':
+            return Response({'detail': 'Unauthorized: Students are not permitted to export question papers.'}, status=status.HTTP_403_FORBIDDEN)
+        exam = self.get_object()
+        
+        lines = []
+        lines.append("=" * 80)
+        lines.append("CLARKE INTERNATIONAL UNIVERSITY (CIU)")
+        lines.append(f"EXAMINATION QUESTION PAPER: {exam.title.upper()}")
+        lines.append("=" * 80)
+        lines.append(f"Course: {exam.course.name} ({exam.course.code})")
+        if exam.course_unit:
+            lines.append(f"Course Unit: {exam.course_unit.name} ({exam.course_unit.code})")
+        lines.append(f"Lecturer: {exam.lecturer.get_full_name() or exam.lecturer.username}")
+        lines.append(f"Academic Year: {exam.academic_year or 'All'} | Semester: {exam.semester or 'All'}")
+        lines.append(f"Duration: {exam.duration_minutes} minutes")
+        lines.append(f"Special Examination: {'Yes (Restricted to specific designated students)' if exam.is_special else 'No (Open to all enrolled students)'}")
+        if exam.is_special:
+            stud_names = [f"{s.get_full_name() or s.username} ({s.registration_number or s.username})" for s in exam.special_students.all()]
+            lines.append(f"Authorized Students ({len(stud_names)}): {', '.join(stud_names) if stud_names else 'None specified'}")
+        lines.append(f"Scheduled Start: {exam.scheduled_start.strftime('%Y-%m-%d %H:%M EAT') if exam.scheduled_start else 'Not set'}")
+        lines.append(f"Due Date: {exam.due_date.strftime('%Y-%m-%d %H:%M EAT') if exam.due_date else 'Not set'}")
+        lines.append("=" * 80)
+        lines.append("")
+        
+        questions = exam.questions.all().order_by('id')
+        lines.append(f"TOTAL QUESTIONS: {questions.count()}")
+        lines.append("")
+        
+        for idx, q in enumerate(questions, start=1):
+            lines.append(f"{idx}. {q.question_text.strip()}")
+            if q.option_a:
+                lines.append(f"A. {q.option_a.strip()}")
+            if q.option_b:
+                lines.append(f"B. {q.option_b.strip()}")
+            if q.option_c:
+                lines.append(f"C. {q.option_c.strip()}")
+            if q.option_d:
+                lines.append(f"D. {q.option_d.strip()}")
+            lines.append(f"ANSWER: {q.correct_option}")
+            lines.append("")
+            
+        content = "\n".join(lines)
+        safe_title = "".join(c for c in exam.title if c.isalnum() or c in (' ', '_', '-')).strip().replace(' ', '_')
+        filename = f"{exam.course.code}_{safe_title}_Exam.txt"
+        response = HttpResponse(content, content_type='text/plain; charset=utf-8')
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        return response
+
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsStudent])
     def start_attempt(self, request, pk=None):
         exam = self.get_object()
         student = request.user
+
+        # Special Exam Check: if exam is special, student must be in special_students!
+        if exam.is_special and not exam.special_students.filter(id=student.id).exists():
+            return Response({'detail': 'Exam Access Denied: This is a special examination restricted to designated students.'}, status=status.HTTP_403_FORBIDDEN)
 
         # Fee Gate: Exam requires 100% full tuition clearance or CIU Cleared Students API verification!
         acad = getattr(exam, 'academic_year', None) or getattr(student, 'academic_year', '2026/2027') or '2026/2027'
@@ -3745,24 +4170,30 @@ class ExamAttemptViewSet(viewsets.ReadOnlyModelViewSet):
         now = timezone.now()
         exam = attempt.exam
 
-        # Hard Due Date Cutoff (with 5-minute network grace window for progress auto-submissions)
-        if exam.due_date and now > (exam.due_date + timezone.timedelta(minutes=5)):
-            return Response({'detail': 'Exam Access Denied: The final deadline (due date) for this exam has passed. Submissions are closed.'}, status=status.HTTP_400_BAD_REQUEST)
-        if exam.due_date and now > exam.due_date:
-            is_late = True
-            auto_submitted_reason = auto_submitted_reason or 'Scheduled exam due date reached to the dot'
-
         answers = request.data.get('answers', {})
         tab_switches = request.data.get('tab_switches', 0)
         auto_submitted_reason = request.data.get('auto_submitted_reason', None)
         late_submission_reason = (request.data.get('late_submission_reason') or request.data.get('late_comment') or request.data.get('comment') or '').strip()
 
-        # Late detection
+        # Hard Due Date Cutoff (with 3-minute network grace period for manual / auto-submissions)
+        grace_window = timezone.timedelta(minutes=3)
+        if exam.due_date and now > (exam.due_date + grace_window):
+            return Response({'detail': 'Exam Access Denied: The 3-minute grace period following the exam deadline (due date) has expired. Submissions are closed.'}, status=status.HTTP_400_BAD_REQUEST)
+        
         is_late = attempt.is_late
+        if exam.due_date and now > exam.due_date:
+            is_late = True
+            auto_submitted_reason = auto_submitted_reason or 'Scheduled exam due date reached to the dot'
+
+        # Duration timeout check with 3-minute grace period
         allotted_stop = attempt.started_at + timezone.timedelta(minutes=exam.duration_minutes)
         scheduled_stop = (exam.scheduled_start + timezone.timedelta(minutes=exam.duration_minutes)) if exam.scheduled_start else None
 
-        if now > allotted_stop or (scheduled_stop and now > scheduled_stop):
+        if now > (allotted_stop + grace_window):
+            is_late = True
+            if not auto_submitted_reason:
+                auto_submitted_reason = 'Submitted after exam duration timeout and 3-minute grace period'
+        elif now > allotted_stop or (scheduled_stop and now > scheduled_stop):
             is_late = True
 
         # Determine submission type (manual, system, or security logs)
@@ -3893,6 +4324,8 @@ class TestViewSet(viewsets.ModelViewSet):
                 models.Q(additional_course_units__semester=student_sem)
             ).filter(
                 models.Q(academic_year__iexact=student_acad) | models.Q(academic_year__isnull=True) | models.Q(academic_year__iexact='All') | models.Q(academic_year='')
+            ).filter(
+                models.Q(is_special=False) | models.Q(special_students=user)
             ).distinct().order_by('-created_at')
         elif user.role == 'lecturer':
             assigned_facs = get_user_assigned_faculties(user)
@@ -4013,19 +4446,25 @@ class TestViewSet(viewsets.ModelViewSet):
 
         if user.role == 'lecturer':
             course = serializer.validated_data.get('course')
+            assigned_facs = get_user_assigned_faculties(user)
             is_assigned = False
             if course_unit and course_unit.lecturers.filter(id=user.id).exists():
                 is_assigned = True
             elif course and course.units.filter(lecturers=user).exists():
                 is_assigned = True
+            elif course_unit and course_unit.course and course_unit.course.faculty in assigned_facs:
+                is_assigned = True
+            elif course and course.faculty in assigned_facs:
+                is_assigned = True
+
             if not is_assigned:
-                raise serializers.ValidationError({"detail": "Permission Denied: You can only set tests for your assigned course units."})
+                raise serializers.ValidationError({"detail": "Permission Denied: You can only set tests for course units within your assigned faculties or assigned course units."})
             
             # Validate additional course units
             add_units = serializer.validated_data.get('additional_course_units', [])
             for u in add_units:
-                if not u.lecturers.filter(id=user.id).exists():
-                    raise serializers.ValidationError({"additional_course_units": f"Permission Denied: Course unit {u.code} is not assigned to you."})
+                if not (u.lecturers.filter(id=user.id).exists() or (u.course and u.course.faculty in assigned_facs)):
+                    raise serializers.ValidationError({"additional_course_units": f"Permission Denied: Course unit {u.code} does not belong to any of your assigned faculties."})
 
         test = serializer.save(lecturer=user)
         log_system_event(user, f"Test Created: {test.title} ({test.course.code})", level="INFO")
@@ -4464,10 +4903,64 @@ class TestViewSet(viewsets.ModelViewSet):
             'questions': created
         })
 
+    @action(detail=True, methods=['get'], permission_classes=[permissions.IsAuthenticated])
+    def export_txt(self, request, pk=None):
+        if request.user.role == 'student':
+            return Response({'detail': 'Unauthorized: Students are not permitted to export question papers.'}, status=status.HTTP_403_FORBIDDEN)
+        test_obj = self.get_object()
+        
+        lines = []
+        lines.append("=" * 80)
+        lines.append("CLARKE INTERNATIONAL UNIVERSITY (CIU)")
+        lines.append(f"CONTINUOUS ASSESSMENT / TEST: {test_obj.title.upper()} [{test_obj.get_category_display().upper()}]")
+        lines.append("=" * 80)
+        lines.append(f"Course: {test_obj.course.name} ({test_obj.course.code})")
+        if test_obj.course_unit:
+            lines.append(f"Course Unit: {test_obj.course_unit.name} ({test_obj.course_unit.code})")
+        lines.append(f"Lecturer: {test_obj.lecturer.get_full_name() or test_obj.lecturer.username}")
+        lines.append(f"Academic Year: {test_obj.academic_year or 'All'} | Semester: {test_obj.semester or 'All'}")
+        lines.append(f"Duration: {test_obj.duration_minutes} minutes | Total Marks: {test_obj.total_marks} | Pass %: {test_obj.pass_percentage}%")
+        lines.append(f"Special Test: {'Yes (Restricted to specific designated students)' if test_obj.is_special else 'No (Open to all enrolled students)'}")
+        if test_obj.is_special:
+            stud_names = [f"{s.get_full_name() or s.username} ({s.registration_number or s.username})" for s in test_obj.special_students.all()]
+            lines.append(f"Authorized Students ({len(stud_names)}): {', '.join(stud_names) if stud_names else 'None specified'}")
+        lines.append(f"Scheduled Start: {test_obj.scheduled_start.strftime('%Y-%m-%d %H:%M EAT') if test_obj.scheduled_start else 'Not set'}")
+        lines.append(f"Due Date: {test_obj.due_date.strftime('%Y-%m-%d %H:%M EAT') if test_obj.due_date else 'Not set'}")
+        lines.append("=" * 80)
+        lines.append("")
+        
+        questions = test_obj.questions.all().order_by('id')
+        lines.append(f"TOTAL QUESTIONS: {questions.count()}")
+        lines.append("")
+        
+        for idx, q in enumerate(questions, start=1):
+            lines.append(f"{idx}. {q.question_text.strip()} [Points: {q.points}]")
+            if q.option_a:
+                lines.append(f"A. {q.option_a.strip()}")
+            if q.option_b:
+                lines.append(f"B. {q.option_b.strip()}")
+            if q.option_c:
+                lines.append(f"C. {q.option_c.strip()}")
+            if q.option_d:
+                lines.append(f"D. {q.option_d.strip()}")
+            lines.append(f"ANSWER: {q.correct_answer}")
+            lines.append("")
+            
+        content = "\n".join(lines)
+        safe_title = "".join(c for c in test_obj.title if c.isalnum() or c in (' ', '_', '-')).strip().replace(' ', '_')
+        filename = f"{test_obj.course.code}_{safe_title}_Test.txt"
+        response = HttpResponse(content, content_type='text/plain; charset=utf-8')
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        return response
+
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, IsStudent])
     def start_attempt(self, request, pk=None):
         test_obj = self.get_object()
         student = request.user
+
+        # Special Test Check: if test is special, student must be in special_students!
+        if test_obj.is_special and not test_obj.special_students.filter(id=student.id).exists():
+            return Response({'detail': 'Test Access Denied: This is a special test restricted to designated students.'}, status=status.HTTP_403_FORBIDDEN)
 
         # Fee Gate: Test requires at least 50% tuition clearance or CIU Cleared Students API verification!
         acad = getattr(test_obj, 'academic_year', None) or getattr(student, 'academic_year', '2026/2027') or '2026/2027'
@@ -4633,24 +5126,30 @@ class TestAttemptViewSet(viewsets.ReadOnlyModelViewSet):
         now = timezone.now()
         test_obj = attempt.test
 
-        # Hard Due Date Cutoff (with 5-minute network grace window for progress auto-submissions)
-        if test_obj.due_date and now > (test_obj.due_date + timezone.timedelta(minutes=5)):
-            return Response({'detail': 'Test Access Denied: The final deadline (due date) for this test has passed. Submissions are closed.'}, status=status.HTTP_400_BAD_REQUEST)
-        if test_obj.due_date and now > test_obj.due_date:
-            is_late = True
-            auto_submitted_reason = auto_submitted_reason or 'Scheduled test due date reached to the dot'
-
         answers = request.data.get('answers', {})
         tab_switches = request.data.get('tab_switches', 0)
         auto_submitted_reason = request.data.get('auto_submitted_reason', None)
         late_submission_reason = (request.data.get('late_submission_reason') or request.data.get('late_comment') or request.data.get('comment') or '').strip()
 
-        # Late detection
+        # Hard Due Date Cutoff (with 3-minute network grace period for manual / auto-submissions)
+        grace_window = timezone.timedelta(minutes=3)
+        if test_obj.due_date and now > (test_obj.due_date + grace_window):
+            return Response({'detail': 'Test Access Denied: The 3-minute grace period following the test deadline (due date) has expired. Submissions are closed.'}, status=status.HTTP_400_BAD_REQUEST)
+        
         is_late = attempt.is_late
+        if test_obj.due_date and now > test_obj.due_date:
+            is_late = True
+            auto_submitted_reason = auto_submitted_reason or 'Scheduled test due date reached to the dot'
+
+        # Duration timeout check with 3-minute grace period
         allotted_stop = attempt.started_at + timezone.timedelta(minutes=test_obj.duration_minutes)
         scheduled_stop = (test_obj.scheduled_start + timezone.timedelta(minutes=test_obj.duration_minutes)) if test_obj.scheduled_start else None
 
-        if now > allotted_stop or (scheduled_stop and now > scheduled_stop):
+        if now > (allotted_stop + grace_window):
+            is_late = True
+            if not auto_submitted_reason:
+                auto_submitted_reason = 'Submitted after test duration timeout and 3-minute grace period'
+        elif now > allotted_stop or (scheduled_stop and now > scheduled_stop):
             is_late = True
 
         # Determine submission type (manual, system, or security logs)

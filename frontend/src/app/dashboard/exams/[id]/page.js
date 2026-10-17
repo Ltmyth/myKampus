@@ -21,6 +21,19 @@ export default function TakeExamPage() {
   const [currentIdx, setCurrentIdx] = useState(0);
   const [answers, setAnswers] = useState({}); // { question_id: 'A/B/C/D' }
   const [timeLeft, setTimeLeft] = useState(0); // seconds remaining
+
+  // 3-Minute Network Grace Period State (Duration Expired)
+  const [inGracePeriod, setInGracePeriod] = useState(false);
+  const [graceTimeLeft, setGraceTimeLeft] = useState(180); // 3 minutes = 180 seconds
+
+  // Ugandan Local Time & Clock Skew Tracking
+  const [serverTimeEAT, setServerTimeEAT] = useState('');
+  const [clockSkewMs, setClockSkewMs] = useState(0);
+  const [showSkewWarning, setShowSkewWarning] = useState(false);
+
+  // Network & Draft Resilience
+  const [isOffline, setIsOffline] = useState(typeof window !== 'undefined' ? !navigator.onLine : false);
+  const [submissionFailed, setSubmissionFailed] = useState(false);
   
   // Security log warnings
   const [tabSwitches, setTabSwitches] = useState(0);
@@ -57,6 +70,42 @@ export default function TakeExamPage() {
   useEffect(() => {
     tabSwitchesRef.current = tabSwitches;
   }, [tabSwitches]);
+
+  // Live Kampala EAT Clock Updater
+  useEffect(() => {
+    const updateEAT = () => {
+      try {
+        const d = new Date(Date.now() + clockSkewMs);
+        setServerTimeEAT(d.toLocaleTimeString('en-GB', { timeZone: 'Africa/Kampala', hour12: false }));
+      } catch (_) {
+        setServerTimeEAT(new Date().toLocaleTimeString());
+      }
+    };
+    updateEAT();
+    const interval = setInterval(updateEAT, 1000);
+    return () => clearInterval(interval);
+  }, [clockSkewMs]);
+
+  // Offline / Online Connectivity Listener
+  useEffect(() => {
+    const handleOnline = () => setIsOffline(false);
+    const handleOffline = () => setIsOffline(true);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
+  // LocalStorage Auto-Sync Backup on each answer update
+  useEffect(() => {
+    if (!examId || !user || !answers || Object.keys(answers).length === 0) return;
+    try {
+      const draftKey = `ciu_exam_draft_${examId}_${user.id}`;
+      localStorage.setItem(draftKey, JSON.stringify(answers));
+    } catch (_) {}
+  }, [answers, examId, user]);
 
   useEffect(() => {
     if (examId) {
@@ -147,82 +196,129 @@ export default function TakeExamPage() {
     };
   }, [loading, attempt, proctoringSetting.is_proctoring_enabled, examId, tabSwitches]);
 
-  // Timer countdown hook (strictly followed to the dot: auto-submit upon reaching 0)
+  // 1. Regular Timer countdown hook
   useEffect(() => {
+    if (inGracePeriod || loading) return;
+
     if (timeLeft > 0) {
       timerRef.current = setInterval(() => {
         setTimeLeft(prev => {
           if (prev <= 1) {
             clearInterval(timerRef.current);
-            autoSubmitExam(null, null, tabSwitchesRef.current, 'Exam End Time Reached: Assessment duration or scheduled cutoff reached.', 'system');
+            // Transition into 3-minute network grace period!
+            setInGracePeriod(true);
+            setGraceTimeLeft(180);
             return 0;
           }
           return prev - 1;
         });
       }, 1000);
-    } else if (timeLeft <= 0 && attempt && !autoSubmittedRef.current && !loading) {
-      autoSubmitExam(null, null, tabSwitchesRef.current, 'Exam End Time Reached: Assessment duration or scheduled cutoff reached.', 'system');
+    } else if (timeLeft <= 0 && attempt && !autoSubmittedRef.current && !loading && !inGracePeriod) {
+      setInGracePeriod(true);
+      setGraceTimeLeft(180);
     }
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
-  }, [timeLeft, attempt, loading]);
+  }, [timeLeft, attempt, loading, inGracePeriod]);
+
+  // 2. 3-Minute Network Grace Period Countdown
+  useEffect(() => {
+    if (!inGracePeriod || autoSubmittedRef.current || loading) return;
+
+    const graceTimer = setInterval(() => {
+      setGraceTimeLeft(prev => {
+        if (prev <= 1) {
+          clearInterval(graceTimer);
+          autoSubmitExam(null, null, tabSwitchesRef.current, 'Exam Duration Timeout (3-Minute Network Grace Period Expired): Auto-submitted with accurate student progress.', 'system');
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(graceTimer);
+  }, [inGracePeriod, loading]);
 
   async function loadExamAttempt() {
     try {
       setLoading(true);
-      // Fetch exam details, start attempt, and proctoring setting
-      const [examData, attemptData, qData, procData] = await Promise.all([
+      // Fetch exam details, start attempt, proctoring setting, and official Kampala server time
+      const [examData, attemptData, qData, procData, serverTime] = await Promise.all([
         api.get(`/exams/${examId}/`),
         api.post(`/exams/${examId}/start_attempt/`),
         api.get(`/exams/${examId}/questions/`),
-        api.get('/proctoring-settings/').catch(() => ({ is_proctoring_enabled: true }))
+        api.get('/proctoring-settings/').catch(() => ({ is_proctoring_enabled: true })),
+        api.get('/server-time/').catch(() => null)
       ]);
+
+      if (serverTime?.iso_timestamp) {
+        const sNow = new Date(serverTime.iso_timestamp).getTime();
+        const cNow = Date.now();
+        const diff = sNow - cNow;
+        setClockSkewMs(diff);
+        if (Math.abs(diff) > 120000) { // > 2 minutes drift
+          setShowSkewWarning(true);
+        }
+      }
 
       setExam(examData);
       setProctoringSetting(procData || { is_proctoring_enabled: true });
 
       if (attemptData.completed_at) {
-        // Already finished
         router.push(`/dashboard/exams/${examId}/results`);
         return;
       }
       setAttempt(attemptData);
-      setAnswers(attemptData.answers || {});
       setQuestions(qData || []);
+
+      // Restore answers from backend attempt or local draft backup
+      let loadedAnswers = attemptData.answers || {};
+      if (!loadedAnswers || Object.keys(loadedAnswers).length === 0) {
+        try {
+          const draftKey = `ciu_exam_draft_${examId}_${user?.id}`;
+          const localDraft = localStorage.getItem(draftKey);
+          if (localDraft) {
+            loadedAnswers = JSON.parse(localDraft);
+          }
+        } catch (_) {}
+      }
+      setAnswers(loadedAnswers);
 
       // Check for late start (> 1/3 of set duration)
       if (examData.scheduled_start) {
         const scheduledStartMs = new Date(examData.scheduled_start).getTime();
         const durationMs = (examData.duration_minutes || 60) * 60 * 1000;
         const oneThirdDurationMs = durationMs / 3;
-        const delayFromStart = Date.now() - scheduledStartMs;
+        const nowEAT = Date.now() + (serverTime?.iso_timestamp ? (new Date(serverTime.iso_timestamp).getTime() - Date.now()) : 0);
+        const delayFromStart = nowEAT - scheduledStartMs;
         if (delayFromStart > oneThirdDurationMs) {
           setShowLateStartWarning(true);
         }
       }
 
       // Calculate time remaining based on duration, start time, and hard due_date cutoff
-      const startTime = new Date(attemptData.started_at || attemptData.start_time || Date.now()).getTime();
+      const now = Date.now() + (serverTime?.iso_timestamp ? (new Date(serverTime.iso_timestamp).getTime() - Date.now()) : 0);
+      const startTime = new Date(attemptData.started_at || attemptData.start_time || now).getTime();
       const allottedEndTime = startTime + (examData.duration_minutes || 60) * 60 * 1000;
-      const now = Date.now();
       const dueTimestamp = examData.due_date ? new Date(examData.due_date).getTime() : null;
-      // Late start allowed before due_date, but exam end time is strictly followed to the dot for auto-submission
       const effectiveEndTime = dueTimestamp ? Math.min(allottedEndTime, dueTimestamp) : allottedEndTime;
-      const remainingSeconds = Math.max(0, Math.floor((effectiveEndTime - now) / 1000));
+      const remainingSeconds = Math.floor((effectiveEndTime - now) / 1000);
 
-      if (dueTimestamp && now >= dueTimestamp) {
-        setTimeLeft(0);
-        autoSubmitExam(attemptData.id, attemptData.answers, 0, 'Assessment Window Closed: Final Due Date Reached', 'system');
-        return;
-      }
+      const GRACE_PERIOD_SECONDS = 180; // 3 minutes
 
-      if (remainingSeconds <= 0) {
+      if (remainingSeconds <= -GRACE_PERIOD_SECONDS) {
         setTimeLeft(0);
-        autoSubmitExam(attemptData.id, attemptData.answers, 0, 'Duration Timeout: The allocated examination duration has expired.', 'system');
+        setInGracePeriod(false);
+        autoSubmitExam(attemptData.id, loadedAnswers, 0, 'Duration Timeout: Examination duration and 3-minute grace period expired.', 'system');
         return;
+      } else if (remainingSeconds <= 0) {
+        setTimeLeft(0);
+        setInGracePeriod(true);
+        setGraceTimeLeft(Math.max(1, GRACE_PERIOD_SECONDS + remainingSeconds));
       } else {
         setTimeLeft(remainingSeconds);
+        setInGracePeriod(false);
       }
 
     } catch (err) {
@@ -233,6 +329,7 @@ export default function TakeExamPage() {
   }
 
   const selectOption = (qId, option) => {
+    if (inGracePeriod) return; // Inputs locked during 3-minute grace period
     setAnswers(prev => ({
       ...prev,
       [qId]: option
@@ -256,16 +353,23 @@ export default function TakeExamPage() {
   };
 
   const performSubmit = async (attId, answersPayload, switches = tabSwitches, reason = null, explicitSubmissionType = null) => {
+    const finalAnswers = answersPayload || answers;
+    try {
+      const draftKey = `ciu_exam_draft_${examId}_${user?.id}`;
+      localStorage.setItem(draftKey, JSON.stringify(finalAnswers));
+    } catch (_) {}
+
     try {
       setLoading(true);
       setErrorMsg('');
+      setSubmissionFailed(false);
       setSuccessMsg('✅ Exam paper submitted successfully! Redirecting to results...');
 
       let subType = explicitSubmissionType;
       if (!subType) {
         if (reason && (reason.toLowerCase().includes('security') || reason.toLowerCase().includes('tab switch') || reason.toLowerCase().includes('lockdown') || reason.toLowerCase().includes('blur'))) {
           subType = 'security logs';
-        } else if (reason && (reason.toLowerCase().includes('duration') || reason.toLowerCase().includes('timeout') || reason.toLowerCase().includes('window closed') || reason.toLowerCase().includes('deadline') || reason.toLowerCase().includes('end time'))) {
+        } else if (reason && (reason.toLowerCase().includes('duration') || reason.toLowerCase().includes('timeout') || reason.toLowerCase().includes('window closed') || reason.toLowerCase().includes('deadline') || reason.toLowerCase().includes('end time') || reason.toLowerCase().includes('grace'))) {
           subType = 'system';
         } else {
           subType = 'manual';
@@ -274,7 +378,7 @@ export default function TakeExamPage() {
 
       const nowIso = new Date().toISOString();
       await api.post(`/attempts/${attId}/submit/`, {
-        answers: answersPayload,
+        answers: finalAnswers,
         tab_switches: switches,
         auto_submitted_reason: reason,
         late_submission_reason: lateReason,
@@ -282,12 +386,21 @@ export default function TakeExamPage() {
         start_time: attempt?.started_at || attempt?.start_time || null,
         submission_time: nowIso
       });
+
+      try {
+        localStorage.removeItem(`ciu_exam_draft_${examId}_${user?.id}`);
+      } catch (_) {}
+
       setTimeout(() => {
         router.push(`/dashboard/exams/${examId}/results?attemptId=${attId}`);
       }, 700);
     } catch (err) {
-      setErrorMsg(err.message || '⚠️ Failed to submit exam paper. Please check network connection and contact your lecturer.');
+      console.error('Submit exam error:', err);
       setLoading(false);
+      setSuccessMsg('');
+      setSubmissionFailed(true);
+      autoSubmittedRef.current = false; // Allow retry!
+      setErrorMsg(err.message || '⚠️ Network interruption during submission. Your answers are safely backed up in local browser memory. Please check your connection and click "Retry Submission".');
     }
   };
 
@@ -354,6 +467,74 @@ export default function TakeExamPage() {
         </div>
       )}
 
+      {/* Offline Connectivity Warning */}
+      {isOffline && (
+        <div className="bg-red-600 text-white p-3.5 rounded-2xl flex items-center justify-between text-xs font-bold animate-pulse shadow-md">
+          <div className="flex items-center space-x-2">
+            <span className="text-base">📡</span>
+            <span>OFFLINE WARNING: Internet connection lost. All your answers are safely cached locally in your browser. Do not reload or close this tab. Reconnect to submit.</span>
+          </div>
+          <span className="bg-black/30 px-2 py-0.5 rounded text-[10px]">Saved to Local Draft</span>
+        </div>
+      )}
+
+      {/* Clock Skew Warning */}
+      {showSkewWarning && (
+        <div className="bg-amber-500 text-slate-950 p-3 rounded-2xl flex items-center justify-between text-xs font-bold shadow-md animate-fade-in">
+          <div className="flex items-center space-x-2">
+            <span className="text-base">⏰</span>
+            <span>
+              DEVICE CLOCK DRIFT: Your computer clock differs from Ugandan Official Time (Kampala EAT UTC+3) by ~{Math.round(Math.abs(clockSkewMs)/60000)} min. Assessment timing is locked to official university server time.
+            </span>
+          </div>
+          <button onClick={() => setShowSkewWarning(false)} className="px-2 py-0.5 bg-black/20 hover:bg-black/30 rounded text-[11px] cursor-pointer">
+            Dismiss
+          </button>
+        </div>
+      )}
+
+      {/* 3-Minute Network Grace Period Active Banner */}
+      {inGracePeriod && (
+        <div className="bg-amber-50 border-2 border-amber-500 text-amber-950 p-4 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-3 shadow-lg animate-pulse">
+          <div className="flex items-center space-x-3">
+            <span className="text-3xl">⏳</span>
+            <div>
+              <p className="font-extrabold text-sm uppercase text-amber-950">
+                Regular Examination Duration Ended · 3-Minute Network Grace Period Active
+              </p>
+              <p className="text-xs text-amber-800 font-medium">
+                Questions are locked. Please submit your answers now. The system will automatically record and finalize all your answered progress in <span className="font-mono font-extrabold text-red-600 text-sm">{formatTime(graceTimeLeft)}</span>.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => performSubmit(attempt?.id, answers, tabSwitches, 'Submitted during 3-Minute Network Grace Period', 'manual')}
+            className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs rounded-xl shadow-md transition-all shrink-0 cursor-pointer"
+          >
+            ⚡ Submit Paper Now ({formatTime(graceTimeLeft)})
+          </button>
+        </div>
+      )}
+
+      {/* Submission Failure / Retry Banner */}
+      {submissionFailed && (
+        <div className="bg-red-50 border-2 border-red-500 text-red-950 p-4 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-3 shadow-lg">
+          <div className="flex items-center space-x-3">
+            <span className="text-2xl">⚠️</span>
+            <div>
+              <p className="font-bold text-xs text-red-900">{errorMsg}</p>
+              <p className="text-[11px] text-red-700">All your answers are safely preserved in browser local storage. Click below to retry submission now.</p>
+            </div>
+          </div>
+          <button
+            onClick={() => performSubmit(attempt?.id, answers, tabSwitches, 'Retried Submission after Network Interruption', 'manual')}
+            className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white font-bold text-xs rounded-xl shadow transition-all shrink-0 cursor-pointer"
+          >
+            🔄 Retry Submission Now
+          </button>
+        </div>
+      )}
+
       {/* Security Warning Modal banner */}
       {showSecurityWarning && (
         <div className="p-4 bg-red-100 border-l-4 border-red-600 rounded-xl text-red-800 text-xs font-semibold flex items-center justify-between animate-pulse">
@@ -400,18 +581,25 @@ export default function TakeExamPage() {
           <p className="text-xs text-slate-500 font-medium">Logged Student: <span className="font-semibold text-slate-700">{user.username}</span></p>
         </div>
 
-        {/* Timer Box */}
-        <div className={`flex items-center space-x-3 px-5 py-3 rounded-xl shadow-md border self-start md:self-center ${isLate ? 'bg-amber-950 text-white border-amber-600/40' : 'bg-brand-dark text-white border-white/5'}`}>
-          <svg xmlns="http://www.w3.org/2000/svg" className={`w-5 h-5 ${isLate ? 'text-amber-400 animate-bounce' : 'text-brand-emerald animate-pulse-slow'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
-          <div>
-            <span className="text-[9px] text-white/60 block font-bold uppercase tracking-wider">
-              {isLate ? '⚠️ Overtime (Late Window)' : 'Time Remaining'}
-            </span>
-            <span className={`font-mono text-lg font-extrabold tracking-wider ${isLate ? 'text-amber-300' : ''}`}>
-              {isLate ? (dueRemainingSeconds !== null ? `Due: ${formatTime(dueRemainingSeconds)}` : 'OVERTIME') : formatTime(timeLeft)}
-            </span>
+        {/* Kampala EAT Clock & Timer Box */}
+        <div className="flex flex-wrap items-center gap-3 self-start md:self-center">
+          <div className="hidden sm:flex items-center space-x-1.5 px-3 py-2.5 bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 rounded-xl text-xs font-mono font-bold shadow-sm">
+            <span>🇺🇬 Kampala EAT:</span>
+            <span>{serverTimeEAT || '00:00:00'}</span>
+          </div>
+
+          <div className={`flex items-center space-x-3 px-5 py-3 rounded-xl shadow-md border ${inGracePeriod ? 'bg-amber-600 text-white border-amber-300 animate-pulse' : (isLate ? 'bg-amber-950 text-white border-amber-600/40' : 'bg-brand-dark text-white border-white/5')}`}>
+            <svg xmlns="http://www.w3.org/2000/svg" className={`w-5 h-5 ${inGracePeriod ? 'text-white animate-spin' : (isLate ? 'text-amber-400 animate-bounce' : 'text-brand-emerald animate-pulse-slow')}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <div>
+              <span className="text-[9px] text-white/70 block font-bold uppercase tracking-wider">
+                {inGracePeriod ? '⏳ Grace Period' : (isLate ? '⚠️ Overtime (Late Window)' : 'Time Remaining')}
+              </span>
+              <span className={`font-mono text-lg font-extrabold tracking-wider ${inGracePeriod ? 'text-white' : (isLate ? 'text-amber-300' : '')}`}>
+                {inGracePeriod ? formatTime(graceTimeLeft) : (isLate ? (dueRemainingSeconds !== null ? `Due: ${formatTime(dueRemainingSeconds)}` : 'OVERTIME') : formatTime(timeLeft))}
+              </span>
+            </div>
           </div>
         </div>
       </div>
@@ -458,8 +646,10 @@ export default function TakeExamPage() {
                   return (
                     <button
                       key={opt.label}
+                      disabled={inGracePeriod}
                       onClick={() => selectOption(currentQ.id, opt.label)}
-                      className={`w-full text-left px-5 py-3.5 rounded-xl border text-xs font-semibold transition-all flex items-center space-x-3 active:scale-[0.99] ${isSelected ? 'bg-brand-light/5 border-brand-light text-brand-dark shadow-sm' : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'}`}
+                      title={inGracePeriod ? 'Answers are locked during 3-minute grace period' : ''}
+                      className={`w-full text-left px-5 py-3.5 rounded-xl border text-xs font-semibold transition-all flex items-center space-x-3 active:scale-[0.99] ${inGracePeriod ? 'cursor-not-allowed opacity-80 ' : ''}${isSelected ? 'bg-brand-light/5 border-brand-light text-brand-dark shadow-sm' : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'}`}
                     >
                       <span className={`w-6 h-6 rounded-full flex items-center justify-center font-bold text-xs border ${isSelected ? 'bg-brand-light text-white border-brand-light' : 'bg-white border-slate-300 text-slate-500'}`}>
                         {opt.label}

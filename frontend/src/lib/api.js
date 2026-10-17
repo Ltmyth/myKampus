@@ -45,12 +45,6 @@ export async function apiRequest(endpoint, options = {}) {
   }
 
   if (!response.ok) {
-    if (response.status === 401 && typeof window !== 'undefined') {
-      if (!endpoint.includes('/auth/login/')) {
-        localStorage.removeItem('ciu_tokens');
-        localStorage.removeItem('ciu_user');
-      }
-    }
     let errorMessage = 'Request failed';
     if (data?.detail) {
       errorMessage = Array.isArray(data.detail) ? data.detail.join(' ') : data.detail;
@@ -61,6 +55,16 @@ export async function apiRequest(endpoint, options = {}) {
     } else if (typeof data === 'object' && data !== null) {
       const values = Object.values(data).flat();
       errorMessage = values.length ? values.join(' ') : JSON.stringify(data);
+    }
+
+    if (response.status === 401 && typeof window !== 'undefined') {
+      if (!endpoint.includes('/auth/login/')) {
+        localStorage.removeItem('ciu_tokens');
+        localStorage.removeItem('ciu_user');
+        if (errorMessage.toLowerCase().includes('session') || errorMessage.toLowerCase().includes('device')) {
+          sessionStorage.setItem('ciu_session_termination_reason', errorMessage);
+        }
+      }
     }
     throw new Error(errorMessage);
   }

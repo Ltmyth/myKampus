@@ -261,6 +261,18 @@ export default function ExamsPage() {
   const [examTxtScheduledStart, setExamTxtScheduledStart] = useState('');
   const [examTxtDueDate, setExamTxtDueDate] = useState('');
 
+  // Special Exam State & Enrolled Students
+  const [isSpecialExam, setIsSpecialExam] = useState(false);
+  const [specialStudentIds, setSpecialStudentIds] = useState([]);
+  const [enrolledStudents, setEnrolledStudents] = useState([]);
+  const [loadingEnrolledStudents, setLoadingEnrolledStudents] = useState(false);
+  const [specialStudentSearch, setSpecialStudentSearch] = useState('');
+  const [editExamIsSpecial, setEditExamIsSpecial] = useState(false);
+  const [editExamSpecialStudents, setEditExamSpecialStudents] = useState([]);
+  const [editEnrolledStudents, setEditEnrolledStudents] = useState([]);
+  const [loadingEditEnrolledStudents, setLoadingEditEnrolledStudents] = useState(false);
+  const [editSpecialStudentSearch, setEditSpecialStudentSearch] = useState('');
+
   const isAdmin = user?.role === 'admin' || user?.role === 'platform_coordinator';
   const isRegistrarOrStaff = ['registrar', 'admin', 'platform_coordinator'].includes(user?.role);
   const isExecutiveReadOnly = ['dvc', 'vc', 'dean'].includes(user?.role);
@@ -309,6 +321,94 @@ export default function ExamsPage() {
       setLoading(false);
     }
   }
+
+  // Load enrolled students for draft special exam
+  useEffect(() => {
+    async function loadEnrolledStudents() {
+      if (!isSpecialExam) return;
+      setLoadingEnrolledStudents(true);
+      try {
+        let endpoint = '';
+        if (selectedCourseUnit) {
+          endpoint = `/course-units/${selectedCourseUnit}/enrolled_students/`;
+        } else if (selectedCourse) {
+          endpoint = `/courses/${selectedCourse}/enrolled_students/`;
+        }
+        if (endpoint) {
+          const res = await api.get(endpoint);
+          setEnrolledStudents(res || []);
+        } else {
+          setEnrolledStudents([]);
+        }
+      } catch (err) {
+        console.error("Error loading enrolled students:", err);
+      } finally {
+        setLoadingEnrolledStudents(false);
+      }
+    }
+    loadEnrolledStudents();
+  }, [isSpecialExam, selectedCourseUnit, selectedCourse]);
+
+  // Load enrolled students for edit special exam modal
+  useEffect(() => {
+    async function loadEditEnrolledStudents() {
+      if (!editingExamModal || !editExamIsSpecial) return;
+      setLoadingEditEnrolledStudents(true);
+      try {
+        let endpoint = '';
+        if (editingExamModal.course_unit) {
+          endpoint = `/course-units/${editingExamModal.course_unit}/enrolled_students/`;
+        } else if (editingExamModal.course) {
+          endpoint = `/courses/${editingExamModal.course}/enrolled_students/`;
+        }
+        if (endpoint) {
+          const res = await api.get(endpoint);
+          setEditEnrolledStudents(res || []);
+        }
+      } catch (err) {
+        console.error("Error loading enrolled students for edit exam:", err);
+      } finally {
+        setLoadingEditEnrolledStudents(false);
+      }
+    }
+    loadEditEnrolledStudents();
+  }, [editingExamModal, editExamIsSpecial]);
+
+  const handleDownloadExamTxt = async (examItem) => {
+    try {
+      let authHeader = '';
+      const tokensStr = localStorage.getItem('ciu_tokens');
+      if (tokensStr) {
+        try {
+          const tokens = JSON.parse(tokensStr);
+          if (tokens && tokens.access) authHeader = `Bearer ${tokens.access}`;
+        } catch (e) {}
+      }
+      const rawBaseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api';
+      const baseUrl = rawBaseUrl.replace(/\/$/, '');
+      const res = await fetch(`${baseUrl}/exams/${examItem.id}/export_txt/`, {
+        headers: authHeader ? { 'Authorization': authHeader } : {}
+      });
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.detail || 'Failed to download exam question paper in TXT format.');
+      }
+      const text = await res.text();
+      const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const cleanTitle = (examItem.title || 'Exam').replace(/[^a-zA-Z0-9_-]/g, '_');
+      a.download = `${examItem.course_code || 'CIU'}_${cleanTitle}_Exam.txt`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      setSuccessMsg(`Downloaded "${examItem.title}" question paper in TXT format.`);
+    } catch (err) {
+      setErrorMsg(err.message || 'Error downloading exam in TXT format.');
+    }
+  };
 
   // Filter assigned courses and course units based on user role
   const assignedCourses = isLecturer
@@ -431,6 +531,8 @@ export default function ExamsPage() {
     setEditExamDueDate(toUgandanDatetimeLocal(exam.due_date));
     setEditExamIsActive(exam.is_active);
     setEditAdditionalCourseUnits(exam.additional_course_units || []);
+    setEditExamIsSpecial(exam.is_special || false);
+    setEditExamSpecialStudents(exam.special_students || []);
   };
 
   const handleSaveEditExam = async (e) => {
@@ -465,7 +567,9 @@ export default function ExamsPage() {
         is_active: editExamIsActive,
         scheduled_start: getUgandanISOString(editExamScheduledStart),
         due_date: getUgandanISOString(editExamDueDate),
-        additional_course_units: editAdditionalCourseUnits.map(id => parseInt(id))
+        additional_course_units: editAdditionalCourseUnits.map(id => parseInt(id)),
+        is_special: editExamIsSpecial,
+        special_students: editExamIsSpecial ? editExamSpecialStudents.map(id => parseInt(id)) : []
       };
 
       await api.patch(`/exams/${editingExamModal.id}/`, payload);
@@ -596,7 +700,9 @@ export default function ExamsPage() {
         academic_year: examAcademicYear || '2026/2027',
         is_active: true,
         scheduled_start: getUgandanISOString(scheduledStart),
-        due_date: getUgandanISOString(dueDate)
+        due_date: getUgandanISOString(dueDate),
+        is_special: isSpecialExam,
+        special_students: isSpecialExam ? specialStudentIds.map(id => parseInt(id)) : []
       };
 
       const created = await api.post('/exams/', payload);
@@ -611,6 +717,8 @@ export default function ExamsPage() {
       setDueDate('');
       setExamSemester('0');
       setExamAcademicYear('2026/2027');
+      setIsSpecialExam(false);
+      setSpecialStudentIds([]);
       loadExamData();
       if (created && !Array.isArray(created)) setSelectedExam(created);
     } catch (err) {
@@ -1635,6 +1743,11 @@ ANSWER: C`;
                                             {examItem.academic_year}
                                           </span>
                                         )}
+                                        {examItem.is_special && (
+                                          <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase bg-amber-100 text-amber-900 border border-amber-300 flex items-center gap-1 shadow-xs" title={`Special Assessment restricted to ${examItem.special_students?.length || 0} designated student(s)`}>
+                                            ⭐ SPECIAL ({examItem.special_students?.length || 0})
+                                          </span>
+                                        )}
                                         <span className="font-extrabold text-slate-900 leading-tight block">
                                           {examItem.title}
                                         </span>
@@ -1791,6 +1904,14 @@ ANSWER: C`;
                                       )}
                                       <button
                                         type="button"
+                                        onClick={() => handleDownloadExamTxt(examItem)}
+                                        className="px-1.5 py-1 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-800 text-[10px] font-bold rounded-lg transition-all cursor-pointer flex items-center space-x-0.5"
+                                        title="Download Exam Question Paper (.txt format)"
+                                      >
+                                        <span>📄 TXT</span>
+                                      </button>
+                                      <button
+                                        type="button"
                                         onClick={() => downloadResultsCSV(examItem.id)}
                                         className="p-1 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 text-[10px] font-bold rounded-lg cursor-pointer"
                                         title="Export Results CSV"
@@ -1864,13 +1985,22 @@ ANSWER: C`;
                                           <span>
                                             🔒 <strong>Fee Clearance Policy:</strong> Students must have 100% tuition clearance via the CIU EXAMS API or active Accounts Temporary Clearance to launch this exam.
                                           </span>
-                                          <button
-                                            type="button"
-                                            onClick={() => handlePreviewExamScorecard(examItem)}
-                                            className="px-2.5 py-1 bg-white hover:bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold rounded-lg text-[10px] transition-all shrink-0 ml-2"
-                                          >
-                                            View Layout
-                                          </button>
+                                          <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                                            <button
+                                              type="button"
+                                              onClick={() => handleDownloadExamTxt(examItem)}
+                                              className="px-2.5 py-1 bg-white hover:bg-indigo-50 text-indigo-700 border border-indigo-200 font-bold rounded-lg text-[10px] transition-all flex items-center gap-1 cursor-pointer"
+                                            >
+                                              📄 Download TXT Paper
+                                            </button>
+                                            <button
+                                              type="button"
+                                              onClick={() => handlePreviewExamScorecard(examItem)}
+                                              className="px-2.5 py-1 bg-white hover:bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold rounded-lg text-[10px] transition-all cursor-pointer"
+                                            >
+                                              View Layout
+                                            </button>
+                                          </div>
                                         </div>
                                       </div>
                                     </td>
@@ -2138,6 +2268,116 @@ ANSWER: C`;
                         ❌ Clear
                       </button>
                     </div>
+                  </div>
+
+                  {/* Special Exam Configuration */}
+                  <div className="p-3 bg-amber-50/70 border border-amber-200/80 rounded-xl space-y-2.5">
+                    <label className="flex items-center space-x-2.5 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={isSpecialExam}
+                        onChange={(e) => setIsSpecialExam(e.target.checked)}
+                        className="rounded text-amber-600 focus:ring-amber-500 cursor-pointer"
+                      />
+                      <div className="text-xs">
+                        <span className="font-extrabold text-amber-950 flex items-center gap-1.5">
+                          <span>⭐ Special Examination (Designated Students Only)</span>
+                        </span>
+                        <p className="text-[10px] text-amber-800">
+                          Restrict this exam paper specifically to designated enrolled students in this course unit (e.g. retakes, makeup tests).
+                        </p>
+                      </div>
+                    </label>
+
+                    {isSpecialExam && (
+                      <div className="pt-2 border-t border-amber-200/60 space-y-2 animate-slide-up">
+                        <div className="flex items-center justify-between">
+                          <label className="text-[11px] font-bold text-amber-950 uppercase">
+                            Authorized Enrolled Students ({specialStudentIds.length} Selected)
+                          </label>
+                          {enrolledStudents.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (specialStudentIds.length === enrolledStudents.length) {
+                                  setSpecialStudentIds([]);
+                                } else {
+                                  setSpecialStudentIds(enrolledStudents.map(s => s.id));
+                                }
+                              }}
+                              className="text-[10px] text-amber-800 hover:text-amber-950 font-bold underline cursor-pointer"
+                            >
+                              {specialStudentIds.length === enrolledStudents.length ? 'Deselect All' : 'Select All'}
+                            </button>
+                          )}
+                        </div>
+
+                        {loadingEnrolledStudents ? (
+                          <div className="py-3 text-center text-xs text-amber-800 font-medium">
+                            <span className="inline-block animate-spin mr-1">⏳</span> Loading enrolled students...
+                          </div>
+                        ) : enrolledStudents.length === 0 ? (
+                          <p className="text-[11px] text-amber-800 italic bg-white/60 p-2 rounded-lg border border-amber-100 text-center">
+                            {selectedCourseUnit || selectedCourse
+                              ? 'No enrolled students found for this unit/course.'
+                              : 'Please select a Course Unit or Program above to load enrolled students.'}
+                          </p>
+                        ) : (
+                          <>
+                            <input
+                              type="text"
+                              placeholder="🔍 Search enrolled student name, reg no or username..."
+                              value={specialStudentSearch}
+                              onChange={(e) => setSpecialStudentSearch(e.target.value)}
+                              className="w-full px-2.5 py-1.5 bg-white border border-amber-200 rounded-lg text-xs placeholder:text-amber-600/50 outline-none"
+                            />
+                            <div className="max-h-36 overflow-y-auto space-y-1 pr-1 custom-scrollbar bg-white/80 rounded-lg p-2 border border-amber-200/60">
+                              {enrolledStudents
+                                .filter(s => {
+                                  if (!specialStudentSearch.trim()) return true;
+                                  const term = specialStudentSearch.toLowerCase().trim();
+                                  const name = (s.name || '').toLowerCase();
+                                  const uname = (s.username || '').toLowerCase();
+                                  const reg = (s.reg_number || '').toLowerCase();
+                                  return name.includes(term) || uname.includes(term) || reg.includes(term);
+                                })
+                                .map(student => (
+                                  <label
+                                    key={student.id}
+                                    className={`flex items-center justify-between p-1.5 rounded text-xs cursor-pointer transition-all ${
+                                      specialStudentIds.includes(student.id)
+                                        ? 'bg-amber-100 text-amber-950 font-bold'
+                                        : 'hover:bg-amber-50 text-slate-700'
+                                    }`}
+                                  >
+                                    <div className="flex items-center space-x-2 min-w-0 pr-2">
+                                      <input
+                                        type="checkbox"
+                                        checked={specialStudentIds.includes(student.id)}
+                                        onChange={() => {
+                                          setSpecialStudentIds(prev =>
+                                            prev.includes(student.id)
+                                              ? prev.filter(id => id !== student.id)
+                                              : [...prev, student.id]
+                                          );
+                                        }}
+                                        className="rounded text-amber-600 focus:ring-amber-500 cursor-pointer"
+                                      />
+                                      <div className="truncate">
+                                        <p className="text-[11px] font-bold truncate">{student.name} (@{student.username})</p>
+                                        <p className="text-[9px] text-slate-400 font-mono">{student.reg_number || 'No Reg No'} · Yr {student.year_of_study}, Sem {student.semester}</p>
+                                      </div>
+                                    </div>
+                                    <span className="text-[9px] font-mono text-slate-400 shrink-0">
+                                      {specialStudentIds.includes(student.id) ? '✓ Designated' : ''}
+                                    </span>
+                                  </label>
+                                ))}
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   <button
@@ -2800,6 +3040,84 @@ ANSWER: C`;
                 </div>
               )}
 
+              {/* Edit Modal Special Exam Settings */}
+              <div className="p-3 bg-amber-50/70 border border-amber-200 rounded-xl space-y-2">
+                <label className="flex items-center space-x-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={editExamIsSpecial}
+                    onChange={(e) => setEditExamIsSpecial(e.target.checked)}
+                    className="rounded text-amber-600 focus:ring-amber-500 cursor-pointer"
+                  />
+                  <div className="text-xs">
+                    <span className="font-extrabold text-amber-950">⭐ Special Examination</span>
+                    <p className="text-[10px] text-amber-800">Restrict access specifically to designated students</p>
+                  </div>
+                </label>
+
+                {editExamIsSpecial && (
+                  <div className="pt-2 border-t border-amber-200/60 space-y-2 animate-slide-up">
+                    <div className="flex items-center justify-between">
+                      <label className="text-[10px] font-bold text-amber-950 uppercase">
+                        Authorized Students ({editExamSpecialStudents.length})
+                      </label>
+                      {editEnrolledStudents.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (editExamSpecialStudents.length === editEnrolledStudents.length) {
+                              setEditExamSpecialStudents([]);
+                            } else {
+                              setEditExamSpecialStudents(editEnrolledStudents.map(s => s.id));
+                            }
+                          }}
+                          className="text-[10px] text-amber-800 hover:text-amber-950 font-bold underline cursor-pointer"
+                        >
+                          {editExamSpecialStudents.length === editEnrolledStudents.length ? 'Deselect All' : 'Select All'}
+                        </button>
+                      )}
+                    </div>
+
+                    {loadingEditEnrolledStudents ? (
+                      <div className="py-2 text-center text-xs text-amber-800">Loading enrolled students...</div>
+                    ) : (
+                      <>
+                        <input
+                          type="text"
+                          placeholder="🔍 Filter student..."
+                          value={editSpecialStudentSearch}
+                          onChange={(e) => setEditSpecialStudentSearch(e.target.value)}
+                          className="w-full px-2 py-1 bg-white border border-amber-200 rounded text-xs outline-none"
+                        />
+                        <div className="max-h-28 overflow-y-auto space-y-1 pr-1 custom-scrollbar bg-white rounded p-1.5 border border-amber-200/60">
+                          {editEnrolledStudents
+                            .filter(s => {
+                              if (!editSpecialStudentSearch.trim()) return true;
+                              const term = editSpecialStudentSearch.toLowerCase().trim();
+                              return (s.name || '').toLowerCase().includes(term) || (s.username || '').toLowerCase().includes(term) || (s.reg_number || '').toLowerCase().includes(term);
+                            })
+                            .map(student => (
+                              <label key={student.id} className="flex items-center space-x-2 text-[11px] p-1 rounded hover:bg-amber-50 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={editExamSpecialStudents.includes(student.id)}
+                                  onChange={() => {
+                                    setEditExamSpecialStudents(prev =>
+                                      prev.includes(student.id) ? prev.filter(id => id !== student.id) : [...prev, student.id]
+                                    );
+                                  }}
+                                  className="rounded text-amber-600 focus:ring-amber-500 cursor-pointer"
+                                />
+                                <span className="font-medium text-slate-800">{student.name} (@{student.username}) · {student.reg_number || 'No Reg'}</span>
+                              </label>
+                            ))}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+
               <div className="flex space-x-2 pt-2">
                 <button type="submit" disabled={submitting} className="flex-1 py-2 bg-brand-light hover:bg-brand-medium text-white text-xs font-extrabold uppercase rounded-lg shadow-sm">
                   💾 Save Changes
@@ -2860,10 +3178,15 @@ ANSWER: C`;
 
             {/* Scorecard Header Card Simulation */}
             <div className={`rounded-2xl p-6 text-white text-center space-y-3 ${examScorecardPreviewData.is_published ? 'bg-gradient-to-r from-emerald-900 to-slate-900' : 'bg-gradient-to-r from-amber-950 to-slate-900'}`}>
-              <div className="flex items-center justify-center space-x-2">
+              <div className="flex flex-wrap items-center justify-center gap-2">
                 <span className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider border ${examScorecardPreviewData.is_published ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' : 'bg-amber-500/20 text-amber-300 border-amber-500/30'}`}>
                   {examScorecardPreviewData.is_published ? '🟢 PUBLISHED (Visible to Students upon scheduled start)' : '🟡 DRAFT (Unpublished - Hidden from Students)'}
                 </span>
+                {examScorecardPreviewData.is_special && (
+                  <span className="px-3 py-1 rounded-full text-xs font-black uppercase tracking-wider bg-amber-400 text-slate-950 border border-amber-300 flex items-center gap-1 shadow-sm">
+                    ⭐ SPECIAL ASSESSMENT ({examScorecardPreviewData.special_students?.length || 0} designated candidates)
+                  </span>
+                )}
               </div>
               
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-black/20 p-4 rounded-xl border border-white/10 text-xs mt-4">
@@ -3179,12 +3502,21 @@ ANSWER: C`;
 
             {/* Modal Footer Actions */}
             <div className="flex items-center justify-between pt-4 border-t border-slate-100">
-              <button
-                onClick={() => setExamScorecardPreviewData(null)}
-                className="px-5 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 text-xs font-bold rounded-xl transition-all"
-              >
-                Close Preview
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setExamScorecardPreviewData(null)}
+                  className="px-5 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 text-xs font-bold rounded-xl transition-all cursor-pointer"
+                >
+                  Close Preview
+                </button>
+                <button
+                  onClick={() => handleDownloadExamTxt(examScorecardPreviewData)}
+                  className="px-4 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shadow-xs"
+                  title="Download Exam Paper in Aiken TXT Format"
+                >
+                  <span>📄 Download TXT Paper</span>
+                </button>
+              </div>
 
               {!isExecutiveReadOnly && (
                 <button

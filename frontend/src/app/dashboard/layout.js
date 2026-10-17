@@ -20,18 +20,72 @@ export default function DashboardLayout({ children }) {
   const [otpSuccess, setOtpSuccess] = useState('');
   const [submittingOtp, setSubmittingOtp] = useState(false);
 
-  // 5-Minute Idle Session Lock for Authorised Users
+  // Live Ugandan Local Time & Clock Skew Detection
+  const [ugandanTimeStr, setUgandanTimeStr] = useState('');
+  const [clockSkewNotice, setClockSkewNotice] = useState(null);
+  const [dismissSkewNotice, setDismissSkewNotice] = useState(false);
+
+  // 10-Minute Idle Session Lock for All Users (including students)
   const [isIdleLocked, setIsIdleLocked] = useState(false);
   const [idlePassword, setIdlePassword] = useState('');
   const [idleError, setIdleError] = useState('');
   const [verifyingIdle, setVerifyingIdle] = useState(false);
   const idleTimerRef = useRef(null);
 
+  // Live Ugandan Clock ticker and Clock Skew / Timezone detection
   useEffect(() => {
-    // Only apply to authorized users (staff, admins, lecturers, executives) - NOT students
-    if (!user || user.role === 'student' || user.must_change_password) return;
+    let timer = null;
+    const checkUgandanTime = async () => {
+      try {
+        const data = await api.get('/server-time/');
+        if (data && data.timestamp) {
+          const clientNow = Date.now();
+          const serverNow = data.timestamp * 1000;
+          const driftSeconds = Math.round(Math.abs(clientNow - serverNow) / 1000);
+          const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+          
+          if (driftSeconds > 120) {
+            setClockSkewNotice({
+              type: 'skew',
+              message: `System Clock Drift Warning: Your device clock differs from Ugandan Standard Server Time by ~${Math.round(driftSeconds / 60)} minute(s). All assessment timers and submissions strictly adhere to Ugandan Local Time (EAT, UTC+3). Please sync your system clock.`
+            });
+          } else if (browserTz && !browserTz.includes('Kampala') && !browserTz.includes('Nairobi') && Math.abs(new Date().getTimezoneOffset() - (-180)) > 30) {
+            setClockSkewNotice({
+              type: 'timezone',
+              message: `Timezone Notice: Your device timezone (${browserTz}) is not Ugandan Local Time (Africa/Kampala, EAT UTC+3). All test and exam schedules, durations, and deadlines operate strictly on Ugandan Time.`
+            });
+          }
+        }
+      } catch (e) {
+        // Fallback
+      }
+    };
 
-    const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes (300,000 ms)
+    checkUgandanTime();
+
+    const tick = () => {
+      const now = new Date();
+      setUgandanTimeStr(now.toLocaleTimeString('en-UG', {
+        timeZone: 'Africa/Kampala',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: true
+      }) + ' EAT');
+    };
+    tick();
+    timer = setInterval(tick, 1000);
+
+    return () => {
+      if (timer) clearInterval(timer);
+    };
+  }, []);
+
+  useEffect(() => {
+    // 10-Minute Inactivity Lock: applies to ALL users including students
+    if (!user || user.must_change_password) return;
+
+    const IDLE_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes (600,000 ms)
 
     const resetIdleTimer = () => {
       if (isIdleLocked) return;
@@ -298,11 +352,17 @@ export default function DashboardLayout({ children }) {
             </button>
             <div>
               <h1 className="text-lg font-bold text-slate-850">Clarke International University</h1>
-              <p className="text-xs text-slate-500 font-medium hidden sm:block">Welcome, {user.first_name || user.username} ({getRoleLabel(user.role).toUpperCase()}) · Local Time: {new Date().toLocaleDateString(undefined, {weekday: 'long', month: 'short', day: 'numeric'})}</p>
+              <p className="text-xs text-slate-500 font-medium hidden sm:block">Welcome, {user.first_name || user.username} ({getRoleLabel(user.role).toUpperCase()})</p>
             </div>
           </div>
           
           <div className="flex items-center space-x-3">
+            {/* Live Ugandan Local Time Badge */}
+            <div className="flex items-center space-x-1.5 px-3 py-1.5 bg-emerald-50 text-emerald-900 text-xs font-bold rounded-xl border border-emerald-200 shadow-sm" title="Ugandan Standard Time (UTC+3, EAT)">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+              <span>🇺🇬 {ugandanTimeStr || 'Kampala EAT'}</span>
+            </div>
+
             <div className="hidden sm:flex items-center space-x-2 text-xs text-slate-500 font-medium bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-100">
               <div className="w-2 h-2 bg-brand-emerald rounded-full animate-pulse"></div>
               <span>{user.first_name || user.username} ({getRoleLabel(user.role)})</span>
@@ -321,24 +381,75 @@ export default function DashboardLayout({ children }) {
           </div>
         </header>
 
-        {/* Academic Info Banner - Top Faculty Header for Students & Lecturers */}
-        {(user.role === 'student' || user.role === 'lecturer') && (
-          <div className="bg-gradient-to-r from-[#0f4a2e] via-[#1a5c38] to-[#154d2f] text-white px-6 py-3.5 border-b border-emerald-800/60 flex flex-wrap items-center justify-between gap-3 shadow-md animate-fade-in">
-            <div className="flex items-center space-x-3">
-              <div className="w-10 h-10 rounded-xl bg-white/15 border border-white/20 flex items-center justify-center font-extrabold text-white text-base shadow-sm">
+        {/* Clock Skew / Timezone Mismatch Warning Banner */}
+        {clockSkewNotice && !dismissSkewNotice && (
+          <div className="bg-amber-500/10 border-l-4 border-amber-500 px-6 py-2.5 mx-6 mt-3 rounded-r-xl flex items-center justify-between text-xs text-amber-900 shadow-sm animate-fade-in">
+            <div className="flex items-center space-x-2">
+              <span className="text-base">⚠️</span>
+              <div>
+                <strong className="font-bold">Ugandan Local Time Notice: </strong>
+                <span>{clockSkewNotice.message}</span>
+              </div>
+            </div>
+            <button
+              onClick={() => setDismissSkewNotice(true)}
+              className="text-amber-800 hover:text-amber-950 font-bold px-2 py-1 rounded bg-amber-200/50 hover:bg-amber-200 text-[11px] ml-3 shrink-0"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+
+        {/* Academic Info Banner - Top Faculty Header with Database Recorded Assigned Faculty Name(s) */}
+        {((user.assigned_faculty_details && user.assigned_faculty_details.length > 0) || user.faculty_name || user.faculty || ['student', 'lecturer', 'dean', 'faculty_admin', 'faculty_secretary'].includes(user.role)) && (
+          <div className="bg-gradient-to-r from-[#0a3520] via-[#0f4a2e] to-[#145a38] text-white px-6 py-3.5 border-b border-emerald-800/60 flex flex-wrap items-center justify-between gap-3 shadow-md animate-fade-in">
+            <div className="flex items-center space-x-3 min-w-0">
+              <div className="w-10 h-10 rounded-xl bg-white/15 border border-white/20 flex items-center justify-center font-extrabold text-white text-lg shadow-sm shrink-0">
                 🏛️
               </div>
-              <div>
-                <span className="text-[10px] font-extrabold uppercase tracking-widest text-emerald-300 block">ASSIGNED FACULTY</span>
-                <p className="text-sm font-black tracking-wide text-white">
-                  {user.faculty_name ? (user.faculty_code ? `${user.faculty_code} - ${user.faculty_name}` : user.faculty_name) : (user.faculty_code || 'Unassigned Faculty')}
-                </p>
+              <div className="min-w-0">
+                <span className="text-[10px] font-extrabold uppercase tracking-widest text-emerald-300 flex items-center gap-1.5">
+                  <span>
+                    {user.assigned_faculty_details && user.assigned_faculty_details.length > 1
+                      ? `ASSIGNED FACULTIES (${user.assigned_faculty_details.length})`
+                      : 'ASSIGNED FACULTY'}
+                  </span>
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                </span>
+                <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
+                  {user.assigned_faculty_details && user.assigned_faculty_details.length > 0 ? (
+                    user.assigned_faculty_details.map(fac => (
+                      <span
+                        key={fac.id || fac.code}
+                        className="px-2.5 py-1 bg-white/20 hover:bg-white/25 border border-white/30 rounded-lg text-xs font-bold text-white shadow-sm flex items-center gap-1.5 transition-all"
+                      >
+                        <span className="text-emerald-300 font-extrabold">[{fac.code}]</span>
+                        <span>{fac.name}</span>
+                      </span>
+                    ))
+                  ) : (
+                    <span className="px-2.5 py-1 bg-white/20 border border-white/25 rounded-lg text-xs font-bold text-white shadow-sm">
+                      {user.faculty_name
+                        ? (user.faculty_code ? `[${user.faculty_code}] ${user.faculty_name}` : user.faculty_name)
+                        : (user.faculty_code ? `[${user.faculty_code}]` : 'Institutional General Faculty')}
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
 
-            <div className="flex flex-wrap items-center gap-3 text-xs font-semibold">
-              <div className="flex items-center space-x-2 bg-black/20 px-3 py-1.5 rounded-xl border border-white/10 shadow-sm">
-                <span className="text-emerald-300 font-bold uppercase text-[10px]">{user.role === 'student' ? 'Student Reg No:' : 'Staff ID / Code:'}</span>
+            <div className="flex flex-wrap items-center gap-2.5 text-xs font-semibold">
+              {user.role === 'student' && user.year_of_study && (
+                <div className="flex items-center space-x-1.5 bg-black/25 px-2.5 py-1.5 rounded-xl border border-white/10 shadow-sm text-[11px]">
+                  <span className="text-emerald-300 font-bold">📚 Year {user.year_of_study}, Sem {user.semester || 1}</span>
+                  <span className="text-white/40">·</span>
+                  <span className="text-white/90 font-mono">{user.academic_year || '2026/2027'}</span>
+                </div>
+              )}
+              <div className="flex items-center space-x-2 bg-black/25 px-3 py-1.5 rounded-xl border border-white/10 shadow-sm">
+                <span className="text-emerald-300 font-bold uppercase text-[10px]">
+                  {user.role === 'student' ? 'Student Reg No:' : 'Staff ID / Code:'}
+                </span>
                 <span className="font-mono text-white font-bold">{user.registration_number || user.reg_number || user.username}</span>
               </div>
             </div>
@@ -492,7 +603,7 @@ export default function DashboardLayout({ children }) {
         </div>
       )}
 
-      {/* 5-MINUTE IDLE RE-AUTHENTICATION MODAL FOR AUTHORISED USERS */}
+      {/* 10-MINUTE IDLE RE-AUTHENTICATION MODAL FOR ALL USERS */}
       {isIdleLocked && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in">
           <div className="bg-white rounded-3xl p-6 sm:p-8 max-w-md w-full space-y-5 shadow-2xl border-2 border-emerald-500/20 text-center">
@@ -504,9 +615,9 @@ export default function DashboardLayout({ children }) {
               <span className="text-[10px] font-mono uppercase tracking-wider bg-emerald-100 text-emerald-800 font-bold px-2.5 py-1 rounded-full">
                 Security Session Timeout
               </span>
-              <h3 className="text-xl font-black text-slate-900 mt-2">Resume Authorised Session</h3>
+              <h3 className="text-xl font-black text-slate-900 mt-2">Resume Session</h3>
               <p className="text-slate-500 text-xs mt-1 leading-relaxed">
-                You have been inactive for over <strong className="text-slate-700">5 minutes</strong>. For institutional compliance and data protection, please confirm your password to unlock your session.
+                You have been inactive for over <strong className="text-slate-700">10 minutes</strong>. For single-device session integrity and institutional security, please confirm your password to unlock your workspace.
               </p>
             </div>
 

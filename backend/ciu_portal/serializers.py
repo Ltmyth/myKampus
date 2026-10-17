@@ -487,12 +487,25 @@ class ExamSerializer(serializers.ModelSerializer):
     additional_course_units = serializers.PrimaryKeyRelatedField(many=True, queryset=CourseUnit.objects.all(), required=False)
     additional_course_details = serializers.SerializerMethodField()
     additional_course_unit_details = serializers.SerializerMethodField()
+    special_students_details = serializers.SerializerMethodField()
     status = serializers.SerializerMethodField()
 
     class Meta:
         model = Exam
         fields = '__all__'
         read_only_fields = ('lecturer', 'is_approved_by_dean', 'is_results_released')
+
+    def get_special_students_details(self, obj):
+        return [
+            {
+                'id': s.id,
+                'username': s.username,
+                'name': s.get_full_name() or s.username,
+                'reg_number': s.reg_number or s.registration_number or 'N/A',
+                'email': s.email
+            }
+            for s in obj.special_students.all()
+        ]
 
     def get_status(self, obj):
         now = timezone.now()
@@ -652,12 +665,25 @@ class TestSerializer(serializers.ModelSerializer):
     additional_course_units = serializers.PrimaryKeyRelatedField(many=True, queryset=CourseUnit.objects.all(), required=False)
     additional_course_details = serializers.SerializerMethodField()
     additional_course_unit_details = serializers.SerializerMethodField()
+    special_students_details = serializers.SerializerMethodField()
     status = serializers.SerializerMethodField()
 
     class Meta:
         model = Test
         fields = '__all__'
         read_only_fields = ('lecturer',)
+
+    def get_special_students_details(self, obj):
+        return [
+            {
+                'id': s.id,
+                'username': s.username,
+                'name': s.get_full_name() or s.username,
+                'reg_number': s.reg_number or s.registration_number or 'N/A',
+                'email': s.email
+            }
+            for s in obj.special_students.all()
+        ]
 
     def get_status(self, obj):
         now = timezone.now()

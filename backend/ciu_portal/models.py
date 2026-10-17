@@ -29,6 +29,7 @@ class User(AbstractUser):
     assigned_faculties = models.ManyToManyField('Faculty', blank=True, related_name='assigned_lecturers', help_text="Faculties assigned to this lecturer or staff member")
     assigned_courses = models.ManyToManyField('Course', blank=True, related_name='assigned_students')
     reg_number = models.CharField(max_length=50, blank=True, null=True, db_index=True, help_text="Official Registration Number (e.g. 2026SOBAT-A001)")
+    active_session_key = models.CharField(max_length=64, blank=True, null=True, db_index=True, help_text="Unique active session key for single device login enforcement")
     YEAR_OF_STUDY_CHOICES = (
         (1, 'Year 1'),
         (2, 'Year 2'),
@@ -180,6 +181,8 @@ class Exam(models.Model):
     is_published = models.BooleanField(default=False, db_index=True)
     is_approved_by_dean = models.BooleanField(default=False)
     is_results_released = models.BooleanField(default=False)
+    is_special = models.BooleanField(default=False, db_index=True, help_text="Special exam restricted to specific students (e.g. retakes, makeup)")
+    special_students = models.ManyToManyField(User, blank=True, limit_choices_to={'role': 'student'}, related_name='special_exams', help_text="Specific students allowed to sit for this special exam")
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -273,6 +276,8 @@ class Test(models.Model):
     semester = models.IntegerField(choices=SEMESTER_SCOPING_CHOICES, default=0, db_index=True, help_text="Target semester of study (0 for All Semesters, 1 or 2)")
     academic_year = models.CharField(max_length=20, default='2026/2027', blank=True, null=True, db_index=True, help_text="Target academic year (e.g. 2026/2027)")
     due_date = models.DateTimeField(null=True, blank=True)
+    is_special = models.BooleanField(default=False, db_index=True, help_text="Special test restricted to specific students (e.g. retakes, makeup)")
+    special_students = models.ManyToManyField(User, blank=True, limit_choices_to={'role': 'student'}, related_name='special_tests', help_text="Specific students allowed to sit for this special test")
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
