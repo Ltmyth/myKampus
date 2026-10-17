@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useAuth } from '@/context/AuthContext';
-import { api } from '@/lib/api';
+import { api, getApiBaseUrl } from '@/lib/api';
 import ConfirmationModal from '@/components/ConfirmationModal';
 import BulkPasswordResetModal from '@/components/BulkPasswordResetModal';
 
@@ -489,8 +489,7 @@ export default function AdminPage() {
       formData.append('clearance_type', clearanceScope);
       formData.append('reason', clearanceReason || 'Excel Batch Temporary Clearance');
 
-      const rawBaseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api';
-      const API_BASE_URL = rawBaseUrl.replace(/\/$/, '');
+      const API_BASE_URL = getApiBaseUrl();
       const tokensStr = localStorage.getItem('ciu_tokens');
       let token = '';
       if (tokensStr) {
@@ -584,8 +583,7 @@ export default function AdminPage() {
         formData.append('default_password', customDefaultPass.trim());
       }
       
-      const rawBaseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api';
-      const API_BASE_URL = rawBaseUrl.replace(/\/$/, '');
+      const API_BASE_URL = getApiBaseUrl();
       const tokensStr = localStorage.getItem('ciu_tokens');
       let token = '';
       if (tokensStr) {
@@ -722,8 +720,7 @@ export default function AdminPage() {
         formData.append('default_password', singleInitialPassword.trim());
       }
 
-      const rawBaseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api';
-      const API_BASE_URL = rawBaseUrl.replace(/\/$/, '');
+      const API_BASE_URL = getApiBaseUrl();
       const tokensStr = localStorage.getItem('ciu_tokens');
       let token = '';
       if (tokensStr) {
@@ -1009,8 +1006,7 @@ export default function AdminPage() {
       }
       formData.append('default_password', bulkStaffDefaultPassword || 'Kampus@2026');
 
-      const rawBaseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api';
-      const API_BASE_URL = rawBaseUrl.replace(/\/$/, '');
+      const API_BASE_URL = getApiBaseUrl();
 
       const data = await api.post('/admin/users/bulk_onboard_staff/', formData);
       setSuccessMsg(data.detail || `Bulk Staff Onboarding: Successfully processed staff roster!`);
@@ -1060,8 +1056,7 @@ export default function AdminPage() {
       if (tokensStr) {
         try { token = JSON.parse(tokensStr).access; } catch (e) {}
       }
-      const rawBaseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api';
-      const API_BASE_URL = rawBaseUrl.replace(/\/$/, '');
+      const API_BASE_URL = getApiBaseUrl();
       const res = await fetch(`${API_BASE_URL}/course-units/sample_file/?format=${format}`, {
         headers: token ? { 'Authorization': `Bearer ${token}` } : {}
       });
@@ -1082,8 +1077,7 @@ export default function AdminPage() {
 
   const downloadSampleFile = async (type, format = 'csv') => {
     try {
-      const rawBaseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api';
-      const API_BASE_URL = rawBaseUrl.replace(/\/$/, '');
+      const API_BASE_URL = getApiBaseUrl();
       const tokensStr = localStorage.getItem('ciu_tokens');
       let token = '';
       if (tokensStr) {
@@ -1113,8 +1107,7 @@ export default function AdminPage() {
       window.URL.revokeObjectURL(url);
     } catch (err) {
       console.warn('Blob download fallback to direct window open:', err);
-      const rawBaseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api';
-      const API_BASE_URL = rawBaseUrl.replace(/\/$/, '');
+      const API_BASE_URL = getApiBaseUrl();
       window.open(`${API_BASE_URL}/admin/users/sample_${type}_file/?format=${format}`, '_blank');
     }
   };
@@ -1189,8 +1182,7 @@ export default function AdminPage() {
   };
 
   const downloadAuditLogsCSV = () => {
-    const rawBaseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api';
-    const API_BASE_URL = rawBaseUrl.replace(/\/$/, '');
+    const API_BASE_URL = getApiBaseUrl();
     const tokensStr = localStorage.getItem('ciu_tokens');
     let token = '';
     if (tokensStr) {

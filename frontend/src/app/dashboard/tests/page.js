@@ -2,7 +2,7 @@
 
 import { useState, useEffect, Fragment } from 'react';
 import { useAuth } from '@/context/AuthContext';
-import { api, formatUgandanTime, getUgandanISOString, toUgandanDatetimeLocal, getUgandanNowDatetimeLocal } from '@/lib/api';
+import { api, getApiBaseUrl, formatUgandanTime, getUgandanISOString, toUgandanDatetimeLocal, getUgandanNowDatetimeLocal } from '@/lib/api';
 import { useRouter } from 'next/navigation';
 import ConfirmationModal from '@/components/ConfirmationModal';
 
@@ -456,8 +456,7 @@ export default function TestPortalPage() {
           if (tokens && tokens.access) authHeader = `Bearer ${tokens.access}`;
         } catch (e) {}
       }
-      const rawBaseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api';
-      const baseUrl = rawBaseUrl.replace(/\/$/, '');
+      const baseUrl = getApiBaseUrl();
       const res = await fetch(`${baseUrl}/tests/${testItem.id}/export_txt/`, {
         headers: authHeader ? { 'Authorization': authHeader } : {}
       });
@@ -988,8 +987,7 @@ ANSWER: C`;
   };
 
   const downloadResultsCSV = (testId) => {
-    const rawBaseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api';
-    const API_BASE_URL = rawBaseUrl.replace(/\/$/, '');
+    const API_BASE_URL = getApiBaseUrl();
     const tokensStr = localStorage.getItem('ciu_tokens');
     let token = '';
     if (tokensStr) {

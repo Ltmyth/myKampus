@@ -32,6 +32,18 @@ def resolve_user_faculty(user):
     return None
 
 
+class UserListSerializer(serializers.ListSerializer):
+    def to_representation(self, data):
+        iterable = data.all() if hasattr(data, 'all') else data
+        items = list(iterable) if iterable is not None else []
+        try:
+            from .clearance import batch_preload_clearance
+            batch_preload_clearance(items)
+        except Exception:
+            pass
+        return super().to_representation(items)
+
+
 class UserSerializer(serializers.ModelSerializer):
     faculty_name = serializers.SerializerMethodField()
     faculty_code = serializers.SerializerMethodField()
@@ -51,6 +63,7 @@ class UserSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
+        list_serializer_class = UserListSerializer
         fields = ('id', 'username', 'email', 'first_name', 'last_name', 'role', 'phone', 'gender', 'gender_display', 'tuition_paid_percentage', 'effective_tuition_percentage', 'faculty', 'faculty_name', 'faculty_code', 'assigned_faculties', 'assigned_faculty_details', 'assigned_courses', 'assigned_course_codes', 'assigned_course_unit_details', 'reg_number', 'registration_number', 'year_of_study', 'semester', 'academic_year', 'entry_year', 'intake', 'must_change_password', 'is_active', 'is_test_cleared', 'is_exam_cleared', 'is_temp_cleared', 'clearance_source', 'clearance_mode', 'temp_clearance_info', 'clearance_level')
         read_only_fields = ('role', 'registration_number', 'is_active')
 
@@ -184,6 +197,7 @@ class AdminUserSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
+        list_serializer_class = UserListSerializer
         fields = ('id', 'username', 'email', 'password', 'first_name', 'last_name', 'role', 'phone', 'gender', 'gender_display', 'tuition_paid_percentage', 'effective_tuition_percentage', 'faculty', 'faculty_name', 'faculty_code', 'assigned_faculties', 'assigned_faculty_details', 'assigned_courses', 'assigned_course_codes', 'assigned_course_unit_details', 'reg_number', 'registration_number', 'year_of_study', 'semester', 'academic_year', 'entry_year', 'intake', 'must_change_password', 'is_active', 'is_test_cleared', 'is_exam_cleared', 'is_temp_cleared', 'clearance_source', 'clearance_mode', 'temp_clearance_info', 'clearance_level')
 
     def get_faculty_name(self, obj):

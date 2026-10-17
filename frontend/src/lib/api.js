@@ -1,9 +1,22 @@
-const rawBaseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api';
-const API_BASE_URL = rawBaseUrl.replace(/\/$/, '');
+export function getApiBaseUrl() {
+  if (process.env.NEXT_PUBLIC_API_URL) {
+    return process.env.NEXT_PUBLIC_API_URL.replace(/\/$/, '');
+  }
+  if (typeof window !== 'undefined') {
+    const { hostname, origin } = window.location;
+    if (hostname && hostname !== 'localhost' && hostname !== '127.0.0.1') {
+      return `${origin}/api`;
+    }
+  }
+  return 'http://localhost:8000/api';
+}
+
+export const API_BASE_URL = getApiBaseUrl();
 
 export async function apiRequest(endpoint, options = {}) {
   const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
-  const url = `${API_BASE_URL}${cleanEndpoint}`;
+  const baseUrl = getApiBaseUrl();
+  const url = `${baseUrl}${cleanEndpoint}`;
 
   const isFormData = options.body instanceof FormData;
   const headers = { ...options.headers };

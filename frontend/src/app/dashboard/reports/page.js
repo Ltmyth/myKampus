@@ -2,12 +2,14 @@
 
 import { useState, useEffect } from 'react';
 import { useAuth } from '@/context/AuthContext';
-import { api } from '@/lib/api';
+import { api, getApiBaseUrl } from '@/lib/api';
+import Link from 'next/link';
 
 export default function ReportsDashboardPage() {
   const { user } = useAuth();
   const [report, setReport] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
   const [facultiesList, setFacultiesList] = useState([]);
@@ -15,17 +17,31 @@ export default function ReportsDashboardPage() {
   const [selectedFaculty, setSelectedFaculty] = useState('ALL');
   const [selectedCourse, setSelectedCourse] = useState('ALL');
 
+  // Sync locked faculty based on user role and assigned details
+  useEffect(() => {
+    if (user && ['lecturer', 'student', 'faculty_admin', 'dean'].includes(user.role)) {
+      const lockedId = user?.faculty?.id || user?.faculty || user?.assigned_faculty_details?.[0]?.id;
+      if (lockedId && selectedFaculty === 'ALL') {
+        setSelectedFaculty(String(lockedId));
+      }
+    }
+  }, [user]);
+
   useEffect(() => {
     loadFilters();
   }, []);
 
   async function loadFilters() {
-    const [facs, crs] = await Promise.all([
-      api.get('/faculties/').catch(() => []),
-      api.get('/courses/').catch(() => [])
-    ]);
-    setFacultiesList(facs || []);
-    setCoursesList(crs || []);
+    try {
+      const [facs, crs] = await Promise.all([
+        api.get('/faculties/').catch(() => []),
+        api.get('/courses/').catch(() => [])
+      ]);
+      setFacultiesList(facs || []);
+      setCoursesList(crs || []);
+    } catch (e) {
+      console.warn('Error loading filter lists', e);
+    }
   }
 
   useEffect(() => {
@@ -34,59 +50,181 @@ export default function ReportsDashboardPage() {
 
   async function fetchReportSummary() {
     try {
-      setLoading(true);
-      let queryParams = [];
-      if (selectedFaculty !== 'ALL') queryParams.push(`faculty=${selectedFaculty}`);
-      if (selectedCourse !== 'ALL') queryParams.push(`course=${selectedCourse}`);
+      if (report) {
+        setIsRefreshing(true);
+      } else {
+        setLoading(true);
+      }
+      setErrorMsg('');
+
+      const queryParams = [];
+      if (selectedFaculty && selectedFaculty !== 'ALL') {
+        queryParams.push(`faculty=${encodeURIComponent(selectedFaculty)}`);
+      }
+      if (selectedCourse && selectedCourse !== 'ALL') {
+        queryParams.push(`course=${encodeURIComponent(selectedCourse)}`);
+      }
       const queryString = queryParams.length > 0 ? `?${queryParams.join('&')}` : '';
 
       const res = await api.get(`/reports/summary/${queryString}`);
       setReport(res);
+      setErrorMsg('');
     } catch (err) {
-      setErrorMsg('Failed to load academic report statistics.');
+      console.error('Failed to load academic reports:', err);
+      const detail = err?.message || 'Failed to load academic report statistics. Please check your connection or retry.';
+      setErrorMsg(detail);
     } finally {
       setLoading(false);
+      setIsRefreshing(false);
     }
   }
 
+  // Modern Shimmer Skeleton Loader for Reports Dashboard
   if (loading && !report) {
     return (
-      <div className="flex flex-col items-center justify-center py-24 space-y-4">
-        <div className="w-10 h-10 border-4 border-brand-light/20 border-t-brand-light rounded-full animate-spin"></div>
-        <p className="text-xs text-slate-500 font-semibold">Generating Academic Performance & Timetable Analytics...</p>
-      </div>
-    );
-  }
+      <div className="space-y-8 animate-pulse max-w-6xl mx-auto py-4">
+        {/* Header Skeleton */}
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-200 pb-5">
+          <div className="space-y-2">
+            <div className="h-6 w-72 bg-slate-200 rounded-lg"></div>
+            <div className="h-4 w-96 bg-slate-100 rounded-lg"></div>
+          </div>
+          <div className="flex gap-2">
+            <div className="h-9 w-40 bg-slate-200 rounded-xl"></div>
+            <div className="h-9 w-32 bg-slate-200 rounded-xl"></div>
+          </div>
+        </div>
 
-  if (errorMsg || !report) {
-    return (
-      <div className="max-w-lg mx-auto py-20 text-center space-y-4">
-        <div className="p-6 bg-red-50 border-l-4 border-red-500 rounded-2xl text-red-700 text-xs font-semibold">
-          {errorMsg || 'Unable to load report data.'}
+        {/* Top Metric Cards Skeleton */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
+          {[1, 2, 3, 4].map(n => (
+            <div key={n} className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-3">
+              <div className="h-3 w-24 bg-slate-200 rounded"></div>
+              <div className="h-8 w-16 bg-slate-300 rounded"></div>
+              <div className="h-3 w-32 bg-slate-100 rounded"></div>
+            </div>
+          ))}
+        </div>
+
+        {/* Big Banner Skeleton */}
+        <div className="h-44 bg-slate-200 rounded-3xl"></div>
+
+        {/* Visual Charts Skeleton */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+            <div className="h-4 w-48 bg-slate-200 rounded"></div>
+            <div className="h-36 bg-slate-100 rounded-xl"></div>
+          </div>
+          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+            <div className="h-4 w-48 bg-slate-200 rounded"></div>
+            <div className="h-36 bg-slate-100 rounded-xl"></div>
+          </div>
         </div>
       </div>
     );
   }
 
-  const isExecutiveReadOnly = ['dvc', 'vc', 'dean'].includes(user.role);
+  // Resilient Error Screen with Full Recovery UI
+  if (errorMsg && !report) {
+    const apiEndpoint = getApiBaseUrl();
+    return (
+      <div className="max-w-xl mx-auto py-16 px-4 animate-fade-in text-center space-y-6">
+        <div className="p-8 bg-white border border-red-200 shadow-xl rounded-3xl space-y-5">
+          <div className="w-16 h-16 mx-auto bg-red-100 text-red-600 rounded-2xl flex items-center justify-center text-3xl shadow-inner">
+            ⚠️
+          </div>
+
+          <div className="space-y-2">
+            <h2 className="text-xl font-black text-slate-850">Unable to Load Academic Analytics</h2>
+            <p className="text-xs text-red-600 font-semibold bg-red-50 py-2 px-3 rounded-xl border border-red-200">
+              {errorMsg}
+            </p>
+            <p className="text-xs text-slate-500 font-medium pt-1">
+              The reporting server could not be reached or timed out. Your session is active and secure.
+            </p>
+          </div>
+
+          <div className="pt-2 flex flex-col sm:flex-row items-center justify-center gap-3">
+            <button
+              onClick={fetchReportSummary}
+              disabled={loading}
+              className="w-full sm:w-auto px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white text-xs font-bold rounded-xl transition shadow-md shadow-emerald-600/20 flex items-center justify-center space-x-2"
+            >
+              <span>🔄</span>
+              <span>Retry Loading Reports</span>
+            </button>
+            <Link
+              href="/dashboard"
+              className="w-full sm:w-auto px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition"
+            >
+              Back to Dashboard
+            </Link>
+          </div>
+
+          <div className="pt-4 border-t border-slate-100 text-[11px] text-slate-400">
+            <span>Target Endpoint: </span>
+            <code className="text-[10px] bg-slate-100 px-2 py-0.5 rounded text-slate-600">{apiEndpoint}/reports/summary/</code>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const isExecutiveReadOnly = ['dvc', 'vc', 'dean'].includes(user?.role);
+  const isLockedFacultyRole = ['lecturer', 'student', 'faculty_admin', 'dean'].includes(user?.role);
+  const userLockedFacultyId = user?.faculty?.id || user?.faculty || user?.assigned_faculty_details?.[0]?.id;
 
   return (
     <div className="space-y-8 animate-fade-in max-w-6xl mx-auto">
       
+      {/* Toast Alert when Refreshing with Cached Report Available */}
+      {errorMsg && report && (
+        <div className="p-4 bg-amber-50 border border-amber-200 rounded-2xl flex items-center justify-between text-amber-800 text-xs font-semibold shadow-sm">
+          <div className="flex items-center space-x-2">
+            <span className="text-base">⚠️</span>
+            <span>{errorMsg} (Displaying previously loaded metrics).</span>
+          </div>
+          <button
+            onClick={fetchReportSummary}
+            className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold transition"
+          >
+            Retry Refresh
+          </button>
+        </div>
+      )}
+
       {/* Page Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-200 pb-5">
         <div>
-          <h2 className="text-xl font-bold text-slate-850">CIU Academic & Institutional Analytics</h2>
+          <div className="flex items-center space-x-2">
+            <h2 className="text-xl font-bold text-slate-850">CIU Academic & Institutional Analytics</h2>
+            {isRefreshing && (
+              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 animate-pulse">
+                Refreshing...
+              </span>
+            )}
+          </div>
           <p className="text-slate-500 text-xs font-medium">Performance evaluations, exam/test pass trends, attendance rates, and live timetable metrics.</p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {['admin', 'dvc', 'vc', 'dean', 'lecturer', 'registrar', 'faculty_admin'].includes(user.role) && (
+          {/* Manual Refresh Button */}
+          <button
+            onClick={fetchReportSummary}
+            disabled={loading || isRefreshing}
+            className="flex items-center space-x-1.5 px-3 py-1.5 bg-white border border-slate-200 hover:border-emerald-500 rounded-xl text-xs font-bold text-slate-700 hover:text-emerald-700 transition shadow-sm disabled:opacity-50"
+            title="Refresh Academic Analytics"
+          >
+            <span className={isRefreshing ? 'animate-spin inline-block' : ''}>🔄</span>
+            <span>{isRefreshing ? 'Refreshing' : 'Refresh'}</span>
+          </button>
+
+          {['admin', 'dvc', 'vc', 'dean', 'lecturer', 'registrar', 'faculty_admin'].includes(user?.role) && (
             <>
               <div className="flex items-center space-x-1">
                 <select
-                  value={['lecturer', 'student', 'faculty_admin', 'dean'].includes(user?.role) && (user?.faculty?.id || user?.faculty) ? (user?.faculty?.id || user?.faculty) : selectedFaculty}
-                  disabled={['lecturer', 'student', 'faculty_admin', 'dean'].includes(user?.role) && Boolean(user?.faculty?.id || user?.faculty)}
+                  value={isLockedFacultyRole && userLockedFacultyId ? String(userLockedFacultyId) : selectedFaculty}
+                  disabled={isLockedFacultyRole && Boolean(userLockedFacultyId)}
                   onChange={(e) => setSelectedFaculty(e.target.value)}
                   className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 disabled:opacity-85"
                 >
@@ -95,7 +233,7 @@ export default function ReportsDashboardPage() {
                     <option key={f.id} value={f.id}>{f.code} - {f.name}</option>
                   ))}
                 </select>
-                {['lecturer', 'student', 'faculty_admin', 'dean'].includes(user?.role) && Boolean(user?.faculty?.id || user?.faculty) && (
+                {isLockedFacultyRole && Boolean(userLockedFacultyId) && (
                   <span className="text-[10px] text-amber-700 font-bold">🔒 Locked to Faculty</span>
                 )}
               </div>
@@ -114,13 +252,13 @@ export default function ReportsDashboardPage() {
           )}
 
           <div className="bg-emerald-50 border border-emerald-200 px-3 py-1.5 rounded-xl text-xs text-emerald-800 font-bold uppercase tracking-wider">
-            {user.role === 'faculty_admin' ? 'FACULTY SECRETARY' : user.role.replace('_', ' ').toUpperCase()}
+            {user?.role === 'faculty_admin' ? 'FACULTY SECRETARY' : (user?.role || '').replace('_', ' ').toUpperCase()}
           </div>
         </div>
       </div>
 
       {/* STUDENT REPORT VIEW */}
-      {user.role === 'student' && (
+      {user?.role === 'student' && report && (
         <div className="space-y-8">
           {/* Key Metrics Cards */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -129,31 +267,31 @@ export default function ReportsDashboardPage() {
             <div className="green-card rounded-2xl p-6 space-y-3">
               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Official Examinations</span>
               <div className="flex items-baseline justify-between">
-                <span className="text-3xl font-black text-slate-850">{report.exams_done}</span>
+                <span className="text-3xl font-black text-slate-850">{report.exams_done ?? 0}</span>
                 <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                  {report.exams_passed} Passed
+                  {report.exams_passed ?? 0} Passed
                 </span>
               </div>
-              <p className="text-xs text-slate-500 font-medium">Failed: <span className="font-bold text-red-600">{report.exams_failed}</span></p>
+              <p className="text-xs text-slate-500 font-medium">Failed: <span className="font-bold text-red-600">{report.exams_failed ?? 0}</span></p>
             </div>
 
             {/* Test Performance Card */}
             <div className="green-card rounded-2xl p-6 space-y-3">
               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Continuous Tests & Quizzes</span>
               <div className="flex items-baseline justify-between">
-                <span className="text-3xl font-black text-slate-850">{report.tests_done}</span>
+                <span className="text-3xl font-black text-slate-850">{report.tests_done ?? 0}</span>
                 <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                  {report.tests_passed} Passed
+                  {report.tests_passed ?? 0} Passed
                 </span>
               </div>
-              <p className="text-xs text-slate-500 font-medium">Avg. Score: <span className="font-bold text-brand-dark">{report.average_test_score}%</span></p>
+              <p className="text-xs text-slate-500 font-medium">Avg. Score: <span className="font-bold text-brand-dark">{report.average_test_score ?? 0}%</span></p>
             </div>
 
             {/* Class Attendance Card */}
             <div className="green-card rounded-2xl p-6 space-y-3">
               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Class Attendance</span>
               <div className="flex items-baseline justify-between">
-                <span className="text-3xl font-black text-brand-dark">{report.attendance_count}</span>
+                <span className="text-3xl font-black text-brand-dark">{report.attendance_count ?? 0}</span>
                 <span className="text-xs font-bold text-brand-medium bg-brand-light/10 px-2 py-0.5 rounded border border-brand-light/20">
                   Verified Check-ins
                 </span>
@@ -306,16 +444,16 @@ export default function ReportsDashboardPage() {
       )}
 
       {/* LECTURER REPORT VIEW */}
-      {user.role === 'lecturer' && (
+      {user?.role === 'lecturer' && report && (
         <div className="space-y-8">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             
             <div className="green-card rounded-2xl p-6 space-y-3">
               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Assessments Created</span>
               <div className="flex items-baseline justify-between">
-                <span className="text-3xl font-black text-slate-850">{report.exams_created + report.tests_created}</span>
+                <span className="text-3xl font-black text-slate-850">{(report.exams_created ?? 0) + (report.tests_created ?? 0)}</span>
                 <span className="text-xs font-bold text-brand-medium bg-brand-light/10 px-2 py-0.5 rounded border border-brand-light/20">
-                  {report.exams_created} Exams / {report.tests_created} Tests
+                  {report.exams_created ?? 0} Exams / {report.tests_created ?? 0} Tests
                 </span>
               </div>
             </div>
@@ -323,7 +461,7 @@ export default function ReportsDashboardPage() {
             <div className="green-card rounded-2xl p-6 space-y-3">
               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Total Submissions Received</span>
               <div className="flex items-baseline justify-between">
-                <span className="text-3xl font-black text-slate-850">{report.total_exam_submissions + report.total_test_submissions}</span>
+                <span className="text-3xl font-black text-slate-850">{(report.total_exam_submissions ?? 0) + (report.total_test_submissions ?? 0)}</span>
                 <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
                   Autograded
                 </span>
@@ -333,8 +471,8 @@ export default function ReportsDashboardPage() {
             <div className="green-card rounded-2xl p-6 space-y-3">
               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Class Pass Rates</span>
               <div className="space-y-1">
-                <p className="text-xs text-slate-600">Exams Pass Rate: <span className="font-bold text-emerald-600">{report.exam_pass_rate}%</span></p>
-                <p className="text-xs text-slate-600">Tests Pass Rate: <span className="font-bold text-emerald-600">{report.test_pass_rate}%</span></p>
+                <p className="text-xs text-slate-600">Exams Pass Rate: <span className="font-bold text-emerald-600">{report.exam_pass_rate ?? 0}%</span></p>
+                <p className="text-xs text-slate-600">Tests Pass Rate: <span className="font-bold text-emerald-600">{report.test_pass_rate ?? 0}%</span></p>
               </div>
             </div>
 
@@ -346,13 +484,13 @@ export default function ReportsDashboardPage() {
               <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">Class Assessment Pass Rate Comparison</h3>
               <div className="flex items-end justify-around h-48 pt-4 pb-2 border-b border-slate-100">
                 <div className="flex flex-col items-center space-y-2">
-                  <span className="text-xs font-bold text-emerald-600">{report.exam_pass_rate}%</span>
-                  <div className="w-16 bg-emerald-500 rounded-t-xl transition-all duration-500" style={{ height: `${Math.max(report.exam_pass_rate, 10)}%` }}></div>
+                  <span className="text-xs font-bold text-emerald-600">{report.exam_pass_rate ?? 0}%</span>
+                  <div className="w-16 bg-emerald-500 rounded-t-xl transition-all duration-500" style={{ height: `${Math.max(report.exam_pass_rate ?? 0, 10)}%` }}></div>
                   <span className="text-xs font-medium text-slate-500">Exams Pass</span>
                 </div>
                 <div className="flex flex-col items-center space-y-2">
-                  <span className="text-xs font-bold text-brand-dark">{report.test_pass_rate}%</span>
-                  <div className="w-16 bg-brand-light rounded-t-xl transition-all duration-500" style={{ height: `${Math.max(report.test_pass_rate, 10)}%` }}></div>
+                  <span className="text-xs font-bold text-brand-dark">{report.test_pass_rate ?? 0}%</span>
+                  <div className="w-16 bg-brand-light rounded-t-xl transition-all duration-500" style={{ height: `${Math.max(report.test_pass_rate ?? 0, 10)}%` }}></div>
                   <span className="text-xs font-medium text-slate-500">Tests Pass</span>
                 </div>
               </div>
@@ -364,19 +502,19 @@ export default function ReportsDashboardPage() {
                 <div>
                   <div className="flex justify-between text-xs font-semibold mb-1">
                     <span>Exam Submissions</span>
-                    <span className="font-bold text-slate-800">{report.total_exam_submissions}</span>
+                    <span className="font-bold text-slate-800">{report.total_exam_submissions ?? 0}</span>
                   </div>
                   <div className="w-full h-3 bg-slate-100 rounded-full overflow-hidden">
-                    <div className="h-full bg-emerald-500 rounded-full" style={{ width: `${Math.min(report.total_exam_submissions * 10, 100)}%` }}></div>
+                    <div className="h-full bg-emerald-500 rounded-full" style={{ width: `${Math.min((report.total_exam_submissions ?? 0) * 10, 100)}%` }}></div>
                   </div>
                 </div>
                 <div>
                   <div className="flex justify-between text-xs font-semibold mb-1">
                     <span>Test Submissions</span>
-                    <span className="font-bold text-slate-800">{report.total_test_submissions}</span>
+                    <span className="font-bold text-slate-800">{report.total_test_submissions ?? 0}</span>
                   </div>
                   <div className="w-full h-3 bg-slate-100 rounded-full overflow-hidden">
-                    <div className="h-full bg-brand-emerald rounded-full" style={{ width: `${Math.min(report.total_test_submissions * 10, 100)}%` }}></div>
+                    <div className="h-full bg-brand-emerald rounded-full" style={{ width: `${Math.min((report.total_test_submissions ?? 0) * 10, 100)}%` }}></div>
                   </div>
                 </div>
               </div>
@@ -386,30 +524,30 @@ export default function ReportsDashboardPage() {
       )}
 
       {/* EXECUTIVE / DEAN / SECRETARY / REGISTRAR / DVC / VC / ADMIN VIEW */}
-      {['dean', 'faculty_admin', 'registrar', 'dvc', 'vc', 'admin'].includes(user.role) && (
+      {['dean', 'faculty_admin', 'registrar', 'dvc', 'vc', 'admin'].includes(user?.role) && report && (
         <div className="space-y-8">
           
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
             <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm text-center">
               <span className="text-[10px] text-slate-400 font-bold uppercase block">Total Students</span>
-              <span className="text-2xl font-black text-brand-dark">{report.total_students}</span>
+              <span className="text-2xl font-black text-brand-dark">{report.total_students ?? 0}</span>
             </div>
             <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm text-center">
               <span className="text-[10px] text-slate-400 font-bold uppercase block">Total Lecturers</span>
-              <span className="text-2xl font-black text-brand-medium">{report.total_lecturers}</span>
+              <span className="text-2xl font-black text-brand-medium">{report.total_lecturers ?? 0}</span>
             </div>
             <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm text-center">
               <span className="text-[10px] text-slate-400 font-bold uppercase block">Faculties</span>
-              <span className="text-2xl font-black text-brand-dark">{report.total_faculties}</span>
+              <span className="text-2xl font-black text-brand-dark">{report.total_faculties ?? 0}</span>
             </div>
             <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm text-center">
               <span className="text-[10px] text-slate-400 font-bold uppercase block">Courses / Units</span>
-              <span className="text-2xl font-black text-emerald-600">{report.total_courses} / {report.total_course_units}</span>
+              <span className="text-2xl font-black text-emerald-600">{report.total_courses ?? 0} / {report.total_course_units ?? 0}</span>
             </div>
           </div>
 
           {/* DVC / VC / Dean / Executive Institutional Financial & Fee Clearance Summary Card */}
-          {['dvc', 'vc', 'dean', 'admin'].includes(user.role) && (
+          {['dvc', 'vc', 'dean', 'admin'].includes(user?.role) && (
             <div className="bg-gradient-to-br from-[#0d3d24] via-[#0f4a2e] to-[#1a5c38] text-white rounded-3xl p-6 md:p-7 shadow-xl border border-emerald-500/30 space-y-5">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-emerald-500/30 pb-4 gap-3">
                 <div>
@@ -509,19 +647,19 @@ export default function ReportsDashboardPage() {
               <div className="space-y-3 text-xs">
                 <div className="flex justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
                   <span className="text-slate-600 font-medium">Exams Set:</span>
-                  <span className="font-bold text-slate-850">{report.total_exams}</span>
+                  <span className="font-bold text-slate-850">{report.total_exams ?? 0}</span>
                 </div>
                 <div className="flex justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
                   <span className="text-slate-600 font-medium">Approved Exams:</span>
-                  <span className="font-bold text-emerald-700">{report.approved_exams}</span>
+                  <span className="font-bold text-emerald-700">{report.approved_exams ?? 0}</span>
                 </div>
                 <div className="flex justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
                   <span className="text-slate-600 font-medium">Total Exam Attempts:</span>
-                  <span className="font-bold text-slate-850">{report.total_exam_attempts}</span>
+                  <span className="font-bold text-slate-850">{report.total_exam_attempts ?? 0}</span>
                 </div>
                 <div className="flex justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
                   <span className="text-slate-600 font-medium">Institutional Exam Score Average:</span>
-                  <span className="font-bold text-emerald-600">{report.avg_exam_score}%</span>
+                  <span className="font-bold text-emerald-600">{report.avg_exam_score ?? 0}%</span>
                 </div>
               </div>
             </div>
@@ -539,11 +677,11 @@ export default function ReportsDashboardPage() {
                 </div>
                 <div className="flex justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
                   <span className="text-slate-600 font-medium">Published Active Tests:</span>
-                  <span className="font-bold text-emerald-700">{report.published_tests}</span>
+                  <span className="font-bold text-emerald-700">{report.published_tests ?? 0}</span>
                 </div>
                 <div className="flex justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
                   <span className="text-slate-600 font-medium">Institutional Test Score Average:</span>
-                  <span className="font-bold text-emerald-700">{report.avg_test_score}%</span>
+                  <span className="font-bold text-emerald-700">{report.avg_test_score ?? 0}%</span>
                 </div>
               </div>
             </div>
@@ -556,18 +694,18 @@ export default function ReportsDashboardPage() {
             
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
               <div>
-                <span className="text-xs font-semibold text-slate-500 block mb-2">Institutional Exam Average ({report.avg_exam_score}%)</span>
+                <span className="text-xs font-semibold text-slate-500 block mb-2">Institutional Exam Average ({report.avg_exam_score ?? 0}%)</span>
                 <div className="w-full h-4 bg-slate-100 rounded-full overflow-hidden flex">
-                  <div className="h-full bg-emerald-500" style={{ width: `${Math.min(report.avg_exam_score, 100)}%` }}></div>
-                  <div className="h-full bg-slate-200" style={{ width: `${100 - Math.min(report.avg_exam_score, 100)}%` }}></div>
+                  <div className="h-full bg-emerald-500" style={{ width: `${Math.min(report.avg_exam_score ?? 0, 100)}%` }}></div>
+                  <div className="h-full bg-slate-200" style={{ width: `${100 - Math.min(report.avg_exam_score ?? 0, 100)}%` }}></div>
                 </div>
               </div>
 
               <div>
-                <span className="text-xs font-semibold text-slate-500 block mb-2">Institutional Test Average ({report.avg_test_score}%)</span>
+                <span className="text-xs font-semibold text-slate-500 block mb-2">Institutional Test Average ({report.avg_test_score ?? 0}%)</span>
                 <div className="w-full h-4 bg-slate-100 rounded-full overflow-hidden flex">
-                  <div className="h-full bg-brand-emerald" style={{ width: `${Math.min(report.avg_test_score, 100)}%` }}></div>
-                  <div className="h-full bg-slate-200" style={{ width: `${100 - Math.min(report.avg_test_score, 100)}%` }}></div>
+                  <div className="h-full bg-brand-emerald" style={{ width: `${Math.min(report.avg_test_score ?? 0, 100)}%` }}></div>
+                  <div className="h-full bg-slate-200" style={{ width: `${100 - Math.min(report.avg_test_score ?? 0, 100)}%` }}></div>
                 </div>
               </div>
             </div>

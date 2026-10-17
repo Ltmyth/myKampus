@@ -34,7 +34,7 @@ from .permissions import (
     IsLecturer, IsStudent, IsStaffUser, IsExecutiveReadOnly,
     IsAccountsPersonnel, CanIssueTemporaryClearance, IsStrictSystemAdmin
 )
-from .clearance import fetch_external_cleared_students, check_student_clearance
+from .clearance import fetch_external_cleared_students, check_student_clearance, batch_preload_clearance
 
 def authenticate_token_param(request):
     if not request.user or not request.user.is_authenticated:
@@ -717,7 +717,7 @@ class AdminUserViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        qs = User.objects.all().select_related('faculty').prefetch_related('assigned_courses', 'assigned_course_units__course').order_by('-date_joined')
+        qs = User.objects.all().select_related('faculty').prefetch_related('assigned_faculties', 'assigned_courses', 'assigned_course_units__course').order_by('-date_joined')
         role_param = self.request.query_params.get('role')
         if role_param:
             qs = qs.filter(role=role_param)
@@ -878,6 +878,17 @@ class AdminUserViewSet(viewsets.ModelViewSet):
             )
             return qs.filter(lec_scope).distinct().order_by('-date_joined')
         return qs
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        target_users = page if page is not None else list(queryset)
+        batch_preload_clearance(target_users)
+        if page is not None:
+            serializer = self.get_serializer(target_users, many=True)
+            return self.get_paginated_response(serializer.data)
+        serializer = self.get_serializer(target_users, many=True)
+        return Response(serializer.data)
 
     def perform_create(self, serializer):
         user_obj = serializer.save()
@@ -5442,14 +5453,84 @@ class ReportsViewSet(viewsets.ViewSet):
             exam_attempts = exam_attempts.filter(models.Q(exam__course_id=course_param) | models.Q(exam__course__code__iexact=course_param))
             test_attempts = test_attempts.filter(models.Q(test__course_id=course_param) | models.Q(test__course__code__iexact=course_param))
 
-        avg_exam_score = round(sum(a.score for a in exam_attempts) / exam_attempts.count(), 1) if exam_attempts.exists() else 0.0
-        avg_test_score = round(sum(a.score for a in test_attempts) / test_attempts.count(), 1) if test_attempts.exists() else 0.0
+        exam_agg = exam_attempts.aggregate(
+            total=models.Count('id'),
+            avg=models.Avg('score'),
+            passed=models.Count('id', filter=models.Q(score__gte=50.0))
+        )
+        exam_total = exam_agg['total'] or 0
+        avg_exam_score = round(float(exam_agg['avg'] or 0.0), 1)
+        exam_pass_rate = round(((exam_agg['passed'] or 0) / exam_total) * 100, 1) if exam_total > 0 else 0.0
 
-        exam_pass_count = sum(1 for a in exam_attempts if a.score >= 50.0)
-        test_pass_count = sum(1 for a in test_attempts if a.passed)
+        test_agg = test_attempts.aggregate(
+            total=models.Count('id'),
+            avg=models.Avg('score'),
+            passed=models.Count('id', filter=models.Q(passed=True) | models.Q(score__gte=50.0))
+        )
+        test_total = test_agg['total'] or 0
+        avg_test_score = round(float(test_agg['avg'] or 0.0), 1)
+        test_pass_rate = round(((test_agg['passed'] or 0) / test_total) * 100, 1) if test_total > 0 else 0.0
 
-        exam_pass_rate = round((exam_pass_count / exam_attempts.count()) * 100, 1) if exam_attempts.exists() else 0.0
-        test_pass_rate = round((test_pass_count / test_attempts.count()) * 100, 1) if test_attempts.exists() else 0.0
+        # Optimized single-pass clearance computation with preloaded lookup sets
+        exams_data = fetch_external_cleared_students(examtype="EXAMS", acad="2026/2027", sem="1")
+        tests_data = fetch_external_cleared_students(examtype="TESTS", acad="2026/2027", sem="1")
+
+        def _to_lookup_set(records):
+            s = set()
+            if isinstance(records, list):
+                for item in records:
+                    if isinstance(item, dict):
+                        for v in item.values():
+                            if v and isinstance(v, str):
+                                s.add(v.strip().upper())
+                    elif isinstance(item, str):
+                        s.add(item.strip().upper())
+            return s
+
+        api_exam_set = _to_lookup_set(exams_data)
+        api_test_set = _to_lookup_set(tests_data)
+
+        now = timezone.now()
+        active_temps = TemporaryClearance.objects.filter(
+            is_active=True, valid_from__lte=now, expires_at__gte=now
+        ).values('student_id', 'clearance_type')
+
+        temp_map = {}
+        for tc in active_temps:
+            temp_map.setdefault(tc['student_id'], set()).add(tc['clearance_type'])
+
+        s_100 = 0
+        s_50 = 0
+        s_below_50 = 0
+        s_api = 0
+
+        for s in student_qs.values('id', 'reg_number', 'username', 'email', 'tuition_paid_percentage'):
+            sid = s['id']
+            reg = (s['reg_number'] or '').strip().upper()
+            uname = (s['username'] or '').strip().upper()
+            email = (s['email'] or '').strip().upper()
+            pct = float(s['tuition_paid_percentage'] or 0.0)
+
+            t_types = temp_map.get(sid, set())
+            is_temp_ex = ('both' in t_types) or ('exams' in t_types)
+            is_temp_ts = ('both' in t_types) or ('tests' in t_types)
+
+            is_api_ex = bool((reg and reg in api_exam_set) or (uname and uname in api_exam_set) or (email and email in api_exam_set))
+            is_api_ts = bool((reg and reg in api_test_set) or (uname and uname in api_test_set) or (email and email in api_test_set))
+            if is_api_ex or is_api_ts:
+                s_api += 1
+
+            is_exam_cleared = is_temp_ex or is_api_ex or (pct >= 100.0)
+            is_test_cleared = is_temp_ts or is_temp_ex or is_api_ts or is_api_ex or (pct >= 50.0)
+
+            if is_exam_cleared:
+                s_100 += 1
+            elif is_test_cleared:
+                s_50 += 1
+            else:
+                s_below_50 += 1
+
+        ext_records_count = len(exams_data) if isinstance(exams_data, list) else 0
 
         res_data = {
             'total_students': total_students,
@@ -5470,16 +5551,16 @@ class ReportsViewSet(viewsets.ViewSet):
             'avg_test_score': avg_test_score,
             'exam_pass_rate': exam_pass_rate,
             'test_pass_rate': test_pass_rate,
-            'total_exam_submissions': exam_attempts.count(),
-            'total_test_submissions': test_attempts.count(),
-            'total_exam_attempts': exam_attempts.count(),
-            'total_test_attempts': test_attempts.count(),
+            'total_exam_submissions': exam_total,
+            'total_test_submissions': test_total,
+            'total_exam_attempts': exam_total,
+            'total_test_attempts': test_total,
             # Financial Clearance stats consuming CIU Cleared Students API
-            'students_100_tuition': sum(1 for s in student_qs if check_student_clearance(s)['is_exam_cleared']),
-            'students_50_tuition': sum(1 for s in student_qs if check_student_clearance(s)['is_test_cleared'] and not check_student_clearance(s)['is_exam_cleared']),
-            'students_below_50_tuition': sum(1 for s in student_qs if not check_student_clearance(s)['is_test_cleared']),
-            'total_api_cleared_students': sum(1 for s in student_qs if check_student_clearance(s)['is_api_cleared']),
-            'external_api_total_records': len(fetch_external_cleared_students()) if isinstance(fetch_external_cleared_students(), list) else 0,
+            'students_100_tuition': s_100,
+            'students_50_tuition': s_50,
+            'students_below_50_tuition': s_below_50,
+            'total_api_cleared_students': s_api,
+            'external_api_total_records': ext_records_count,
         }
 
         # Role-specific additions
@@ -5491,7 +5572,7 @@ class ReportsViewSet(viewsets.ViewSet):
                 faculties = Faculty.objects.all()
 
             for fac in faculties:
-                fac_students = User.objects.filter(role='student', faculty=fac)
+                fac_students_count = User.objects.filter(role='student', faculty=fac).count()
                 fac_exam_attempts = ExamAttempt.objects.filter(
                     models.Q(exam__course__faculty=fac) | models.Q(student__faculty=fac),
                     completed_at__isnull=False
@@ -5501,60 +5582,87 @@ class ReportsViewSet(viewsets.ViewSet):
                     completed_at__isnull=False
                 ).distinct()
 
-                exam_pass_c = sum(1 for a in fac_exam_attempts if a.score >= 50.0)
-                test_pass_c = sum(1 for a in fac_test_attempts if a.passed)
-
-                fac_exam_pass_rate = round((exam_pass_c / fac_exam_attempts.count()) * 100, 1) if fac_exam_attempts.exists() else 0.0
-                fac_test_pass_rate = round((test_pass_c / fac_test_attempts.count()) * 100, 1) if fac_test_attempts.exists() else 0.0
+                ex_fac_agg = fac_exam_attempts.aggregate(
+                    total=models.Count('id'),
+                    passed=models.Count('id', filter=models.Q(score__gte=50.0))
+                )
+                ts_fac_agg = fac_test_attempts.aggregate(
+                    total=models.Count('id'),
+                    passed=models.Count('id', filter=models.Q(passed=True) | models.Q(score__gte=50.0))
+                )
+                ex_fac_total = ex_fac_agg['total'] or 0
+                ts_fac_total = ts_fac_agg['total'] or 0
 
                 faculty_submissions.append({
                     'faculty_id': fac.id,
                     'faculty_name': fac.name,
                     'faculty_code': fac.code,
-                    'total_students': fac_students.count(),
-                    'total_exam_submissions': fac_exam_attempts.count(),
-                    'total_test_submissions': fac_test_attempts.count(),
-                    'total_submissions': fac_exam_attempts.count() + fac_test_attempts.count(),
-                    'exam_pass_rate': fac_exam_pass_rate,
-                    'test_pass_rate': fac_test_pass_rate,
+                    'total_students': fac_students_count,
+                    'total_exam_submissions': ex_fac_total,
+                    'total_test_submissions': ts_fac_total,
+                    'total_submissions': ex_fac_total + ts_fac_total,
+                    'exam_pass_rate': round(((ex_fac_agg['passed'] or 0) / ex_fac_total) * 100, 1) if ex_fac_total > 0 else 0.0,
+                    'test_pass_rate': round(((ts_fac_agg['passed'] or 0) / ts_fac_total) * 100, 1) if ts_fac_total > 0 else 0.0,
                 })
 
             res_data['faculty_submissions'] = faculty_submissions
 
         if user.role == 'student':
-            student_exam_attempts = ExamAttempt.objects.filter(student=user, completed_at__isnull=False)
-            student_test_attempts = TestAttempt.objects.filter(student=user, completed_at__isnull=False)
-            
-            res_data['exams_done'] = student_exam_attempts.count()
-            res_data['exams_passed'] = sum(1 for a in student_exam_attempts if a.score >= 50.0)
-            res_data['exams_failed'] = res_data['exams_done'] - res_data['exams_passed']
-            
-            res_data['tests_done'] = student_test_attempts.count()
-            res_data['tests_passed'] = sum(1 for a in student_test_attempts if a.passed)
-            res_data['tests_failed'] = res_data['tests_done'] - res_data['tests_passed']
+            student_exam_attempts = ExamAttempt.objects.filter(student=user, completed_at__isnull=False).select_related('exam')
+            student_test_attempts = TestAttempt.objects.filter(student=user, completed_at__isnull=False).select_related('test')
 
-            res_data['average_exam_score'] = round(sum(a.score for a in student_exam_attempts) / student_exam_attempts.count(), 1) if student_exam_attempts.exists() else 0.0
-            res_data['average_test_score'] = round(sum(a.score for a in student_test_attempts) / student_test_attempts.count(), 1) if student_test_attempts.exists() else 0.0
+            ex_st_agg = student_exam_attempts.aggregate(
+                total=models.Count('id'),
+                avg=models.Avg('score'),
+                passed=models.Count('id', filter=models.Q(score__gte=50.0))
+            )
+            ts_st_agg = student_test_attempts.aggregate(
+                total=models.Count('id'),
+                avg=models.Avg('score'),
+                passed=models.Count('id', filter=models.Q(passed=True) | models.Q(score__gte=50.0))
+            )
+
+            res_data['exams_done'] = ex_st_agg['total'] or 0
+            res_data['exams_passed'] = ex_st_agg['passed'] or 0
+            res_data['exams_failed'] = max(0, res_data['exams_done'] - res_data['exams_passed'])
+
+            res_data['tests_done'] = ts_st_agg['total'] or 0
+            res_data['tests_passed'] = ts_st_agg['passed'] or 0
+            res_data['tests_failed'] = max(0, res_data['tests_done'] - res_data['tests_passed'])
+
+            res_data['average_exam_score'] = round(float(ex_st_agg['avg'] or 0.0), 1)
+            res_data['average_test_score'] = round(float(ts_st_agg['avg'] or 0.0), 1)
             res_data['attendance_count'] = AttendanceRecord.objects.filter(student=user).count()
 
-            # Course Unit breakdown with ZERO for unsubmitted work!
+            # Pre-index student attempts by unit and course for O(1) matching
+            exam_by_unit = {}
+            exam_by_course = {}
+            for a in student_exam_attempts.order_by('-completed_at'):
+                if a.exam and a.exam.course_unit_id and a.exam.course_unit_id not in exam_by_unit:
+                    exam_by_unit[a.exam.course_unit_id] = a
+                if a.exam and a.exam.course_id and a.exam.course_id not in exam_by_course:
+                    exam_by_course[a.exam.course_id] = a
+
+            test_by_unit = {}
+            test_by_course = {}
+            for a in student_test_attempts.order_by('-completed_at'):
+                if a.test and a.test.course_unit_id and a.test.course_unit_id not in test_by_unit:
+                    test_by_unit[a.test.course_unit_id] = a
+                if a.test and a.test.course_id and a.test.course_id not in test_by_course:
+                    test_by_course[a.test.course_id] = a
+
             registered_units = CourseUnit.objects.filter(
                 models.Q(course__applications__student=user, course__applications__status='approved') |
                 models.Q(course__assigned_students=user) |
                 models.Q(course__faculty=user.faculty)
-            ).distinct()
+            ).select_related('course').distinct()
             if not registered_units.exists():
-                registered_units = CourseUnit.objects.all()[:10]
+                registered_units = CourseUnit.objects.select_related('course').all()[:10]
 
             course_reports = []
             for unit in registered_units:
-                latest_exam_att = student_exam_attempts.filter(exam__course_unit=unit).order_by('-completed_at').first()
-                if not latest_exam_att:
-                    latest_exam_att = student_exam_attempts.filter(exam__course=unit.course).order_by('-completed_at').first()
-                
-                latest_test_att = student_test_attempts.filter(test__course_unit=unit).order_by('-completed_at').first()
-                if not latest_test_att:
-                    latest_test_att = student_test_attempts.filter(test__course=unit.course).order_by('-completed_at').first()
+                latest_exam_att = exam_by_unit.get(unit.id) or exam_by_course.get(unit.course_id)
+                latest_test_att = test_by_unit.get(unit.id) or test_by_course.get(unit.course_id)
 
                 exam_score = latest_exam_att.score if latest_exam_att else 0.0
                 test_score = latest_test_att.score if latest_test_att else 0.0
@@ -5563,7 +5671,7 @@ class ReportsViewSet(viewsets.ViewSet):
                     'id': unit.id,
                     'code': unit.code,
                     'name': unit.name,
-                    'course_code': unit.course.code,
+                    'course_code': unit.course.code if unit.course else '',
                     'exam_score': exam_score,
                     'test_score': test_score,
                     'has_exam_submission': bool(latest_exam_att),
@@ -5577,16 +5685,24 @@ class ReportsViewSet(viewsets.ViewSet):
             lecturer_tests = Test.objects.filter(lecturer=user)
             lecturer_exam_att = ExamAttempt.objects.filter(exam__in=lecturer_exams, completed_at__isnull=False)
             lecturer_test_att = TestAttempt.objects.filter(test__in=lecturer_tests, completed_at__isnull=False)
-            
+
             res_data['exams_created'] = lecturer_exams.count()
             res_data['tests_created'] = lecturer_tests.count()
-            res_data['total_exam_submissions'] = lecturer_exam_att.count()
-            res_data['total_test_submissions'] = lecturer_test_att.count()
 
-            exam_pass = sum(1 for a in lecturer_exam_att if a.score >= 50.0)
-            test_pass = sum(1 for a in lecturer_test_att if a.passed)
-            res_data['exam_pass_rate'] = round((exam_pass / lecturer_exam_att.count()) * 100, 1) if lecturer_exam_att.exists() else 0.0
-            res_data['test_pass_rate'] = round((test_pass / lecturer_test_att.count()) * 100, 1) if lecturer_test_att.exists() else 0.0
+            lex_agg = lecturer_exam_att.aggregate(
+                total=models.Count('id'),
+                passed=models.Count('id', filter=models.Q(score__gte=50.0))
+            )
+            lts_agg = lecturer_test_att.aggregate(
+                total=models.Count('id'),
+                passed=models.Count('id', filter=models.Q(passed=True) | models.Q(score__gte=50.0))
+            )
+            lex_total = lex_agg['total'] or 0
+            lts_total = lts_agg['total'] or 0
+            res_data['total_exam_submissions'] = lex_total
+            res_data['total_test_submissions'] = lts_total
+            res_data['exam_pass_rate'] = round(((lex_agg['passed'] or 0) / lex_total) * 100, 1) if lex_total > 0 else 0.0
+            res_data['test_pass_rate'] = round(((lts_agg['passed'] or 0) / lts_total) * 100, 1) if lts_total > 0 else 0.0
 
         return Response(res_data)
 

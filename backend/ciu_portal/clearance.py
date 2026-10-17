@@ -246,3 +246,159 @@ def check_student_clearance(student_user, examtype="EXAMS", preloaded_api_data=N
         'api_match_details': api_match_details,
         'source': source
     }
+
+
+def _build_payload_lookup_set(records):
+    """
+    Extracts a set of normalized identifiers (registration number, username, email)
+    from external API records for O(1) hash membership checks.
+    """
+    keys = set()
+    if not records:
+        return keys
+    if isinstance(records, list):
+        for item in records:
+            if isinstance(item, dict):
+                for k in ['RegistrationNo', 'RegNo', 'reg_no', 'StudentNo', 'username', 'email']:
+                    val = item.get(k)
+                    if val:
+                        keys.add(str(val).strip().upper())
+            elif isinstance(item, str):
+                keys.add(item.strip().upper())
+    elif isinstance(records, dict):
+        for k in ['RegistrationNo', 'RegNo', 'reg_no', 'StudentNo', 'username', 'email']:
+            val = records.get(k)
+            if val:
+                keys.add(str(val).strip().upper())
+    return keys
+
+
+def batch_preload_clearance(users, acad="2026/2027", sem="1"):
+    """
+    Preloads clearance for a collection of User objects in bulk (single DB query and cached external API data).
+    Sets user._cached_clearance on each object to eliminate N+1 queries during serialization.
+    """
+    if not users:
+        return
+
+    import collections
+    student_users = []
+    for u in users:
+        if getattr(u, '_cached_clearance', None) is not None:
+            continue
+        if getattr(u, 'role', '') != 'student':
+            u._cached_clearance = {
+                'is_exam_cleared': True,
+                'is_test_cleared': True,
+                'tuition_paid_percentage': 100.0,
+                'clearance_mode': 'staff',
+                'is_temp_cleared': False,
+                'temp_info': None,
+                'source': 'Staff / Faculty Role'
+            }
+        else:
+            student_users.append(u)
+
+    if not student_users:
+        return
+
+    now = timezone.now()
+    active_tcs = TemporaryClearance.objects.filter(
+        student__in=student_users,
+        is_active=True,
+        valid_from__lte=now,
+        expires_at__gte=now
+    ).order_by('-expires_at')
+
+    tcs_by_student = collections.defaultdict(list)
+    for tc in active_tcs:
+        tcs_by_student[tc.student_id].append(tc)
+
+    exams_data = fetch_external_cleared_students(examtype="EXAMS", acad=acad, sem=sem) or []
+    tests_data = fetch_external_cleared_students(examtype="TESTS", acad=acad, sem=sem) or []
+
+    exam_keys = _build_payload_lookup_set(exams_data)
+    test_keys = _build_payload_lookup_set(tests_data)
+
+    for student_user in student_users:
+        reg_num = (getattr(student_user, 'reg_number', None) or getattr(student_user, 'registration_number', None) or "").strip().upper()
+        username = (getattr(student_user, 'username', '') or "").strip().upper()
+        email = (getattr(student_user, 'email', '') or "").strip().upper()
+        db_percentage = float(getattr(student_user, 'tuition_paid_percentage', 0.0) or 0.0)
+
+        student_tcs = tcs_by_student.get(student_user.id, [])
+        is_temp_exam_cleared = any(tc.clearance_type in ['both', 'exams'] for tc in student_tcs)
+        is_temp_test_cleared = any(tc.clearance_type in ['both', 'tests'] for tc in student_tcs)
+        is_temp_cleared = is_temp_exam_cleared or is_temp_test_cleared
+
+        temp_info = None
+        if student_tcs:
+            latest_tc = student_tcs[0]
+            temp_info = {
+                'id': latest_tc.id,
+                'clearance_type': latest_tc.clearance_type,
+                'expires_at': latest_tc.expires_at.isoformat(),
+                'reason': latest_tc.reason,
+                'granted_by': latest_tc.granted_by.username if latest_tc.granted_by else 'Accounts / Admin'
+            }
+
+        is_api_exam_cleared = bool(
+            (reg_num and reg_num in exam_keys) or
+            (username and username in exam_keys) or
+            (email and email in exam_keys)
+        )
+        is_api_test_cleared = is_api_exam_cleared or bool(
+            (reg_num and reg_num in test_keys) or
+            (username and username in test_keys) or
+            (email and email in test_keys)
+        )
+
+        if is_temp_cleared:
+            effective_percentage = 100.0 if is_temp_exam_cleared else max(50.0, db_percentage)
+        elif is_api_exam_cleared:
+            effective_percentage = 100.0
+        elif is_api_test_cleared:
+            effective_percentage = max(50.0, db_percentage)
+        else:
+            effective_percentage = db_percentage
+
+        is_exam_cleared = is_temp_exam_cleared or is_api_exam_cleared or (db_percentage >= 100.0)
+        is_test_cleared = is_temp_test_cleared or is_temp_exam_cleared or is_api_test_cleared or is_api_exam_cleared or (effective_percentage >= 50.0) or (db_percentage >= 50.0)
+
+        if is_temp_cleared:
+            clearance_mode = 'temporary'
+            tc = student_tcs[0]
+            source = f"Temporary Clearance Override ({tc.clearance_type.upper()}, Expires {tc.expires_at.strftime('%Y-%m-%d %H:%M')})"
+        elif is_api_exam_cleared:
+            clearance_mode = 'api_100'
+            source = "CIU Live Exams API (100% Cleared - Exams & Tests)"
+        elif is_api_test_cleared:
+            clearance_mode = 'api_50'
+            source = "CIU Live Tests API (50% Cleared - Tests Only)"
+        elif db_percentage >= 100.0:
+            clearance_mode = 'manual_100'
+            source = f"Manual Clearance ({db_percentage}% Tuition Record - Exams & Tests)"
+        elif db_percentage >= 50.0:
+            clearance_mode = 'manual_50'
+            source = f"Manual Clearance ({db_percentage}% Tuition Record - Tests Only)"
+        else:
+            clearance_mode = 'uncleared'
+            source = f"Tuition Record ({db_percentage}% - Uncleared)"
+
+        student_user._cached_clearance = {
+            'is_exam_cleared': is_exam_cleared,
+            'is_test_cleared': is_test_cleared,
+            'tuition_paid_percentage': effective_percentage,
+            'db_percentage': db_percentage,
+            'clearance_mode': clearance_mode,
+            'is_api_cleared': is_api_exam_cleared or is_api_test_cleared,
+            'is_api_exam_cleared': is_api_exam_cleared,
+            'is_api_test_cleared': is_api_test_cleared,
+            'is_temp_cleared': is_temp_cleared,
+            'is_temp_exam_cleared': is_temp_exam_cleared,
+            'is_temp_test_cleared': is_temp_test_cleared,
+            'temp_info': temp_info,
+            'api_match_details': None,
+            'source': source
+        }
+

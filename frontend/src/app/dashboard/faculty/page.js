@@ -2,7 +2,7 @@
 
 import { useState, useEffect, Fragment } from 'react';
 import { useAuth } from '@/context/AuthContext';
-import { api } from '@/lib/api';
+import { api, getApiBaseUrl } from '@/lib/api';
 import ConfirmationModal from '@/components/ConfirmationModal';
 
 export default function FacultyManagementPage() {
@@ -439,8 +439,7 @@ export default function FacultyManagementPage() {
       if (tokensStr) {
         try { token = JSON.parse(tokensStr).access; } catch (e) {}
       }
-      const rawBaseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api';
-      const API_BASE_URL = rawBaseUrl.replace(/\/$/, '');
+      const API_BASE_URL = getApiBaseUrl();
       const res = await fetch(`${API_BASE_URL}/course-units/sample_file/?format=${format}`, {
         headers: token ? { 'Authorization': `Bearer ${token}` } : {}
       });
